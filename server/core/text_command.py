@@ -470,8 +470,8 @@ def _parse_timer(norm: str, raw: str):
 
 def volume_button(norm: str) -> str | None:
     """Lệnh chỉnh âm lượng loa? Trả về volume_up/volume_down/mute hay None.
-    Chỉ nhận khi câu nhắc đến loa/âm lượng để tránh hiểu nhầm "quạt to lên"."""
-    if not re.search(r"\b(am luong|volume|loa|kanto)\b", norm):
+    Chỉ nhận khi câu nhắc đến loa/nhạc/âm lượng để tránh hiểu nhầm "quạt to lên"."""
+    if not re.search(r"\b(am luong|volume|loa|kanto|nhac|mut|mute)\b|tat tieng", norm):
         return None
     if re.search(r"tat tieng|\bmut\b|\bmute\b|tat am luong", norm):
         return "mute"
