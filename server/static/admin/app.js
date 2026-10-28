@@ -179,7 +179,7 @@ function sensorText(state) {
   if (state.battery != null) bits.push("🔋 " + state.battery + "%");
   if (state.power != null) bits.push("⚡ " + (state.power >= 1000 ? (state.power / 1000).toFixed(1) + " kW" : state.power.toFixed(0) + " W"));
   if (state.voltage != null) bits.push(state.voltage.toFixed(0) + "V");
-  if (state.energy != null) bits.push("🔢 " + state.energy.toFixed(1) + " kWh");
+  // tổng kWh đã tiêu thụ: không hiện trên UI (chỉ trả lời khi hỏi bằng giọng nói)
   return bits.join(" · ") || "chưa có số liệu";
 }
 
