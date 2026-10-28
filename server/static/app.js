@@ -184,7 +184,7 @@ async function renderRooms() {
     <div class="row manage-row">
       <input id="floor-name-${f.id}" value="${esc(f.name)}" style="width:200px">
       <button class="small-btn" onclick="saveFloor(${f.id})">💾</button>
-      <button class="small-btn danger" onclick="delFloor(${f.id}, ${JSON.stringify(f.name)})">🗑</button>
+      <button class="small-btn danger" onclick="delFloor(${f.id}, ${esc(JSON.stringify(f.name))})">🗑</button>
     </div>`).join("");
 
   const roomRows = rooms.map((r) => `
@@ -194,7 +194,7 @@ async function renderRooms() {
       <input id="room-alias-${r.id}" value="${esc(r.aliases)}" placeholder="bí danh" style="width:180px">
       <span class="small muted" style="min-width:70px">${r.entity_count} thực thể</span>
       <button class="small-btn" onclick="saveRoom(${r.id})">💾</button>
-      <button class="small-btn danger" onclick="delRoom(${r.id}, ${JSON.stringify(r.name)})">🗑</button>
+      <button class="small-btn danger" onclick="delRoom(${r.id}, ${esc(JSON.stringify(r.name))})">🗑</button>
     </div>`).join("");
 
   el.innerHTML = `
@@ -512,7 +512,7 @@ async function refreshDiscovered() {
               <input id="adopt-name-${r.id}" placeholder="Tên" value="${esc(r.name || "")}" style="width:130px">
               <select id="adopt-room-${r.id}">${roomSelectOptions(rooms, null)}</select>
               <button class="small-btn primary" onclick="adopt(${r.id})">Thêm vào hệ thống</button>
-              <button class="small-btn" onclick='openDeviceModal({discoveredId:${r.id}, name:${JSON.stringify(r.name || "")}, host:${JSON.stringify(r.ip || "")}, driver:"${guessedDriver}"})'>⚙️ Nhập tay</button>
+              <button class="small-btn" onclick='openDeviceModal({discoveredId:${r.id}, name:${esc(JSON.stringify(r.name || ""))}, host:${esc(JSON.stringify(r.ip || ""))}, driver:"${guessedDriver}"})'>⚙️ Nhập tay</button>
             </div>` : `<span class="small muted">Thiết bị #${r.adopted_device_id}</span>`}
           </td>
         </tr>`;
