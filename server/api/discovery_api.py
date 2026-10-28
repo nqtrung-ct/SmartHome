@@ -17,9 +17,12 @@ router = APIRouter()
 
 
 @router.get("/discovery")
-def list_discovered(request: Request, _: None = Depends(require_admin)):
+def list_discovered(request: Request, all: bool = False, _: None = Depends(require_admin)):
+    """By default only supported (or already added) devices - the ping sweep
+    finds the whole network and drowns the interesting rows."""
+    where = "" if all else " WHERE supported=1 OR adopted_device_id IS NOT NULL"
     rows = request.app.state.db.query(
-        "SELECT * FROM discovered ORDER BY supported DESC, method, ip"
+        "SELECT * FROM discovered" + where + " ORDER BY supported DESC, method, ip"
     )
     return [dict(r) for r in rows]
 
@@ -95,8 +98,14 @@ async def adopt(request: Request, discovered_id: int, body: AdoptIn, _: None = D
         extra = {"devtype": raw.get("devtype", 0)}
     elif method == "tuya":
         driver_name = "tuya"
-        name = body.name or row["name"] or "Ổ cắm Tuya"
+        name = body.name or row["name"] or "Thiết bị Tuya"
         extra = {"id": row["ident"], "ver": raw.get("ver") or "3.3"}
+        if not (body.local_key or raw.get("key")):
+            raise HTTPException(
+                status_code=400,
+                detail="Thiết bị Tuya cần local key (lấy qua tài khoản Tuya IoT / "
+                       "tinytuya wizard). Nhập key vào ô 🔑 bên cạnh rồi bấm lại.",
+            )
     elif method == "zigbee":
         driver_name = "zigbee"
         name = body.name or row["name"] or row["ident"]

@@ -28,6 +28,7 @@ OUI_VENDORS = {
     "10:D5:61": "Tuya/SmartLife",
     "84:E3:42": "Tuya/SmartLife",
     "50:C7:BF": "TP-Link",
+    "98:DA:C4": "TP-Link",
     "14:CC:20": "TP-Link",
     "5C:E9:31": "TP-Link",
     "A8:57:4E": "TP-Link",
@@ -145,16 +146,28 @@ def scan_broadlink(db: Database, cfg: Config) -> None:
 
 
 def scan_tuya(db: Database, cfg: Config) -> None:
+    """Tuya UDP discovery: devices broadcast on 6666/6667.
+
+    Battery-powered sensors only broadcast while awake, so a scan right after
+    setup or app activity is the best window to catch them.
+    """
     try:
         import tinytuya
     except ImportError:
+        log_event(
+            db, "discovery",
+            "Scanner 'tuya' bỏ qua: chưa cài tinytuya (pip install tinytuya)",
+            level="warn",
+        )
         return
-    found = tinytuya.deviceScan(maxRetry=1) or {}
+    # tinytuya's arg is `maxretry`, and it is actually the listen time in seconds
+    seconds = int(cfg.get("discovery.tuya_seconds", 15))
+    found = tinytuya.deviceScan(maxretry=seconds, poll=False, color=False, byID=True) or {}
     for dev_id, info in found.items():
         upsert(
             db, "tuya", dev_id,
             ip=info.get("ip", ""), brand="Tuya", supported=1,
-            name=info.get("name") or info.get("product") or f"Tuya {dev_id}",
+            name=info.get("name") or info.get("product") or f"Tuya {dev_id[-6:]}",
             raw={
                 "id": dev_id, "ip": info.get("ip"), "ver": info.get("version"),
                 "product": info.get("product"), "name": info.get("name"),

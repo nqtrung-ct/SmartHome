@@ -768,6 +768,7 @@ async function refreshDiscovered() {
             <div class="row">
               <input id="adopt-name-${r.id}" placeholder="Tên" value="${esc(r.name || "")}" style="width:130px">
               <select id="adopt-room-${r.id}">${roomSelectOptions(rooms, null)}</select>
+              ${r.method === "tuya" ? `<input id="adopt-key-${r.id}" placeholder="🔑 Local key" style="width:110px">` : ""}
               <button class="small-btn primary" onclick="adopt(${r.id})">Thêm vào hệ thống</button>
               <button class="small-btn" onclick='openDeviceModal({discoveredId:${r.id}, name:${esc(JSON.stringify(r.name || ""))}, host:${esc(JSON.stringify(r.ip || ""))}, driver:"${guessedDriver}"})'>⚙️ Nhập tay</button>
             </div>` : `<span class="small muted">Thiết bị #${r.adopted_device_id}</span>`}
@@ -794,6 +795,8 @@ window.adopt = async (id) => {
     name: $(`#adopt-name-${id}`).value.trim() || null,
     room_id: +$(`#adopt-room-${id}`).value || null,
   };
+  const keyEl = $(`#adopt-key-${id}`);
+  if (keyEl && keyEl.value.trim()) body.local_key = keyEl.value.trim();
   try {
     const res = await api(`/discovery/${id}/adopt`, { method: "POST", body: JSON.stringify(body) });
     toast(res.warning ? "Đã thêm nhưng có cảnh báo: " + res.warning : "Đã thêm thiết bị #" + res.device_id);

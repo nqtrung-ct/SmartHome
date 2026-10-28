@@ -2,9 +2,39 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 
 from server.db import Database, log_event
 from server.util import now_iso, parse_iso
+
+
+async def _poll_tuya_sensors(app) -> None:
+    """Refresh tuya temp/humidity sensors for the dashboard.
+
+    Battery-powered Tuya sensors sleep between reports and refuse connections;
+    on failure keep the last known state quietly.
+    """
+    driver = app.state.drivers.get("tuya")
+    if not driver:
+        return
+    db: Database = app.state.db
+    rows = db.query(
+        """SELECT e.id AS eid, e.driver_data, d.id AS did, d.host, d.extra
+           FROM entities e JOIN devices d ON d.id = e.device_id
+           WHERE e.entity_type='sensor' AND d.driver='tuya'"""
+    )
+    for row in rows:
+        entity = {"id": row["eid"], "driver_data": row["driver_data"]}
+        device = {"id": row["did"], "host": row["host"], "extra": row["extra"]}
+        try:
+            state = await asyncio.to_thread(driver.get_state, entity, device)
+        except Exception:
+            continue
+        db.execute(
+            "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+            (json.dumps(state, ensure_ascii=False), now_iso(), row["eid"]),
+        )
 
 
 async def scheduler_loop(app) -> None:
@@ -12,6 +42,7 @@ async def scheduler_loop(app) -> None:
     from server.db import cleanup_old_rows
 
     last_cleanup_day = None
+    last_sensor_poll = 0.0
     while True:
         try:
             today = now_iso()[:10]
@@ -34,6 +65,9 @@ async def scheduler_loop(app) -> None:
                 pipeline = getattr(app.state, "pipeline", None)
                 if connections:
                     await connections.announce_room(timer["room_id"], message, pipeline)
+            if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 300)):
+                last_sensor_poll = time.time()
+                await _poll_tuya_sensors(app)
         except asyncio.CancelledError:
             return
         except Exception as exc:
