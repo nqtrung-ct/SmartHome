@@ -68,12 +68,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "press_button",
-            "description": "Bấm một nút trên thiết bị điều khiển từ xa (VD: tăng/giảm âm lượng loa, mute)",
+            "description": "Bấm một nút trên thiết bị điều khiển từ xa (VD: tăng/giảm âm lượng loa, mute, cho quạt xoay)",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "entity": {"type": "string"},
-                    "button": {"type": "string", "enum": ["volume_up", "volume_down", "mute"]},
+                    "button": {"type": "string", "enum": ["volume_up", "volume_down", "mute", "unmute", "swing_on", "swing_off"]},
                     "room": {"type": "string"},
                 },
                 "required": ["entity", "button"],
@@ -261,12 +261,19 @@ BUTTON_PHRASES = {
     "volume_up": "Đã tăng âm lượng",
     "volume_down": "Đã giảm âm lượng",
     "mute": "Đã tắt tiếng",
+    "unmute": "Đã mở tiếng",
+    "swing_on": "Đã bật chế độ xoay",
+    "swing_off": "Đã tắt chế độ xoay",
 }
+
+# lệnh và mã IR khác tên: nút mute là toggle nên "mở tiếng" bấm lại chính nó,
+# swing của quạt cũng toggle nên bật/tắt xoay cùng bấm một nút
+BUTTON_CODES = {"unmute": "mute", "swing_on": "swing", "swing_off": "swing"}
 
 
 async def act_button(db, drivers, entity, button: str, mentioned_room=None) -> dict:
-    """Bấm một nút IR (volume, mute...) — nút bấm là tương đối, mỗi lệnh = 1 lần bấm."""
-    await _set_state(db, drivers, entity, button, {})
+    """Bấm một nút IR (volume, mute, xoay quạt...) — nút bấm là tương đối, mỗi lệnh = 1 lần bấm."""
+    await _set_state(db, drivers, entity, BUTTON_CODES.get(button, button), {})
     where = _room_where(db, _entity_room(db, entity), mentioned_room)
     phrase = BUTTON_PHRASES.get(button)
     reply = f"{phrase} {entity['name'].lower()}{where}." if phrase else f"Đã bấm {button} {entity['name'].lower()}{where}."
@@ -470,9 +477,12 @@ def _parse_timer(norm: str, raw: str):
 
 def volume_button(norm: str) -> str | None:
     """Lệnh chỉnh âm lượng loa? Trả về volume_up/volume_down/mute hay None.
-    Chỉ nhận khi câu nhắc đến loa/nhạc/âm lượng để tránh hiểu nhầm "quạt to lên"."""
-    if not re.search(r"\b(am luong|volume|loa|kanto|nhac|mut|mute)\b|tat tieng", norm):
+    Chỉ nhận khi câu nhắc đến loa/nhạc/âm lượng để tránh hiểu nhầm "quạt to lên".
+    Nút mute của remote là toggle nên "mở tiếng" cũng bấm mute lần nữa."""
+    if not re.search(r"\b(am luong|volume|loa|kanto|nhac|mut|mute)\b|(tat|mo|bat) tieng", norm):
         return None
+    if re.search(r"\b(mo|bat) tieng\b|\bunmut\b|bo mut", norm):
+        return "mute"  # toggle lại
     if re.search(r"tat tieng|\bmut\b|\bmute\b|tat am luong", norm):
         return "mute"
     if re.search(r"\b(tang|to len|to hon|to ra)\b|tang am luong|am luong to", norm):
@@ -513,6 +523,16 @@ def act_list_active(db: Database, room_id=None, mentioned_room=None) -> dict:
                 "action": {"tool": "list_active", "ok": True}}
     items = ", ".join(f"{n.lower()} ({r.lower()})" if r else n.lower() for n, r in on)
     return {"reply": f"Đang bật: {items}.", "action": {"tool": "list_active", "ok": True}}
+
+
+def swing_button(norm: str) -> str | None:
+    """Lệnh quạt xoay qua lại / đứng yên? Nút swing trên remote là toggle.
+    "Xoay" là từ riêng của quạt trong nhà này nên không cần cửa từ khóa."""
+    if re.search(r"co dinh|dung xoay|dung quay|khong xoay|khong quay|dung yen", norm):
+        return "swing_off"
+    if re.search(r"\bxoay\b|quay qua lai", norm):
+        return "swing_on"
+    return None
 
 
 async def fast_path(db, drivers, weather, text: str, room_id: int | None):
@@ -576,6 +596,20 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         entity = resolve_entity(db, norm, room_id) or resolve_entity(db, "loa", room_id)
         if entity:
             return await act_button(db, drivers, entity, vol,
+                                    mentioned_room=_room_from_text(db, norm))
+
+    # quạt xoay/cố định: nút swing là toggle — "cho quạt xoay", "quạt cố định";
+    # động từ bật/tắt thắng thế ("tắt xoay quạt" = khóa xoay, không tắt quạt).
+    # Câu hỏi ("quạt có xoay không?") không bấm gì cả.
+    sw = swing_button(norm)
+    if sw and not re.search(r"\b(khong|chua|chua)\b\s*[?.!]?\s*$", norm):
+        if has_off:
+            sw = "swing_off"
+        elif has_on:
+            sw = "swing_on"
+        entity = resolve_entity(db, norm, room_id) or resolve_entity(db, "quạt", room_id)
+        if entity:
+            return await act_button(db, drivers, entity, sw,
                                     mentioned_room=_room_from_text(db, norm))
 
     # climate with/without temperature
