@@ -80,6 +80,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.include_router(router, prefix="/api")
     app.include_router(voice_api.router)
 
+    @app.get("/admin", include_in_schema=False)
+    async def admin_redirect():  # StaticFiles doesn't redirect the bare path itself
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse(url="/admin/")
+
     static_dir = Path(__file__).parent / "static"
     admin_dir = static_dir / "admin"
     display_dir = static_dir / "display"
