@@ -335,6 +335,9 @@ def get_settings(request: Request, _: None = Depends(require_admin)):
             "admin_token_set": bool(cfg.get("server.admin_token")),
             "lan_ip": lan_ip(),
         },
+        "retention": {
+            "days": int(cfg.get("retention.days", 30)),
+        },
     }
 
 
@@ -348,6 +351,7 @@ class SettingsIn(BaseModel):
     weather_latitude: float | None = None
     weather_longitude: float | None = None
     advertise_mdns: bool | None = None  # applies after restart
+    retention_days: int | None = None
     admin_token: str | None = None
 
 
@@ -382,6 +386,10 @@ def update_settings(request: Request, body: SettingsIn, _: None = Depends(requir
         apply("weather", "longitude", float(body.weather_longitude))
     if body.advertise_mdns is not None:
         apply("server", "advertise_mdns", body.advertise_mdns)
+    if body.retention_days is not None:
+        if body.retention_days < 1:
+            raise HTTPException(status_code=400, detail="Số ngày giữ nhật ký phải ≥ 1")
+        apply("retention", "days", int(body.retention_days))
 
     token_changed = False
     if body.admin_token and body.admin_token.strip():

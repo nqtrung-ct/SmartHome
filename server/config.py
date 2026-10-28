@@ -31,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
         "wsdiscovery": True,
     },
     "broadlink": {"timeout": 5},
+    "retention": {"days": 30},
 }
 
 

@@ -147,3 +147,37 @@ def log_event(db: Database, source: str, message: str, level: str = "info") -> N
         "INSERT INTO events(ts, source, level, message) VALUES (?,?,?,?)",
         (now_iso(), source, level, message),
     )
+
+
+def cleanup_old_rows(db: Database, days: int) -> dict[str, int]:
+    """Drop stale rows: events older than `days`, pairing codes used/expired
+    over a day ago, timers done over a week ago. Returns deleted counts."""
+    from datetime import datetime, timedelta
+
+    from server.util import now_iso
+
+    events_before = datetime.now() - timedelta(days=days)
+    day_ago = datetime.now() - timedelta(days=1)
+    week_ago = datetime.now() - timedelta(days=7)
+    counts: dict[str, int] = {}
+    with db.conn() as c:
+        for table, where, cutoff in (
+            ("events", "ts < ?", events_before.isoformat(timespec="seconds")),
+            (
+                "pairing_codes",
+                "(used=1 OR expires_at < ?) AND expires_at < ?",
+                (now_iso(), day_ago.isoformat(timespec="seconds")),
+            ),
+            (
+                "timers",
+                "done=1 AND target_at < ?",
+                week_ago.isoformat(timespec="seconds"),
+            ),
+        ):
+            if isinstance(cutoff, tuple):
+                cur = c.execute(f"DELETE FROM {table} WHERE {where}", cutoff)
+            else:
+                cur = c.execute(f"DELETE FROM {table} WHERE {where}", (cutoff,))
+            if cur.rowcount:
+                counts[table] = cur.rowcount
+    return counts

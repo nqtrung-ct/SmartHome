@@ -960,6 +960,16 @@ async function renderSettings() {
         <span class="small muted">⚠️ các nơi đang đăng nhập khác sẽ phải nhập token mới.</span>
       </div>
     </div>
+    <div class="card">
+      <h2>🧹 Dọn dữ liệu tự động</h2>
+      <div class="row">
+        <label class="small muted">Giữ nhật ký</label>
+        <input id="s-retention" type="number" min="1" value="${st.retention.days}" style="width:70px">
+        <span class="small muted">ngày</span>
+      </div>
+      <p class="small muted">Chạy khi khởi động và mỗi ngày: xóa nhật ký cũ hơn số ngày trên,
+      mã ghép nối đã dùng/hết hạn quá 1 ngày, hẹn giờ đã xong quá 7 ngày.</p>
+    </div>
     <button class="primary" onclick="saveSettings()" style="padding:12px 28px">💾 Lưu cài đặt</button>`;
 }
 
@@ -974,6 +984,7 @@ window.saveSettings = async () => {
     weather_latitude: parseFloat($("#s-lat").value),
     weather_longitude: parseFloat($("#s-lon").value),
     advertise_mdns: $("#s-mdns").checked,
+    retention_days: +$("#s-retention").value || null,
     admin_token: $("#s-token").value.trim() || null,
   };
   try {
