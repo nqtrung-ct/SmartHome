@@ -151,14 +151,14 @@ function findEntity(id) {
 }
 
 // ---------------------------------------------------------------- PIN unlock
-// PIN chỉ hiện khi bấm vào một thiết bị điều khiển được (chặn trẻ em vọc),
-// không có nút "mở khóa chung" — mở đúng lúc đó, hết 5 phút thì hỏi lại.
+// PIN chỉ hiện khi bấm vào một thiết bị điều khiển được (chặn trẻ em vọc);
+// nhập đủ 4 số là tự xác nhận. Đúng một lần -> mọi thiết bị mở trong 5 phút.
 function showPin(cb, deviceName) {
   $("pin-error").textContent = "";
   $("pin-input").value = "";
   $("pin-sub").textContent = deviceName
-    ? `Nhập mã PIN 4 số để điều khiển "${deviceName}" (hiệu lực 5 phút)`
-    : "Nhập mã PIN 4 số (hiệu lực 5 phút)";
+    ? `Nhập mã PIN 4 số để điều khiển "${deviceName}"`
+    : "Nhập mã PIN 4 số";
   $("pin-overlay").classList.remove("hidden");
   $("pin-input").focus();
   pinCb = cb;
@@ -171,7 +171,6 @@ async function tryPin() {
     $("pin-error").textContent = "Mã gồm 4 chữ số";
     return;
   }
-  $("pin-ok").disabled = true;
   try {
     const resp = await fetch("/api/display/unlock", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -180,6 +179,8 @@ async function tryPin() {
     if (!resp.ok) {
       const d = await resp.json().catch(() => ({}));
       $("pin-error").textContent = d.detail || "Mã PIN không đúng";
+      $("pin-input").value = "";
+      $("pin-input").focus();
       return;
     }
     const d = await resp.json();
@@ -189,14 +190,20 @@ async function tryPin() {
     if (pinCb) { const cb = pinCb; pinCb = null; cb(); }
   } catch {
     $("pin-error").textContent = "Không kết nối được";
-  } finally {
-    $("pin-ok").disabled = false;
   }
 }
 
-$("pin-ok").onclick = tryPin;
+$("pin-input").addEventListener("input", () => {
+  // đủ 4 số là tự xác nhận, không cần bấm nút
+  if ($("pin-input").value.length === 4) tryPin();
+});
 $("pin-input").addEventListener("keydown", (ev) => { if (ev.key === "Enter") tryPin(); });
-$("pin-cancel").onclick = () => { pinCb = null; $("pin-overlay").classList.add("hidden"); };
+$("pin-clear").onclick = () => {
+  $("pin-input").value = "";
+  $("pin-error").textContent = "";
+  $("pin-input").focus();
+};
+$("pin-close").onclick = () => { pinCb = null; $("pin-overlay").classList.add("hidden"); };
 
 // ---------------------------------------------------------------- control panel
 let ctrlTemp = 26;

@@ -20,7 +20,7 @@
 </header>
 
 <main id="grid">
-  <!-- cột trái: thời tiết -->
+  <!-- cột trái: thời tiết + hẹn giờ -->
   <section class="col-left">
     <div class="card weather">
       <div class="weather-top">
@@ -37,34 +37,31 @@
       </div>
       <div class="w-range muted" id="w-range">cao nhất --° · thấp nhất --°</div>
     </div>
-  </section>
-
-  <!-- cột giữa: card từng phòng (chỉ phòng có cảm biến nhiệt độ) -->
-  <section class="col-mid">
-    <div id="room-grid" class="room-grid"><p class="muted">Đang tải…</p></div>
-  </section>
-
-  <!-- cột phải: hẹn giờ -->
-  <section class="col-right">
     <div class="card">
       <h2>Hẹn giờ sắp tới</h2>
       <div id="timer-list"><p class="muted">Không có hẹn giờ.</p></div>
     </div>
   </section>
+
+  <!-- cột phải: card từng phòng (chỉ phòng có cảm biến nhiệt độ) -->
+  <section class="col-mid">
+    <div id="room-grid" class="room-grid"><p class="muted">Đang tải…</p></div>
+  </section>
 </main>
 
-<!-- modal nhập mã PIN để mở khóa điều khiển -->
+<!-- modal nhập mã PIN để điều khiển thiết bị -->
 <div id="pin-overlay" class="overlay hidden">
   <div class="pin-box card">
+    <button id="pin-close" class="icon-btn pin-close" title="Đóng">✕</button>
     <h2 id="pin-title">🔒 Xác nhận điều khiển</h2>
-    <p id="pin-sub" class="muted small">Nhập mã PIN 4 số (hiệu lực 5 phút)</p>
-    <input id="pin-input" class="pin-input" type="password" inputmode="numeric"
-           maxlength="4" autocomplete="off" placeholder="••••">
-    <div id="pin-error" class="pin-error"></div>
-    <div class="row-center">
-      <button id="pin-cancel" class="btn ghost">Đóng</button>
-      <button id="pin-ok" class="btn primary">Mở khóa</button>
+    <p id="pin-sub" class="muted small">Nhập mã PIN 4 số</p>
+    <p class="muted small">Nhập đúng một lần: mọi thiết bị điều khiển được trong 5 phút.</p>
+    <div class="pin-row">
+      <input id="pin-input" class="pin-input" type="password" inputmode="numeric"
+             maxlength="4" autocomplete="off" placeholder="••••">
+      <button id="pin-clear" class="icon-btn" title="Xóa mã">⌫</button>
     </div>
+    <div id="pin-error" class="pin-error"></div>
   </div>
 </div>
 
