@@ -126,7 +126,10 @@ async function renderDashboard() {
         const state = safeJson(e.state);
         // tổng quan chỉ xem trạng thái — điều khiển ở tab Thiết bị hoặc bằng giọng nói
         let control = "";
-        if (e.entity_type === "switch" || e.entity_type === "light") {
+        if (e.driver === "broadlink") {
+          // thiết bị IR không phản hồi trạng thái thật — không hiện bật/tắt
+          control = `<span class="small muted">📡 IR</span>`;
+        } else if (e.entity_type === "switch" || e.entity_type === "light") {
           control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
         } else if (e.entity_type === "climate") {
           const on = state.state === "on";

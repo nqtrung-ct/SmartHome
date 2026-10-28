@@ -37,7 +37,7 @@ def display(request: Request):
     rooms = []
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
         entities = db.query(
-            """SELECT e.name, e.entity_type, e.state FROM entities e
+            """SELECT e.name, e.entity_type, e.state, d.driver FROM entities e
                JOIN devices d ON d.id=e.device_id
                WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type!='controller'""",
             (room["id"],),
@@ -51,6 +51,8 @@ def display(request: Request):
             except ValueError:
                 state = {}
             ents.append({"name": e["name"], "type": e["entity_type"], "state": state})
+            if e["driver"] == "broadlink":
+                continue  # thiết bị IR không phản hồi trạng thái thật — không đếm "đang bật"
             if e["entity_type"] in ("light", "switch"):
                 if state.get("state") == "on":
                     lights_on += 1
