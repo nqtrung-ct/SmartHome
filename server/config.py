@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
         "data_dir": "data",
         "advertise_mdns": True,
     },
-    "mqtt": {"enabled": True, "host": "127.0.0.1", "port": 1883, "base_topic": "zigbee2mqtt"},
+    "mqtt": {"enabled": False, "host": "127.0.0.1", "port": 1883, "base_topic": "zigbee2mqtt"},
     "stt": {"engine": "none", "model_dir": "data/models/stt", "num_threads": 2},
     "tts": {"engine": "none", "http_url": ""},
     "llm": {"engine": "ollama", "base_url": "http://127.0.0.1:11434", "model": "qwen3:4b", "timeout": 30},

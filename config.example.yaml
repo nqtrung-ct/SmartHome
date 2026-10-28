@@ -11,7 +11,7 @@ server:
   advertise_mdns: true      # announce _smarthome._tcp so the Android app can auto-find the server
 
 mqtt:                       # Mosquitto + Zigbee2MQTT (see instructions/phase-1-refer.md)
-  enabled: true
+  enabled: false            # bật = true sau khi đã cài Mosquitto/Zigbee2MQTT
   host: 127.0.0.1
   port: 1883
   base_topic: zigbee2mqtt

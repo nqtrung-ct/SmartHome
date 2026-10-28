@@ -42,22 +42,32 @@ class ZigbeeDriver(Driver):
     def _run(self) -> None:
         import paho.mqtt.client as mqtt
 
+        delay = 30  # seconds between retries; backs off when the broker is unreachable
+        warned = False
         while not self._stop.is_set():
             try:
                 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="smarthome-server")
                 client.on_connect = self._on_connect
                 client.on_message = self._on_message
+                client.reconnect_delay_set(min_delay=1, max_delay=30)
                 client.connect(
                     self.cfg.get("mqtt.host", "127.0.0.1"),
                     int(self.cfg.get("mqtt.port", 1883)),
                     keepalive=60,
                 )
+                if warned:
+                    log_event(self.db, "zigbee", "MQTT đã kết nối trở lại")
+                warned = False
+                delay = 30
                 self.client = client
                 client.loop_forever(retry_first_connection=False)
             except Exception as exc:
-                log_event(self.db, "zigbee", f"MQTT không kết nối được: {exc}", level="warn")
-            if self._stop.wait(30):
+                if not warned:  # one line per outage, not one per retry
+                    log_event(self.db, "zigbee", f"MQTT không kết nối được: {exc}", level="warn")
+                    warned = True
+            if self._stop.wait(delay):
                 return
+            delay = min(delay * 2, 300)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code == 0:
