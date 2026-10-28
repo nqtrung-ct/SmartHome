@@ -28,7 +28,9 @@ TYPE_ALIASES = {
     "light": ["đèn", "bóng đèn", "đèn trần", "đèn ngủ"],
     "climate": ["điều hòa", "máy lạnh", "dieu hoa", "ac"],
     "switch": ["công tắc", "ổ cắm", "ổ cắm thông minh"],
-    "sensor": ["cảm biến", "nhiệt độ", "độ ẩm"],
+    # sensor chỉ giữ alias đúng với MỌI sensor; "nhiệt độ/độ ẩm" là alias riêng
+    # của từng cảm biến — nếu để type-alias thì công tơ điện cũng trúng "nhiệt độ"
+    "sensor": ["cảm biến"],
 }
 
 TOOLS = [
@@ -567,18 +569,17 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         return act_weather(weather, weather_day(norm),
                            rain=rain_question(norm), evening=evening_question(norm))
 
-    # power questions: solar home, grid draw is ~0 W and misleading - the
-    # live number lives on the dashboard's Điện năng card
-    if not (has_on or has_off) and re.search(r"\bcong suat\b|\bkw\b|tieu thu", norm):
-        return {"reply": "Nhà mình dùng điện mặt trời nên công suất lấy từ lưới thường rất thấp, "
-                         "gần 0 oát. Muốn xem con số tức thời thì mở bảng điều khiển, mục Điện năng.",
+    # power questions: solar home, grid draw is ~0 W and misleading; nhà không
+    # theo dõi điện năng nữa nên mọi câu hỏi dạng này đều về câu trả lời tĩnh
+    if not (has_on or has_off) and re.search(
+        r"\bcong suat\b|\bkw\b|tieu thu|\bso dien\b|\bdien nang\b|\bkwh\b|\bdien ap\b|\bvol\b", norm
+    ):
+        return {"reply": "Nhà mình dùng điện mặt trời nên các số đo điện từ lưới thường rất thấp "
+                         "và không nói lên nhiều. Mình không theo dõi điện năng nữa.",
                 "action": None}
 
-    # temperature/metering question without a verb -> sensor
-    # (power intentionally absent - solar homes read ~0 W from the grid)
-    if not (has_on or has_off) and re.search(
-        r"nhiet do|do am|dien ap|so dien|dien nang|kwh", norm
-    ):
+    # temperature/humidity question without a verb -> sensor
+    if not (has_on or has_off) and re.search(r"nhiet do|do am", norm):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
             return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
