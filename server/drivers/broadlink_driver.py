@@ -53,8 +53,12 @@ class BroadlinkDriver(Driver):
         mac = extra.get("mac") or device["mac"]
         if not device["host"] or not mac:
             raise DriverError("Thiếu địa chỉ IP hoặc MAC của Broadlink")
+        devtype = extra.get("devtype", 0)
+        if not isinstance(devtype, int):
+            # chuỗi kiểu "RM4MINI" -> tự dò lại số hiệu thật qua LAN
+            devtype = int(self.probe(device).get("devtype", 0))
         dev = broadlink.gendevice(
-            int(extra.get("devtype", 0)),
+            devtype,
             (device["host"], 80),
             bytes.fromhex(mac.replace(":", "").replace("-", "")),
         )
