@@ -20,6 +20,7 @@ from server.util import (
     next_hhmm,
     normalize,
     now_iso,
+    parse_iso,
     trailing_number,
 )
 
@@ -226,6 +227,14 @@ async def act_climate(db, drivers, entity, mode=None, temperature=None) -> dict:
 
 
 async def act_sensor(db, drivers, entity, room_id=None, metric=None) -> dict:
+    # a sensor that has not reported for an hour is treated as unreachable:
+    # say so instead of repeating hours-old numbers as if they were current
+    updated = parse_iso(entity["updated_at"]) if entity["updated_at"] else None
+    if updated and (datetime.now() - updated).total_seconds() > 3600:
+        room = _room_name(db, _entity_room(db, entity) or room_id)
+        where = f" ở {room.lower()}" if room else ""
+        return {"reply": f"Mình không lấy được thông tin từ cảm biến{where} — đã hơn một tiếng không có số liệu mới.",
+                "action": {"tool": "get_sensor", "ok": False, "stale": True}}
     device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
     state = loads(entity["state"])
     if not state:

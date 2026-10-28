@@ -132,7 +132,9 @@ async function renderDashboard() {
               <button class="small-btn" onclick="climateOff(${e.id})">Tắt</button>
             </span>`;
         } else if (e.entity_type === "sensor") {
-          control = `<span class="small muted">${sensorText(state)}</span>`;
+          // values older than an hour are stale - show a dash, not old numbers
+          const stale = e.updated_at && (Date.now() - new Date(e.updated_at).getTime() > 3600000);
+          control = `<span class="small muted">${stale ? "—" : sensorText(state)}</span>`;
         }
         return `<div class="entity">
             <div><div class="name">${esc(e.name)}</div>
