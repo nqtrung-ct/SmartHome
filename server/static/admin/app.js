@@ -303,7 +303,7 @@ const dot = (ok, okText, badText) =>
 
 async function renderAssistant() {
   const el = $("#tab-assistant");
-  const [st, rooms] = await Promise.all([api("/assistant/status").catch(() => null), api("/rooms").catch(() => [])]);
+  const st = await api("/assistant/status").catch(() => null);
   if (!st) { el.innerHTML = `<div class="card muted">Không tải được trạng thái trợ lý.</div>`; return; }
 
   // --- LLM ---
@@ -320,9 +320,7 @@ async function renderAssistant() {
           <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
           <button class="small-btn" onclick="testLlm()">▶ Thử LLM</button>
         </div>
-        <p class="small muted">Đổi model: <code>ollama pull &lt;tên&gt;</code> rồi bấm 💾. Model hiện tại: <b>${esc(st.llm.model)}</b> tại ${esc(st.llm.base_url)}.<br>
-          Gợi ý trên GTX 1660: <b>qwen2.5:3b-instruct</b> gọi tool chuẩn tiếng Việt và nhanh nhất; qwen3:4b chậm hơn (3-16 s); qwen3:1.7b trả lời rỗng khi tắt chế độ suy nghĩ — không nên dùng.</p>
-        <div id="llm-test-out" class="console-out muted small">Thử một câu đa việc (chỉ LLM trả lời được) để kiểm tra tool-calling.</div>`
+        <div id="llm-test-out" class="console-out muted small"></div>`
       : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
          <code>ollama pull qwen3:4b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
     </div>
@@ -338,10 +336,6 @@ async function renderAssistant() {
         </select>
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
       </div>
-      <p class="small muted">Model dir: <code>${esc(st.stt.model_dir)}</code><br>
-        tokens.txt: ${st.stt.has_tokens ? "✅" : "❌ thiếu"} · file .onnx: ${st.stt.onnx_files.length
-          ? esc(st.stt.onnx_files.join(", "))
-          : "❌ chưa có"}</p>
       ${!st.stt.loaded ? `<p class="small">Cài đặt: <code>pip install -r optional-requirements.txt</code>, tải model Zipformer-vi (mục Vietnamese) từ
         <a href="https://k2-fsa.github.io/sherpa/onnx/pretrained_models/index.html" target="_blank" rel="noopener">sherpa-onnx</a>,
         giải nén vào <code>data/models/stt/</code> (tokens.txt + encoder/decoder/joiner .onnx), chọn engine sherpa rồi Lưu.</p>` : ""}
@@ -360,28 +354,8 @@ async function renderAssistant() {
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
         <button class="small-btn" onclick="testTts()">▶ Phát thử</button>
       </div>
-      <p class="small muted">Wrap VieNeu-TTS (hoặc TTS bất kỳ) thành HTTP service — mẫu: <code>scripts/tts_http_example.py</code>.</p>
-      <div id="tts-test-out" class="console-out muted small">Phát câu "Đã tắt điều hòa phòng ngủ".</div>
-    </div>
-
-    <div class="card">
-      <h2>🎤 Test thử như điện thoại</h2>
-      <p class="small muted">Giữ nút và nói — âm thanh đi đúng đường WebSocket /ws/voice như app Android: STT → hiểu lệnh → trả lời (+ TTS).</p>
-      <button id="mic-btn" class="primary" style="padding:16px 28px;font-size:16px">🎙 NHẤN &amp; NÓI</button>
-      <div id="mic-out" class="console-out muted small">Kết quả và thời gian sẽ hiện ở đây.</div>
-    </div>
-
-    <div class="card">
-      <h2>📢 Phát thử lên máy trong phòng</h2>
-      <p class="small muted">Gửi câu đọc thử qua TTS tới mọi điện thoại đang mở app trong phòng (đúng đường hẹn giờ dùng).</p>
-      <div class="row">
-        <select id="ann-room">${`<option value="">— chọn phòng —</option>` + rooms.map((r) =>
-          `<option value="${r.id}">${esc(roomLabel(r))}</option>`).join("")}</select>
-        <input id="ann-text" value="Đây là giọng đọc thử của trợ lý." style="flex:1;min-width:200px">
-        <button class="primary small-btn" onclick="testAnnounce()">📢 Phát</button>
-      </div>
+      <div id="tts-test-out" class="console-out muted small"></div>
     </div>`;
-  wireMic();
 }
 
 window.saveAssistantConfig = async () => {
@@ -437,117 +411,6 @@ window.testTts = async () => {
     out.textContent = `✅ Đang phát · tổng hợp ${ms} ms · ${rate} Hz · ${(blob.size / 1024).toFixed(0)} KB`;
   } catch (e) { out.textContent = "Lỗi: " + e.message; }
 };
-
-window.testAnnounce = async () => {
-  const roomId = +$("#ann-room").value;
-  if (!roomId) { toast("Chọn phòng trước"); return; }
-  try {
-    const res = await api("/assistant/announce", {
-      method: "POST",
-      body: JSON.stringify({ room_id: roomId, text: $("#ann-text").value }),
-    });
-    toast(res.sent > 0 ? `Đã phát lên ${res.sent} máy trong phòng` : "Không có máy nào đang kết nối trong phòng này");
-  } catch (e) { toast("Lỗi: " + e.message); }
-};
-
-// --- browser mic -> /ws/voice (same path as the Android app) ---
-
-let mic = { ws: null, ctx: null, proc: null, stream: null, recording: false, chunks: [], gotAudio: false, tStop: 0 };
-
-function wireMic() {
-  const btn = $("#mic-btn");
-  if (!btn) return;
-  btn.addEventListener("mousedown", micStart);
-  btn.addEventListener("mouseup", micStop);
-  btn.addEventListener("mouseleave", (e) => { if (mic.recording) micStop(e); });
-  btn.addEventListener("touchstart", (e) => { e.preventDefault(); micStart(); });
-  btn.addEventListener("touchend", (e) => { e.preventDefault(); micStop(e); });
-}
-
-async function micStart() {
-  if (mic.recording) return;
-  const out = $("#mic-out");
-  out.classList.remove("muted");
-  try {
-    mic.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-    });
-    mic.ctx = new AudioContext({ sampleRate: 16000 });
-    const src = mic.ctx.createMediaStreamSource(mic.stream);
-    mic.proc = mic.ctx.createScriptProcessor(4096, 1, 1);
-    mic.proc.onaudioprocess = (ev) => {
-      if (!mic.ws || mic.ws.readyState !== 1) return;
-      const f32 = ev.inputBuffer.getChannelData(0);
-      const i16 = new Int16Array(f32.length);
-      for (let i = 0; i < f32.length; i++) {
-        const s = Math.max(-1, Math.min(1, f32[i]));
-        i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
-      mic.ws.send(i16.buffer);
-    };
-    src.connect(mic.proc);
-    mic.proc.connect(mic.ctx.destination);
-
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/voice?token=${token}`);
-    mic.ws = ws;
-    mic.recording = true;
-    mic.chunks = [];
-    mic.gotAudio = false;
-    $("#mic-btn").textContent = "🎙 ĐANG NGHE... (thả để gửi)";
-    out.textContent = "Đang nghe…";
-
-    ws.onopen = () => ws.send(JSON.stringify({ type: "start" }));
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        const msg = JSON.parse(ev.data);
-        const tNow = performance.now();
-        if (msg.type === "transcript") {
-          out.textContent = `Bạn nói (${Math.round(tNow - mic.tStop)} ms): ${msg.text}`;
-        } else if (msg.type === "reply") {
-          out.textContent += `\nTrợ lý (${Math.round(tNow - mic.tStop)} ms): ${msg.text}`;
-        } else if (msg.type === "audio") {
-          mic.gotAudio = true;
-        } else if (msg.type === "end" && mic.gotAudio) {
-          const blob = new Blob(mic.chunks, { type: "audio/wav" });
-          const url = URL.createObjectURL(blob);
-          new Audio(url).play();
-          out.textContent += `\n🔊 Đang phát câu trả lời (từ lúc thả nút: ${Math.round(tNow - mic.tStop)} ms)`;
-          mic.chunks = [];
-          mic.gotAudio = false;
-          URL.revokeObjectURL(url);
-        } else if (msg.type === "announce") {
-          mic.gotAudio = true;
-          out.textContent += `\n📢 ${msg.text}`;
-        }
-      } else {
-        mic.chunks.push(ev.data);
-      }
-    };
-    ws.onclose = () => { if (mic.ws === ws) mic.ws = null; };
-  } catch (e) {
-    out.textContent = "Không truy cập được mic: " + e.message + " (cần HTTPS hoặc localhost)";
-    micCleanup();
-  }
-}
-
-function micStop() {
-  if (!mic.recording) return;
-  mic.recording = false;
-  mic.tStop = performance.now();
-  if (mic.ws && mic.ws.readyState === 1) mic.ws.send(JSON.stringify({ type: "stop" }));
-  $("#mic-btn").textContent = "🎙 NHẤN & NÓI";
-  micCleanup();
-}
-
-function micCleanup() {
-  try { mic.proc?.disconnect(); } catch {}
-  try { mic.stream?.getTracks().forEach((t) => t.stop()); } catch {}
-  try { mic.ctx?.close(); } catch {}
-  mic.proc = null;
-  mic.stream = null;
-  mic.ctx = null;
-}
 
 // ---------------------------------------------------------------- devices
 
