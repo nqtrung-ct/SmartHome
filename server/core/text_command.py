@@ -67,6 +67,22 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "press_button",
+            "description": "Bấm một nút trên thiết bị điều khiển từ xa (VD: tăng/giảm âm lượng loa, mute)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string"},
+                    "button": {"type": "string", "enum": ["volume_up", "volume_down", "mute"]},
+                    "room": {"type": "string"},
+                },
+                "required": ["entity", "button"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_sensor",
             "description": "Đọc nhiệt độ/độ ẩm từ cảm biến trong phòng",
             "parameters": {
@@ -224,6 +240,22 @@ async def act_switch(db, drivers, entity, on: bool, mentioned_room=None) -> dict
     where = _room_where(db, _entity_room(db, entity), mentioned_room)
     return {"reply": f"Đã {verb} {entity['name'].lower()}{where}.",
             "action": {"tool": "switch", "entity": entity["name"], "state": "on" if on else "off", "ok": True}}
+
+
+BUTTON_PHRASES = {
+    "volume_up": "Đã tăng âm lượng",
+    "volume_down": "Đã giảm âm lượng",
+    "mute": "Đã tắt tiếng",
+}
+
+
+async def act_button(db, drivers, entity, button: str, mentioned_room=None) -> dict:
+    """Bấm một nút IR (volume, mute...) — nút bấm là tương đối, mỗi lệnh = 1 lần bấm."""
+    await _set_state(db, drivers, entity, button, {})
+    where = _room_where(db, _entity_room(db, entity), mentioned_room)
+    phrase = BUTTON_PHRASES.get(button)
+    reply = f"{phrase} {entity['name'].lower()}{where}." if phrase else f"Đã bấm {button} {entity['name'].lower()}{where}."
+    return {"reply": reply, "action": {"tool": "press_button", "entity": entity["name"], "button": button, "ok": True}}
 
 
 async def act_climate(db, drivers, entity, mode=None, temperature=None, mentioned_room=None) -> dict:
@@ -421,6 +453,20 @@ def _parse_timer(norm: str, raw: str):
     return None, None, None
 
 
+def volume_button(norm: str) -> str | None:
+    """Lệnh chỉnh âm lượng loa? Trả về volume_up/volume_down/mute hay None.
+    Chỉ nhận khi câu nhắc đến loa/âm lượng để tránh hiểu nhầm "quạt to lên"."""
+    if not re.search(r"\b(am luong|volume|loa|kanto)\b", norm):
+        return None
+    if re.search(r"tat tieng|\bmut\b|\bmute\b|tat am luong", norm):
+        return "mute"
+    if re.search(r"\b(tang|to len|to hon|to ra)\b|tang am luong|am luong to", norm):
+        return "volume_up"
+    if re.search(r"\b(giam|nho di|nho hon|nho xuong|nho lai)\b|giam am luong|am luong nho", norm):
+        return "volume_down"
+    return None
+
+
 async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     norm = normalize(text)
     tokens = norm.split()
@@ -468,6 +514,15 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
             return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
+
+    # âm lượng loa: đặt TRƯỚC nhánh on/off vì "tắt tiếng" chứa từ "tắt" —
+    # không tắt nguồn loa; up/down chỉ nhận khi câu không có bật/tắt
+    vol = volume_button(norm)
+    if vol and (vol == "mute" or not (has_on or has_off)):
+        entity = resolve_entity(db, norm, room_id) or resolve_entity(db, "loa", room_id)
+        if entity:
+            return await act_button(db, drivers, entity, vol,
+                                    mentioned_room=_room_from_text(db, norm))
 
     # climate with/without temperature
     if has_on or has_off:
@@ -536,6 +591,14 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             # LLM nêu phòng (param room hoặc lồng trong entity) = người nói nói rõ phòng
             mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
             return await act_switch(db, drivers, entity, args.get("state") == "on", mentioned_room=mentioned)
+
+        if name == "press_button":
+            entity = resolve_entity(db, args.get("entity", ""), room_id)
+            if not entity:
+                return {"reply": f"Mình không tìm thấy thiết bị '{args.get('entity')}'.",
+                        "action": {"tool": name, "ok": False}}
+            mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
+            return await act_button(db, drivers, entity, args.get("button", ""), mentioned_room=mentioned)
 
         if name == "set_climate":
             entity = resolve_entity(db, args.get("entity") or "điều hòa", room_id, "climate")
