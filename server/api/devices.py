@@ -130,6 +130,7 @@ class EntityPatch(BaseModel):
     name: str | None = None
     aliases: str | None = None
     driver_data: dict | None = None
+    room_id: int | None = None  # None = theo phòng của thiết bị gốc
 
 
 @router.post("/devices/{device_id}/entities", status_code=201)
@@ -162,6 +163,12 @@ def patch_entity(request: Request, entity_id: int, body: EntityPatch, _: None = 
             "UPDATE entities SET driver_data=? WHERE id=?",
             (json.dumps(body.driver_data, ensure_ascii=False), entity_id),
         )
+    if "room_id" in body.model_fields_set:  # explicit null clears the override
+        if body.room_id is not None and not db.one(
+            "SELECT id FROM rooms WHERE id=?", (body.room_id,)
+        ):
+            raise HTTPException(status_code=404, detail="Không có phòng này")
+        db.execute("UPDATE entities SET room_id=? WHERE id=?", (body.room_id, entity_id))
     return {"ok": True}
 
 
@@ -186,7 +193,7 @@ async def entity_command(request: Request, entity_id: int, body: CommandIn, _: N
     entity = db.one("SELECT * FROM entities WHERE id=?", (entity_id,))
     if not entity:
         raise HTTPException(status_code=404, detail="Không có entity")
-    if "readonly" in loads(entity["driver_data"]):
+    if entity["entity_type"] == "controller" or "readonly" in loads(entity["driver_data"]):
         raise HTTPException(status_code=400, detail="Thực thể này chỉ xem trạng thái, không điều khiển được")
     device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
     driver = app.state.drivers.get(device["driver"])

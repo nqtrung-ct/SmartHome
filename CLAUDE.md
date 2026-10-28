@@ -38,7 +38,8 @@ Ghi chú làm việc trong repo này (cho Claude Code và lập trình viên). C
 ## Quy ước
 
 - So khớp lệnh/alias đều qua `server.util.normalize()` (bỏ dấu, lowercase) — regex và alias viết cho bản đã normalize.
-- **Entity readonly** (`"readonly": true` trong `driver_data`): UI ẩn nút, `act_switch` và `POST /entities/{id}/command` từ chối — áp dụng cho mọi driver. Dùng cho thiết bị chỉ-trạng-thái (breaker, hub luôn bật).
+- **Phòng của thực thể**: `entities.room_id` (NULL = theo phòng thiết bị gốc); mọi nơi nhóm/theo phòng dùng phòng hiệu dụng `COALESCE(e.room_id, d.room_id)` — xem `_entity_room()` trong `text_command.py`. Tab Thiết bị nhóm theo phòng, mỗi thực thể có ô chọn phòng riêng; phần cứng gốc (hub/IP) nằm mục riêng dưới cùng.
+- **Entity readonly** (`"readonly": true` trong `driver_data`): UI ẩn nút, `act_switch` và `POST /entities/{id}/command` từ chối — áp dụng cho mọi driver. Dùng cho thiết bị chỉ-trạng-thái (breaker, hub luôn bật). Hub luôn bật còn dùng entity_type `controller` (chỉ tồn tại trong DB, không chọn được trong UI — badge "điều khiển", chấm xanh, từ chối bật/tắt).
 - **Cảm biến**: `entities.state` là JSON các metric (`temperature`, `humidity`, `voltage`, `power`, `energy`...); quá 1 tiếng không có số liệu mới (`updated_at`) thì UI hiện "—" và voice trả lời "không lấy được thông tin". Không bao giờ ghi đè state tốt bằng giá trị rỗng.
 - Thêm cấu hình: vào `DEFAULTS` trong `server/config.py`, đọc bằng `cfg.get("nhom.khoa")`.
 - Secret (Tuya cloud, RTSP...) lưu trong `data/secrets.json` qua `store_secret()/load_secret()` trong `server/util.py`.

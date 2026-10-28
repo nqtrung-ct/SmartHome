@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS entities(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  entity_type TEXT NOT NULL,          -- switch | light | climate | sensor | camera
+  entity_type TEXT NOT NULL,          -- switch | light | climate | sensor | camera | controller (hệ thống, không chọn trong UI)
   aliases TEXT NOT NULL DEFAULT '',
+  room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,  -- NULL = theo phòng của thiết bị
   driver_data TEXT NOT NULL DEFAULT '{}',
   state TEXT NOT NULL DEFAULT '{}',
   updated_at TEXT
@@ -107,6 +108,12 @@ class Database:
         cols = {row["name"] for row in self.query("PRAGMA table_info(rooms)")}
         if "floor" not in cols:
             self.execute("ALTER TABLE rooms ADD COLUMN floor TEXT NOT NULL DEFAULT ''")
+        ecols = {row["name"] for row in self.query("PRAGMA table_info(entities)")}
+        if "room_id" not in ecols:
+            self.execute(
+                "ALTER TABLE entities ADD COLUMN room_id INTEGER "
+                "REFERENCES rooms(id) ON DELETE SET NULL"
+            )
         if seed_floors:
             # first run with the floors table: sensible defaults + keep any floor
             # names already assigned to rooms

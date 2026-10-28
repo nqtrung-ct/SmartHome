@@ -195,7 +195,11 @@ def patch_room(request: Request, room_id: int, body: RoomPatch, _: None = Depend
 
 @router.delete("/rooms/{room_id}")
 def delete_room(request: Request, room_id: int, _: None = Depends(require_admin)):
-    request.app.state.db.execute("DELETE FROM rooms WHERE id=?", (room_id,))
+    db = request.app.state.db
+    # explicit: entity rooms may have been added by ALTER TABLE (no FK enforcement
+    # on old databases), so clear them before dropping the room
+    db.execute("UPDATE entities SET room_id=NULL WHERE room_id=?", (room_id,))
+    db.execute("DELETE FROM rooms WHERE id=?", (room_id,))
     return {"ok": True}
 
 

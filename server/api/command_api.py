@@ -19,7 +19,8 @@ def overview(request: Request, _: None = Depends(require_admin)):
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
         entities = db.query(
             """SELECT e.*, d.name AS device_name, d.driver FROM entities e
-               JOIN devices d ON d.id=e.device_id WHERE d.room_id=? ORDER BY e.id""",
+               JOIN devices d ON d.id=e.device_id
+               WHERE COALESCE(e.room_id, d.room_id)=? ORDER BY e.id""",
             (room["id"],),
         )
         rooms.append({
@@ -36,7 +37,8 @@ def overview(request: Request, _: None = Depends(require_admin)):
         })
     unassigned = db.query(
         """SELECT e.*, d.name AS device_name, d.driver FROM entities e
-           JOIN devices d ON d.id=e.device_id WHERE d.room_id IS NULL ORDER BY e.id"""
+           JOIN devices d ON d.id=e.device_id
+           WHERE COALESCE(e.room_id, d.room_id) IS NULL ORDER BY e.id"""
     )
     return {
         "rooms": rooms,

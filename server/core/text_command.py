@@ -146,12 +146,14 @@ def resolve_entity(db: Database, text: str, room_id=None, entity_type=None):
         scope_room = mentioned
     ranked: list[tuple[int, dict]] = []
     for entity in db.query("SELECT * FROM entities"):
-        if entity_type and entity["entity_type"] != entity_type:
+        # controller = hub luôn bật: khớp như công tắc để act_switch từ chối đúng câu
+        if entity_type and entity["entity_type"] != entity_type and not (
+            entity_type == "switch" and entity["entity_type"] == "controller"
+        ):
             continue
         if entity["entity_type"] == "camera":
             continue
-        device = db.one("SELECT room_id FROM devices WHERE id=?", (entity["device_id"],))
-        in_scope = device and scope_room and device["room_id"] == scope_room
+        in_scope = scope_room and _entity_room(db, entity) == scope_room
         for alias in _entity_aliases(entity):
             if alias in norm:
                 ranked.append((len(alias) + (100 if in_scope else 0), dict(entity)))
@@ -192,13 +194,20 @@ async def _set_state(db, drivers, entity, command, params) -> dict:
 
 
 def _entity_room(db: Database, entity) -> int | None:
-    row = db.one("SELECT room_id FROM devices WHERE id=?", (entity["device_id"],))
-    return row["room_id"] if row else None
+    """Effective room: the entity's own if set, else its device's."""
+    row = db.one(
+        """SELECT e.room_id AS own, d.room_id AS dev FROM entities e
+           JOIN devices d ON d.id=e.device_id WHERE e.id=?""",
+        (entity["id"],),
+    )
+    if not row:
+        return None
+    return row["own"] if row["own"] is not None else row["dev"]
 
 
 async def act_switch(db, drivers, entity, on: bool) -> dict:
-    if loads(entity["driver_data"]).get("readonly"):
-        return {"reply": "Công tắc này chỉ xem trạng thái, không điều khiển từ xa được.",
+    if entity["entity_type"] == "controller" or loads(entity["driver_data"]).get("readonly"):
+        return {"reply": "Đây là bộ điều khiển hồng ngoại, không bật/tắt trực tiếp được.",
                 "action": {"tool": "switch", "entity": entity["name"], "ok": False}}
     await _set_state(db, drivers, entity, "on" if on else "off", {})
     verb = "bật" if on else "tắt"
@@ -481,8 +490,7 @@ def _llm_context(db: Database, room_id) -> str:
     if room_id and room_id in rooms:
         lines.append(f"Người nói đang ở: {rooms[room_id]}")
     for e in db.query("SELECT * FROM entities"):
-        device = db.one("SELECT room_id FROM devices WHERE id=?", (e["device_id"],))
-        room = rooms.get(device["room_id"], "chưa gán phòng") if device else "?"
+        room = rooms.get(_entity_room(db, e), "chưa gán phòng")
         lines.append(f"- {e['name']} ({e['entity_type']}, phòng {room})")
     return "\n".join(lines)
 

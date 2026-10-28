@@ -117,7 +117,10 @@ async function renderDashboard() {
       const entities = room.entities.map((e) => {
         const state = safeJson(e.state);
         let control = "";
-        if (e.entity_type === "switch" || e.entity_type === "light") {
+        if (e.entity_type === "controller") {
+          // always-on IR hub: green dot, no controls
+          control = `<span class="small ok">● Đang bật</span>`;
+        } else if (e.entity_type === "switch" || e.entity_type === "light") {
           if (e.readonly) {
             control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
           } else {
@@ -156,7 +159,10 @@ async function renderDashboard() {
 
 function safeJson(s) { try { return JSON.parse(s || "{}"); } catch { return {}; } }
 function typeVi(t) {
-  return { switch: "công tắc", light: "đèn", climate: "điều hòa", sensor: "cảm biến", camera: "camera" }[t] || t;
+  return {
+    switch: "công tắc", light: "đèn", climate: "điều hòa",
+    sensor: "cảm biến", camera: "camera", controller: "điều khiển",
+  }[t] || t;
 }
 function sensorText(state) {
   const bits = [];
@@ -552,54 +558,100 @@ function deviceTypeVi(driver) {
 
 async function renderDevices() {
   const el = $("#tab-devices");
-  const [devices, rooms] = await Promise.all([api("/devices"), api("/rooms")]);
+  const [devices, rooms] = await Promise.all([api("/devices"), api("/rooms"), loadFloors()]);
 
-  el.innerHTML = `
-    <div class="row" style="margin-bottom:14px">
-      <button class="primary" onclick="openDeviceModal()">➕ Thêm thiết bị thủ công</button>
-      <span class="small muted">Hoặc quét mạng ở tab "Quét mạng" rồi chọn "Thêm vào hệ thống".</span>
-    </div>
-    <div id="device-list"></div>`;
-
-  $("#device-list").innerHTML = devices.map((d) => {
-    const entities = d.entities.map((e) => {
-      const data = safeJson(e.driver_data);
-      const codes = Object.keys(data.codes || {});
-      const learnUi = (d.driver === "broadlink")
-        ? `<div class="row" style="margin-top:6px">
-             <input id="learn-${e.id}" placeholder="Tên nút (off / cool_26 / toggle)" style="width:200px">
-             <button class="small-btn" onclick="learnCode(${e.id})">📡 Học mã</button>
-             <span id="learn-status-${e.id}" class="small muted"></span>
-           </div>
-           ${codes.length ? `<div class="row small" style="margin-top:6px">Mã đã học: ${codes.map((c) =>
-             `<button class="small-btn" onclick="sendCode(${e.id}, '${esc(c)}')">${esc(c)}</button>`).join(" ")}</div>` : ""}`
-        : "";
-      return `<div style="border-top:1px solid var(--border); padding:10px 0">
-          <div class="row" style="justify-content:space-between">
-            <div><b>${esc(e.name)}</b> <span class="badge">${typeVi(e.entity_type)}</span>
-              <span class="small muted">${esc(e.aliases)}</span></div>
-            <div class="row">
-              ${(e.entity_type === "switch" || e.entity_type === "light") && !isReadonly(e) ?
-                `<button class="small-btn" onclick="cmdEntity(${e.id},'on')">Bật</button>
-                 <button class="small-btn" onclick="cmdEntity(${e.id},'off')">Tắt</button>` : ""}
-              <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
-            </div>
-          </div>${learnUi}
-        </div>`;
-    }).join("") || `<p class="small muted">Chưa có thực thể nào.</p>`;
-
-    return `<div class="card">
-      <div class="row" style="justify-content:space-between">
-        <h2 style="margin:0">${esc(d.name)} <span class="badge">${esc(deviceTypeVi(d.driver))}</span>
-          ${d.host ? `<span class="small muted">${esc(d.host)}</span>` : ""}</h2>
-        <div class="row">
-          <select onchange="setDeviceRoom(${d.id}, this.value)">${roomSelectOptions(rooms, d.room_id)}</select>
-          <button class="small-btn danger" onclick="delDevice(${d.id})">Xóa</button>
-        </div>
+  if (!devices.length) {
+    el.innerHTML = `
+      <div class="row" style="margin-bottom:14px">
+        <button class="primary" onclick="openDeviceModal()">➕ Thêm thiết bị thủ công</button>
+        <span class="small muted">Hoặc quét mạng ở tab "Quét mạng" rồi chọn "Thêm vào hệ thống".</span>
       </div>
-      ${entities}
+      <div class="card muted">Chưa có thiết bị nào.</div>`;
+    return;
+  }
+
+  // one row per entity ("thiết bị" người dùng thấy), grouped theo phòng hiệu dụng
+  // (phòng của thực thể nếu có, không thì theo thiết bị gốc)
+  const items = [];
+  for (const d of devices) for (const e of d.entities) items.push([e, d]);
+  const byRoom = new Map();
+  for (const it of items) {
+    const rid = it[0].room_id ?? it[1].room_id ?? null;
+    if (!byRoom.has(rid)) byRoom.set(rid, []);
+    byRoom.get(rid).push(it);
+  }
+
+  const entityRoomOptions = (own) =>
+    `<option value="">— theo thiết bị gốc —</option>` + rooms.map((r) =>
+      `<option value="${r.id}" ${r.id === own ? "selected" : ""}>${esc(roomLabel(r))}</option>`).join("");
+
+  const entityRow = ([e, d]) => {
+    const data = safeJson(e.driver_data);
+    const codes = Object.keys(data.codes || {});
+    const readonly = isReadonly(e) || e.entity_type === "controller";
+    const controls = (e.entity_type === "switch" || e.entity_type === "light") && !readonly
+      ? `<button class="small-btn" onclick="cmdEntity(${e.id},'on')">Bật</button>
+         <button class="small-btn" onclick="cmdEntity(${e.id},'off')">Tắt</button>` : "";
+    const learnUi = d.driver === "broadlink"
+      ? `<div class="row small" style="padding:6px 0 9px;border-bottom:1px solid var(--border)">
+           <input id="learn-${e.id}" placeholder="Tên nút (off / cool_26 / toggle)" style="width:200px">
+           <button class="small-btn" onclick="learnCode(${e.id})">📡 Học mã</button>
+           <span id="learn-status-${e.id}" class="small muted"></span>
+           ${codes.length ? `<span>Mã đã học: ${codes.map((c) =>
+             `<button class="small-btn" onclick="sendCode(${e.id}, '${esc(c)}')">${esc(c)}</button>`).join(" ")}</span>` : ""}
+         </div>` : "";
+    return `<div class="entity">
+        <div style="flex:1;min-width:0">
+          <div class="name">${esc(e.name)} <span class="badge">${typeVi(e.entity_type)}</span></div>
+          <div class="sub">${esc(d.name)}${d.host ? " · " + esc(d.host) : ""}${e.aliases ? " · bí danh: " + esc(e.aliases) : ""}</div>
+        </div>
+        <div class="row">
+          ${controls}
+          <select onchange="setEntityRoom(${e.id}, this.value)" title="Phòng của thiết bị">${entityRoomOptions(e.room_id)}</select>
+          <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
+        </div>
+      </div>${learnUi}`;
+  };
+
+  // cột theo tầng như dashboard
+  const groups = new Map();
+  for (const r of rooms) {
+    if (!byRoom.has(r.id)) continue;
+    const f = r.floor || "";
+    if (!groups.has(f)) groups.set(f, []);
+    groups.get(f).push(r);
+  }
+  const order = [
+    ...floorNames().filter((f) => groups.has(f)),
+    ...[...groups.keys()].filter((f) => f && !floorNames().includes(f)).sort(),
+    ...(groups.has("") ? [""] : []),
+  ];
+  const columns = order.map((floor) => {
+    const cards = groups.get(floor).map((r) =>
+      `<div class="card"><h2>🚪 ${esc(r.name)}</h2>${byRoom.get(r.id).map(entityRow).join("")}</div>`
+    ).join("");
+    const heading = floor ? `🏢 ${esc(floor)}` : "🏢 Chưa xếp tầng";
+    return `<div class="floor-col"><h3 class="floor-heading">${heading}</h3>${cards}</div>`;
+  }).join("");
+  const unassigned = (byRoom.get(null) || []);
+  const unassignedCol = unassigned.length
+    ? `<div class="floor-col"><h3 class="floor-heading">📦 Chưa gán phòng</h3>
+         <div class="card">${unassigned.map(entityRow).join("")}</div></div>` : "";
+
+  // phần cứng gốc: đổi IP/ten, xóa, thêm thực thể cho hub
+  const hardware = devices.map((d) => `
+    <div class="entity" style="flex-wrap:wrap">
+      <div style="flex:1;min-width:0">
+        <div class="name">${esc(d.name)} <span class="badge">${esc(deviceTypeVi(d.driver))}</span></div>
+        <div class="sub">${d.host ? esc(d.host) + " · " : ""}${d.entities.length} thực thể</div>
+      </div>
+      <div class="row">
+        <select onchange="setDeviceRoom(${d.id}, this.value)" title="Phòng mặc định cho các thực thể con">
+          ${roomSelectOptions(rooms, d.room_id)}</select>
+        <button class="small-btn danger" onclick="delDevice(${d.id})">✕</button>
+      </div>
       ${isControllerDevice(d) ? `
-      <div class="row" style="margin-top:10px">
+      <div class="row" style="flex-basis:100%;padding-top:6px">
         <input id="ent-name-${d.id}" placeholder="Tên thực thể (VD: Điều hòa)" style="width:180px">
         <select id="ent-type-${d.id}">
           <option value="switch">công tắc</option><option value="light">đèn</option>
@@ -608,12 +660,24 @@ async function renderDevices() {
         <input id="ent-alias-${d.id}" placeholder="Bí danh (VD: điều hòa, máy lạnh)" style="width:200px">
         <button class="small-btn" onclick="addEntity(${d.id})">+ Thực thể</button>
       </div>` : ""}
-    </div>`;
-  }).join("") || `<div class="card muted">Chưa có thiết bị nào.</div>`;
+    </div>`).join("");
+
+  el.innerHTML = `
+    <div class="row" style="margin-bottom:14px">
+      <button class="primary" onclick="openDeviceModal()">➕ Thêm thiết bị thủ công</button>
+      <span class="small muted">Đổi phòng từng thiết bị bằng ô chọn trên dòng của nó. Phần cứng gốc (hub, IP) ở cuối trang.</span>
+    </div>
+    <div class="floor-columns">${columns}${unassignedCol}</div>
+    <div class="card" style="margin-top:16px"><h2>🔧 Thiết bị gốc</h2>${hardware}</div>`;
 }
 
+window.setEntityRoom = async (id, roomId) => {
+  await api(`/entities/${id}`, { method: "PATCH", body: JSON.stringify({ room_id: +roomId || null }) });
+  renderDevices();  // item di chuyển sang section phòng mới ngay
+};
 window.setDeviceRoom = async (id, roomId) => {
   await api(`/devices/${id}`, { method: "PATCH", body: JSON.stringify({ room_id: +roomId || null }) });
+  renderDevices();
 };
 window.delDevice = async (id) => {
   if (!confirm("Xóa thiết bị này?")) return;
