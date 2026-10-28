@@ -137,7 +137,7 @@ def create_entity(request: Request, device_id: int, body: EntityIn, _: None = De
     db = request.app.state.db
     if not db.one("SELECT id FROM devices WHERE id=?", (device_id,)):
         raise HTTPException(status_code=404, detail="Không có thiết bị")
-    if body.entity_type not in ("switch", "light", "climate", "sensor", "camera", "controller"):
+    if body.entity_type not in ("switch", "light", "climate", "sensor", "camera"):
         raise HTTPException(status_code=400, detail="entity_type không hợp lệ")
     entity_id = db.execute(
         "INSERT INTO entities(device_id, name, entity_type, aliases, driver_data) VALUES (?,?,?,?,?)",
@@ -186,7 +186,7 @@ async def entity_command(request: Request, entity_id: int, body: CommandIn, _: N
     entity = db.one("SELECT * FROM entities WHERE id=?", (entity_id,))
     if not entity:
         raise HTTPException(status_code=404, detail="Không có entity")
-    if entity["entity_type"] == "controller" or "readonly" in loads(entity["driver_data"]):
+    if "readonly" in loads(entity["driver_data"]):
         raise HTTPException(status_code=400, detail="Thực thể này chỉ xem trạng thái, không điều khiển được")
     device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
     driver = app.state.drivers.get(device["driver"])

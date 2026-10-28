@@ -197,8 +197,8 @@ def _entity_room(db: Database, entity) -> int | None:
 
 
 async def act_switch(db, drivers, entity, on: bool) -> dict:
-    if entity["entity_type"] == "controller" or loads(entity["driver_data"]).get("readonly"):
-        return {"reply": "Đây là bộ điều khiển hồng ngoại, không bật/tắt trực tiếp được.",
+    if loads(entity["driver_data"]).get("readonly"):
+        return {"reply": "Công tắc này chỉ xem trạng thái, không điều khiển từ xa được.",
                 "action": {"tool": "switch", "entity": entity["name"], "ok": False}}
     await _set_state(db, drivers, entity, "on" if on else "off", {})
     verb = "bật" if on else "tắt"
