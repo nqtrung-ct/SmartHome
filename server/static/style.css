@@ -87,6 +87,8 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
 .modal-card label { display: block; margin: 10px 0; font-size: 13px; color: var(--muted); }
 .modal-card label input, .modal-card label select { width: 100%; margin-top: 4px; }
 .floor-heading { margin: 18px 0 8px; font-size: 15px; color: var(--muted); }
+.manage-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.manage-row:last-child { border-bottom: none; }
 
 code { background: var(--card2); padding: 1px 6px; border-radius: 5px; font-size: 13px; }
 

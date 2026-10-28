@@ -60,6 +60,27 @@ async def main():
             r = await c.patch(f"/api/rooms/{bedroom}", json={"floor": "Tầng 2"})
             check("room floor patched", r.status_code == 200, r.text)
 
+            # --- floor CRUD ---------------------------------------------------
+            floors = (await c.get("/api/floors")).json()
+            check("floors list seeded", any(f["name"] == "Trệt" for f in floors), str(floors))
+            r = await c.post("/api/floors", json={"name": "SH Tầng test"})
+            check("floor create", r.status_code == 201, r.text)
+            test_floor_id = r.json()["id"]
+            r = await c.post("/api/floors", json={"name": "SH Tầng test"})
+            check("floor duplicate rejected", r.status_code == 400, r.text)
+            r = await c.patch(f"/api/rooms/{bedroom}", json={"floor": "SH Tầng test"})
+            check("room moved to floor", r.status_code == 200, r.text)
+            r = await c.patch(f"/api/floors/{test_floor_id}", json={"name": "SH Tầng đổi tên"})
+            check("floor rename", r.status_code == 200, r.text)
+            rooms = (await c.get("/api/rooms")).json()
+            r2 = next(x for x in rooms if x["id"] == bedroom)
+            check("floor rename cascades to rooms", r2.get("floor") == "SH Tầng đổi tên", str(r2))
+            r = await c.delete(f"/api/floors/{test_floor_id}")
+            check("floor delete", r.status_code == 200, r.text)
+            rooms = (await c.get("/api/rooms")).json()
+            r2 = next(x for x in rooms if x["id"] == bedroom)
+            check("floor delete clears room floor", r2.get("floor") == "", str(r2))
+
             # --- virtual device via the normal API (manual add path) --------
             r = await c.post("/api/devices", json={
                 "name": "SH Test thiết bị", "driver": "dummy", "room_id": living})

@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS rooms(
   floor TEXT NOT NULL DEFAULT '',
   aliases TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS floors(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  sort INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS devices(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -90,15 +95,27 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        floors_existed = bool(
+            self.one("SELECT name FROM sqlite_master WHERE type='table' AND name='floors'")
+        )
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
-        self._migrate()
+        self._migrate(seed_floors=not floors_existed)
 
-    def _migrate(self) -> None:
-        """Lightweight column migrations for databases created before an upgrade."""
+    def _migrate(self, seed_floors: bool = False) -> None:
+        """Lightweight migrations for databases created before an upgrade."""
         cols = {row["name"] for row in self.query("PRAGMA table_info(rooms)")}
         if "floor" not in cols:
             self.execute("ALTER TABLE rooms ADD COLUMN floor TEXT NOT NULL DEFAULT ''")
+        if seed_floors:
+            # first run with the floors table: sensible defaults + keep any floor
+            # names already assigned to rooms
+            names = ["Trệt", "Tầng 1", "Tầng 2", "Tầng 3", "Tầng 4", "Tầng 5", "Mái / Sân thượng"]
+            for row in self.query("SELECT DISTINCT floor FROM rooms WHERE floor != ''"):
+                if row["floor"] not in names:
+                    names.append(row["floor"])
+            for sort, name in enumerate(names):
+                self.execute("INSERT INTO floors(name, sort) VALUES (?,?)", (name, sort))
 
     @contextmanager
     def conn(self):

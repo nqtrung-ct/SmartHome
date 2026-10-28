@@ -1,7 +1,8 @@
-"""Public endpoints: health, pairing, client self-info; plus rooms CRUD."""
+"""Public endpoints: health, pairing, client self-info; plus rooms/floors CRUD."""
 from __future__ import annotations
 
 import secrets
+import sqlite3
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -117,6 +118,65 @@ def patch_room(request: Request, room_id: int, body: RoomPatch, _: None = Depend
 @router.delete("/rooms/{room_id}")
 def delete_room(request: Request, room_id: int, _: None = Depends(require_admin)):
     request.app.state.db.execute("DELETE FROM rooms WHERE id=?", (room_id,))
+    return {"ok": True}
+
+
+# --- floors -----------------------------------------------------------------
+
+
+@router.get("/floors")
+def list_floors(request: Request, _: None = Depends(require_admin)):
+    return request.app.state.db.query("SELECT * FROM floors ORDER BY sort, id")
+
+
+class FloorIn(BaseModel):
+    name: str
+
+
+@router.post("/floors", status_code=201)
+def create_floor(request: Request, body: FloorIn, _: None = Depends(require_admin)):
+    db = request.app.state.db
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Thiếu tên tầng")
+    try:
+        floor_id = db.execute(
+            "INSERT INTO floors(name, sort) VALUES (?,(SELECT COALESCE(MAX(sort),-1)+1 FROM floors))",
+            (name,),
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail=f"Tầng '{name}' đã có rồi")
+    return {"id": floor_id}
+
+
+@router.patch("/floors/{floor_id}")
+def rename_floor(request: Request, floor_id: int, body: FloorIn, _: None = Depends(require_admin)):
+    db = request.app.state.db
+    row = db.one("SELECT * FROM floors WHERE id=?", (floor_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="Không có tầng này")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Thiếu tên tầng")
+    try:
+        with db.conn() as c:
+            c.execute("UPDATE floors SET name=? WHERE id=?", (name, floor_id))
+            c.execute("UPDATE rooms SET floor=? WHERE floor=?", (name, row["name"]))
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail=f"Tầng '{name}' đã có rồi")
+    return {"ok": True}
+
+
+@router.delete("/floors/{floor_id}")
+def delete_floor(request: Request, floor_id: int, _: None = Depends(require_admin)):
+    db = request.app.state.db
+    row = db.one("SELECT * FROM floors WHERE id=?", (floor_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="Không có tầng này")
+    with db.conn() as c:
+        # rooms keep existing, they just lose their floor
+        c.execute("UPDATE rooms SET floor='' WHERE floor=?", (row["name"],))
+        c.execute("DELETE FROM floors WHERE id=?", (floor_id,))
     return {"ok": True}
 
 
