@@ -93,7 +93,7 @@ $("#tabs").addEventListener("click", (ev) => {
 });
 
 function loadTab(tab) {
-  ({ dashboard: renderDashboard, rooms: renderRooms, assistant: renderAssistant,
+  ({ dashboard: renderDashboard, assistant: renderAssistant,
      devices: renderDevices, discovery: renderDiscovery, voice: renderVoice,
      console: renderConsole, events: renderEvents, settings: renderSettings }[tab] || (() => {}))();
 }
@@ -206,11 +206,14 @@ window.climateOff = async (id) => {
   renderDashboard();
 };
 
-// ---------------------------------------------------------------- rooms & floors management
+// ---------------------------------------------------------------- rooms & floors (gộp trong tab Thiết đặt)
 
 async function renderRooms() {
-  const el = $("#tab-rooms");
+  const el = $("#rooms-mgmt");
+  if (!el) return;  // chưa vào tab Thiết đặt
   const [rooms, floors] = await Promise.all([api("/rooms"), loadFloors()]);
+  const sum = $("#rooms-summary");
+  if (sum) sum.textContent = `🏠 Phòng & tầng — ${rooms.length} phòng · ${floors.length} tầng`;
 
   const floorRows = floors.map((f) => `
     <div class="row manage-row">
@@ -230,26 +233,22 @@ async function renderRooms() {
     </div>`).join("");
 
   el.innerHTML = `
-    <div class="card">
-      <h2>🏢 Tầng</h2>
-      <p class="small muted">Đổi tên tầng sẽ áp dụng cho mọi phòng của tầng đó. Xóa tầng không xóa phòng — phòng chỉ mất tầng.</p>
-      <div class="row" style="margin-bottom:10px">
-        <input id="new-floor" placeholder="Tên tầng mới (VD: Tầng hầm)" style="width:200px">
-        <button class="primary small-btn" onclick="addFloor()">+ Thêm tầng</button>
-      </div>
-      ${floorRows || `<p class="muted small">Chưa có tầng nào.</p>`}
+    <h3 style="margin:8px 0 6px">🏢 Tầng</h3>
+    <p class="small muted">Đổi tên tầng sẽ áp dụng cho mọi phòng của tầng đó. Xóa tầng không xóa phòng — phòng chỉ mất tầng.</p>
+    <div class="row" style="margin-bottom:10px">
+      <input id="new-floor" placeholder="Tên tầng mới (VD: Tầng hầm)" style="width:200px">
+      <button class="primary small-btn" onclick="addFloor()">+ Thêm tầng</button>
     </div>
-    <div class="card">
-      <h2>🚪 Phòng</h2>
-      <p class="small muted">Sửa tên / tầng / bí danh rồi bấm 💾. Bí danh giúp nhận ra phòng khi nói ("bật đèn phòng ngủ").</p>
-      <div class="row" style="margin-bottom:10px">
-        <input id="new-room" placeholder="Tên phòng mới (VD: Phòng ngủ)" style="width:150px">
-        <select id="new-room-floor">${floorOptions("")}</select>
-        <input id="new-room-aliases" placeholder="Bí danh (VD: ngủ,bedroom)" style="width:180px">
-        <button class="primary small-btn" onclick="addRoom()">+ Thêm phòng</button>
-      </div>
-      ${roomRows || `<p class="muted small">Chưa có phòng nào.</p>`}
-    </div>`;
+    ${floorRows || `<p class="muted small">Chưa có tầng nào.</p>`}
+    <h3 style="margin:14px 0 6px">🚪 Phòng</h3>
+    <p class="small muted">Sửa tên / tầng / bí danh rồi bấm 💾. Bí danh giúp nhận ra phòng khi nói ("bật đèn phòng ngủ").</p>
+    <div class="row" style="margin-bottom:10px">
+      <input id="new-room" placeholder="Tên phòng mới (VD: Phòng ngủ)" style="width:150px">
+      <select id="new-room-floor">${floorOptions("")}</select>
+      <input id="new-room-aliases" placeholder="Bí danh (VD: ngủ,bedroom)" style="width:180px">
+      <button class="primary small-btn" onclick="addRoom()">+ Thêm phòng</button>
+    </div>
+    ${roomRows || `<p class="muted small">Chưa có phòng nào.</p>`}`;
 }
 
 window.addFloor = async () => {
@@ -1017,7 +1016,12 @@ async function renderSettings() {
       <p class="small muted">Chạy khi khởi động và mỗi ngày: xóa nhật ký cũ hơn số ngày trên,
       mã ghép nối đã dùng/hết hạn quá 1 ngày, hẹn giờ đã xong quá 7 ngày.</p>
     </div>
+    <details class="card" ontoggle="if(this.open) renderRooms()">
+      <summary id="rooms-summary" style="cursor:pointer;font-weight:600">🏠 Phòng &amp; tầng</summary>
+      <div id="rooms-mgmt" style="margin-top:8px"></div>
+    </details>
     <button class="primary" onclick="saveSettings()" style="padding:12px 28px">💾 Lưu cài đặt</button>`;
+  renderRooms();  // điền số lượng phòng/tầng vào dòng tiêu đề
 }
 
 window.saveSettings = async () => {
