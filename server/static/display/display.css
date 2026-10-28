@@ -36,7 +36,7 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
 .lock-ind {
   min-width: 72px; text-align: center; padding: 6px 10px;
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-  font-size: 17px; color: var(--muted); cursor: pointer; user-select: none;
+  font-size: 17px; color: var(--muted); cursor: default; user-select: none;
 }
 .lock-ind.on { color: var(--green); border-color: rgba(62, 207, 142, .4); }
 

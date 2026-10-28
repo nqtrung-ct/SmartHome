@@ -13,7 +13,7 @@
     <p id="dateline">&nbsp;</p>
   </div>
   <div class="clock">
-    <span id="lock-ind" class="lock-ind" title="Trạng thái mở khóa điều khiển">🔒</span>
+    <span id="lock-ind" class="lock-ind" title="Trạng thái (chỉ hiển thị) — bấm thiết bị để điều khiển">🔒</span>
     <div id="clock">--:--</div>
     <button id="fullscreen" title="Toàn màn hình">⛶</button>
   </div>
@@ -56,8 +56,8 @@
 <!-- modal nhập mã PIN để mở khóa điều khiển -->
 <div id="pin-overlay" class="overlay hidden">
   <div class="pin-box card">
-    <h2>🔒 Mở khóa điều khiển</h2>
-    <p class="muted small">Nhập mã PIN 4 số (hiệu lực 5 phút)</p>
+    <h2 id="pin-title">🔒 Xác nhận điều khiển</h2>
+    <p id="pin-sub" class="muted small">Nhập mã PIN 4 số (hiệu lực 5 phút)</p>
     <input id="pin-input" class="pin-input" type="password" inputmode="numeric"
            maxlength="4" autocomplete="off" placeholder="••••">
     <div id="pin-error" class="pin-error"></div>

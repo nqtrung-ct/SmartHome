@@ -151,9 +151,14 @@ function findEntity(id) {
 }
 
 // ---------------------------------------------------------------- PIN unlock
-function showPin(cb) {
+// PIN chỉ hiện khi bấm vào một thiết bị điều khiển được (chặn trẻ em vọc),
+// không có nút "mở khóa chung" — mở đúng lúc đó, hết 5 phút thì hỏi lại.
+function showPin(cb, deviceName) {
   $("pin-error").textContent = "";
   $("pin-input").value = "";
+  $("pin-sub").textContent = deviceName
+    ? `Nhập mã PIN 4 số để điều khiển "${deviceName}" (hiệu lực 5 phút)`
+    : "Nhập mã PIN 4 số (hiệu lực 5 phút)";
   $("pin-overlay").classList.remove("hidden");
   $("pin-input").focus();
   pinCb = cb;
@@ -192,7 +197,6 @@ async function tryPin() {
 $("pin-ok").onclick = tryPin;
 $("pin-input").addEventListener("keydown", (ev) => { if (ev.key === "Enter") tryPin(); });
 $("pin-cancel").onclick = () => { pinCb = null; $("pin-overlay").classList.add("hidden"); };
-$("lock-ind").onclick = () => { if (!unlocked()) showPin(null); };
 
 // ---------------------------------------------------------------- control panel
 let ctrlTemp = 26;
@@ -221,7 +225,7 @@ function ctrlButtons(e) {
 function openCtrl(id) {
   const { e, r } = findEntity(id);
   if (!e) return;
-  if (!unlocked()) { showPin(() => openCtrl(id)); return; }
+  if (!unlocked()) { showPin(() => openCtrl(id), e.name); return; }
   $("ctrl-icon").textContent = TYPE_ICON[e.type] || "🔘";
   $("ctrl-name").textContent = e.name;
   $("ctrl-room").textContent = r ? r.name : "";
