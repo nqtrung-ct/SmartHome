@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from server.api import admin, command_api, devices, discovery_api, voice_api
+from server.api import admin, assistant, command_api, devices, discovery_api, voice_api
 from server.config import Config
 from server.core.scheduler import start_scheduler
 from server.core.weather import Weather
@@ -76,7 +76,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     app.state.db = db
     app.state.drivers = drivers
 
-    for router in (admin.router, devices.router, discovery_api.router, command_api.router):
+    for router in (admin.router, assistant.router, devices.router, discovery_api.router, command_api.router):
         app.include_router(router, prefix="/api")
     app.include_router(voice_api.router)
 

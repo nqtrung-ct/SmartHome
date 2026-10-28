@@ -1,0 +1,190 @@
+"""Trợ lý tab: AI model status, config persistence, TTS/voice testing."""
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import time
+from pathlib import Path
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel
+
+from server.api.deps import require_admin
+from server.db import log_event
+from server.voice.stt import make_stt
+from server.voice.tts import make_tts
+
+router = APIRouter()
+
+
+def _ollama_models(cfg):
+    """Installed Ollama model names, or (None, error)."""
+    base = str(cfg.get("llm.base_url", "http://127.0.0.1:11434")).rstrip("/")
+    try:
+        resp = httpx.get(base + "/api/tags", timeout=5)
+        resp.raise_for_status()
+        return [m.get("name", "") for m in resp.json().get("models", [])], None
+    except Exception as exc:
+        return None, str(exc)
+
+
+@router.get("/assistant/status")
+def assistant_status(request: Request, _: None = Depends(require_admin)):
+    app = request.app.state
+    cfg = app.cfg
+    pipeline = app.pipeline
+
+    models, llm_error = _ollama_models(cfg)
+
+    model_dir = Path(str(cfg.get("stt.model_dir", "data/models/stt")))
+    if not model_dir.is_absolute():
+        model_dir = Path.cwd() / model_dir
+    onnx_files = sorted(f.name for f in model_dir.glob("*.onnx")) if model_dir.exists() else []
+
+    return {
+        "llm": {
+            "engine": cfg.get("llm.engine"),
+            "base_url": cfg.get("llm.base_url"),
+            "model": cfg.get("llm.model"),
+            "reachable": llm_error is None,
+            "models": models or [],
+            "error": llm_error,
+        },
+        "stt": {
+            "engine": cfg.get("stt.engine"),
+            "model_dir": str(model_dir),
+            "has_tokens": (model_dir / "tokens.txt").exists(),
+            "onnx_files": onnx_files,
+            "loaded": type(pipeline.stt).__name__ == "SttSherpa",
+        },
+        "tts": {
+            "engine": cfg.get("tts.engine"),
+            "http_url": cfg.get("tts.http_url", ""),
+            "loaded": type(pipeline.tts).__name__ == "TtsHttp",
+        },
+    }
+
+
+def _set_yaml_value(path: Path, section: str, key: str, value) -> None:
+    """Set section.key in a YAML file, preserving comments and other lines."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    out: list[str] = []
+    cur = None
+    section_seen = False
+    insert_at = None
+    replaced = False
+    entry = f"  {key}: {json.dumps(value, ensure_ascii=False)}"
+    for line in lines:
+        header = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
+        if header:
+            if cur == section:
+                insert_at = len(out)  # boundary: the next section starts here
+            cur = header.group(1)
+            if cur == section:
+                section_seen = True
+        if cur == section and not replaced:
+            mkey = re.match(rf"^(\s+{re.escape(key)}\s*:\s*)(.*?)(\s*#.*)?$", line)
+            if mkey:
+                # keep the line's trailing comment, replace just the value
+                out.append(f"{mkey.group(1)}{json.dumps(value, ensure_ascii=False)}{mkey.group(3) or ''}")
+                replaced = True
+                continue
+        out.append(line)
+    if not replaced:
+        if not section_seen:
+            out += [f"{section}:", entry]
+        elif insert_at is not None:
+            out.insert(insert_at, entry)
+        else:
+            out.append(entry)  # section is the last one in the file
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+class AssistantConfigIn(BaseModel):
+    llm_model: str | None = None
+    stt_engine: str | None = None  # none | sherpa
+    tts_engine: str | None = None  # none | http
+    tts_http_url: str | None = None
+
+
+@router.post("/assistant/config")
+def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(require_admin)):
+    app = request.app.state
+    cfg = app.cfg
+    changed = []
+
+    if body.llm_model:
+        cfg._data.setdefault("llm", {})["model"] = body.llm_model
+        _set_yaml_value(cfg.path, "llm", "model", body.llm_model)
+        changed.append(f"llm.model = {body.llm_model}")
+    if body.stt_engine in ("none", "sherpa"):
+        cfg._data.setdefault("stt", {})["engine"] = body.stt_engine
+        _set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)
+        changed.append(f"stt.engine = {body.stt_engine}")
+    if body.tts_engine in ("none", "http"):
+        cfg._data.setdefault("tts", {})["engine"] = body.tts_engine
+        _set_yaml_value(cfg.path, "tts", "engine", body.tts_engine)
+        changed.append(f"tts.engine = {body.tts_engine}")
+    if body.tts_http_url is not None:
+        cfg._data.setdefault("tts", {})["http_url"] = body.tts_http_url
+        _set_yaml_value(cfg.path, "tts", "http_url", body.tts_http_url)
+        changed.append(f"tts.http_url = {body.tts_http_url}")
+
+    # rebuild the engines the pipeline uses (fall back to "none" on bad settings)
+    try:
+        app.pipeline.stt = make_stt(cfg)
+    except Exception as exc:
+        from server.voice.stt import SttNone
+
+        app.pipeline.stt = SttNone()
+        changed.append(f"stt load lỗi: {exc}")
+    try:
+        app.pipeline.tts = make_tts(cfg)
+    except Exception:
+        from server.voice.tts import TtsNone
+
+        app.pipeline.tts = TtsNone()
+
+    log_event(app.db, "assistant", "Cấu hình trợ lý: " + ("; ".join(changed) or "không đổi"))
+    return {"ok": True, "changed": changed}
+
+
+class TtsTestIn(BaseModel):
+    text: str = "Đã tắt điều hòa phòng ngủ."
+
+
+@router.post("/assistant/test-tts")
+async def test_tts(request: Request, body: TtsTestIn, _: None = Depends(require_admin)):
+    pipeline = request.app.state.pipeline
+    started = time.perf_counter()
+    try:
+        audio = await asyncio.to_thread(pipeline.tts.synthesize, body.text)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"TTS lỗi: {exc}")
+    if not audio:
+        raise HTTPException(
+            status_code=400,
+            detail="TTS đang ở chế độ 'none' - cấu hình engine 'http' trước (xem docs/setup-windows.md)",
+        )
+    data, rate = audio
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    return Response(
+        content=data,
+        media_type="audio/wav",
+        headers={"X-Latency-Ms": str(latency_ms), "X-Sample-Rate": str(rate)},
+    )
+
+
+class AnnounceIn(BaseModel):
+    room_id: int
+    text: str = "Đây là giọng đọc thử của trợ lý nhà thông minh."
+
+
+@router.post("/assistant/announce")
+async def announce(request: Request, body: AnnounceIn, _: None = Depends(require_admin)):
+    """Speak through every phone in a room - tests the exact path timers use."""
+    app = request.app.state
+    sent = await app.voice_connections.announce_room(body.room_id, body.text, app.pipeline)
+    return {"sent": sent}

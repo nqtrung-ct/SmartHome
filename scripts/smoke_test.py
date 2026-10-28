@@ -134,6 +134,16 @@ async def main():
             check("manual camera add", r.status_code == 201, r.text)
             created["devices"].append(r.json()["id"])
 
+            # --- assistant tab endpoints ---------------------------------------
+            r = await c.get("/api/assistant/status")
+            st = r.json() if r.status_code == 200 else {}
+            check("assistant status", r.status_code == 200 and all(k in st for k in ("llm", "stt", "tts")), r.text)
+            if st.get("tts", {}).get("engine") == "none":
+                r = await c.post("/api/assistant/test-tts", json={"text": "test"})
+                check("tts test disabled when engine none", r.status_code == 400, r.text)
+            r = await c.post("/api/assistant/announce", json={"room_id": living, "text": "test"})
+            check("announce with no clients", r.status_code == 200 and r.json()["sent"] == 0, r.text)
+
             # --- pairing flow --------------------------------------------------
             code = (await c.post("/api/pairing-codes")).json()["code"]
             r = await c.post("/api/pair", json={"code": code, "client_name": "smoke-test"})

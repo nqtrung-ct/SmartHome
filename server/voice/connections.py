@@ -31,22 +31,25 @@ class VoiceConnections:
                 await ws.send_bytes(data[i : i + 8192])
         await ws.send_json({"type": "end"})
 
-    async def announce_room(self, room_id, text: str, pipeline) -> None:
-        """Send a spoken announcement to every client in a room."""
+    async def announce_room(self, room_id, text: str, pipeline) -> int:
+        """Send a spoken announcement to every client in a room. Returns clients reached."""
         clients = self.db.query("SELECT id FROM voice_clients WHERE room_id=?", (room_id,))
         ids = [c["id"] for c in clients]
         if not ids:
             from server.db import log_event
 
             log_event(self.db, "voice", f"Không có máy nào trong phòng để phát: {text}", level="warn")
-            return
+            return 0
         audio = None
         if pipeline:
             audio = await pipeline.tts_audio(text)
+        sent = 0
         for client_id in ids:
             ws = self._clients.get(client_id)
             if ws:
                 try:
                     await self.send_audio(ws, "announce", text, audio)
+                    sent += 1
                 except Exception:
                     self.unregister(client_id)
+        return sent
