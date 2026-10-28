@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from server.api.deps import require_admin
 from server.core.text_command import handle_command
 from server.db import log_event
+from server.drivers.base import loads
 
 router = APIRouter()
 
@@ -28,6 +29,7 @@ def overview(request: Request, _: None = Depends(require_admin)):
                     "id": e["id"], "name": e["name"], "entity_type": e["entity_type"],
                     "state": e["state"], "device_name": e["device_name"], "driver": e["driver"],
                     "updated_at": e["updated_at"],
+                    "readonly": "readonly" in loads(e["driver_data"]),
                 }
                 for e in entities
             ],
@@ -40,7 +42,8 @@ def overview(request: Request, _: None = Depends(require_admin)):
         "rooms": rooms,
         "unassigned": [
             {"id": e["id"], "name": e["name"], "entity_type": e["entity_type"],
-             "device_name": e["device_name"], "state": e["state"]}
+             "device_name": e["device_name"], "state": e["state"],
+             "readonly": "readonly" in loads(e["driver_data"])}
             for e in unassigned
         ],
         "counts": {

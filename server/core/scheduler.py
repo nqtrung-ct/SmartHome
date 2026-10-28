@@ -20,7 +20,7 @@ async def _poll_tuya_sensors(app) -> None:
         return
     db: Database = app.state.db
     rows = db.query(
-        """SELECT e.id AS eid, e.driver_data, d.id AS did, d.host, d.extra
+        """SELECT e.id AS eid, e.entity_type AS etype, e.driver_data, d.id AS did, d.host, d.extra
            FROM entities e JOIN devices d ON d.id = e.device_id
            WHERE e.entity_type IN ('sensor', 'switch') AND d.driver='tuya'"""
     )
@@ -30,6 +30,12 @@ async def _poll_tuya_sensors(app) -> None:
         try:
             state = await asyncio.to_thread(driver.get_state, entity, device)
         except Exception:
+            # an unreachable breaker is not powering anything -> show it off
+            if row["etype"] == "switch":
+                db.execute(
+                    "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+                    ('{"state": "off"}', now_iso(), row["eid"]),
+                )
             continue
         db.execute(
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",

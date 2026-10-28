@@ -225,7 +225,7 @@ async def act_climate(db, drivers, entity, mode=None, temperature=None) -> dict:
                                        "mode": mode, "temperature": temperature, "ok": True}}
 
 
-async def act_sensor(db, drivers, entity, room_id=None) -> dict:
+async def act_sensor(db, drivers, entity, room_id=None, metric=None) -> dict:
     device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
     state = loads(entity["state"])
     if not state:
@@ -235,19 +235,23 @@ async def act_sensor(db, drivers, entity, room_id=None) -> dict:
         except Exception:
             state = {}
     room = _room_name(db, _entity_room(db, entity) or room_id)
-    where = f" ở {room.lower()}" if room else ""
     if not state:
         state = {"temperature": None, "humidity": None}
-    if state.get("temperature") is None and state.get("humidity") is None:
-        return {"reply": f"Cảm biến{where} chưa có số liệu.",
-                "action": {"tool": "get_sensor", "ok": False}}
     bits = []
-    if state.get("temperature") is not None:
+    if state.get("temperature") is not None and metric in (None, "temperature"):
         bits.append(f"nhiệt độ {state['temperature']:.1f} độ C")
-    if state.get("humidity") is not None:
+    if state.get("humidity") is not None and metric in (None, "humidity"):
         bits.append(f"độ ẩm {state['humidity']:.0f}%")
-    return {"reply": f"Phòng {room.lower()}: {', '.join(bits)}." if room else ", ".join(bits).capitalize() + ".",
-            "action": {"tool": "get_sensor", "ok": True, "state": state}}
+    if room:
+        reply = f"Phòng {room.lower()}: {', '.join(bits)}." if bits else f"Phòng {room.lower()} chưa có số liệu."
+    elif bits:
+        body = ", ".join(bits)
+        reply = body[0].upper() + body[1:] + "."
+    else:
+        missing = {"temperature": "nhiệt độ", "humidity": "độ ẩm"}.get(metric)
+        reply = f"Cảm biến chưa có số liệu {missing}." if missing else "Cảm biến chưa có số liệu."
+    return {"reply": reply,
+            "action": {"tool": "get_sensor", "ok": bool(bits), "state": state}}
 
 
 def weather_day(norm: str) -> int:
@@ -260,8 +264,43 @@ def weather_day(norm: str) -> int:
     return 0
 
 
-def act_weather(weather, day: int = 0) -> dict:
+def rain_question(norm: str) -> bool:
+    """Asking specifically about rain ("có mưa không", "mưa nhiều không"...)."""
+    return bool(re.search(r"co mua|kha nang mua|mua (khong|hay khong|roi|nhieu)", norm))
+
+
+def evening_question(norm: str) -> bool:
+    """Asking about tonight ("tối nay", "buổi tối", "đêm") - not bare "tối"
+    because tone-stripped "tôi" normalizes to the same "toi"."""
+    return bool(re.search(r"\b(toi nay|buoi toi|dem)\b", norm))
+
+
+def sensor_metric(norm: str) -> str | None:
+    """Which metric the text asked about; None = both / unspecified."""
+    has_temp, has_hum = "nhiet do" in norm, "do am" in norm
+    if has_temp and not has_hum:
+        return "temperature"
+    if has_hum and not has_temp:
+        return "humidity"
+    return None
+
+
+RAIN_GRADES = ((70, "rất cao"), (40, "khá cao"), (20, "thấp"), (0, "rất thấp"))
+
+
+def act_weather(weather, day: int = 0, rain: bool = False, evening: bool = False) -> dict:
     try:
+        if rain:
+            label = {0: "Tối nay" if evening else "Hôm nay", 1: "Ngày mai", 2: "Ngày mốt"}.get(day, "")
+            prob = weather.rain(day, evening)
+            if prob is not None:
+                grade = next(text for floor, text in RAIN_GRADES if prob >= floor)
+                only = "chỉ " if prob < 20 else ""
+                reply = f"{label} khả năng mưa {grade}, {only}{prob:.0f}%."
+                if prob == 0:
+                    reply = f"{label} không mưa, 0%."
+                return {"reply": reply,
+                        "action": {"tool": "get_weather", "ok": True, "day": day, "rain": prob}}
         return {"reply": weather.summary(day),
                 "action": {"tool": "get_weather", "ok": True, "day": day}}
     except Exception as exc:
@@ -367,13 +406,14 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     if not multi_intent and re.search(
         r"thoi tiet|du bao|kha nang mua|co mua|mua (khong|hay khong|roi|nhieu)", norm
     ):
-        return act_weather(weather, weather_day(norm))
+        return act_weather(weather, weather_day(norm),
+                           rain=rain_question(norm), evening=evening_question(norm))
 
     # temperature question without a verb -> sensor
     if not (has_on or has_off) and ("nhiet do" in norm or "do am" in norm):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
-            return await act_sensor(db, drivers, entity, room_id)
+            return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
 
     # climate with/without temperature
     if has_on or has_off:
@@ -452,10 +492,12 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             )
 
         if name == "get_sensor":
-            entity = resolve_entity(db, args.get("metric", "") or "cảm biến", room_id, "sensor")
+            metric_arg = str(args.get("metric", ""))
+            metric = "temperature" if "temp" in metric_arg else "humidity" if "hum" in metric_arg else None
+            entity = resolve_entity(db, metric_arg or "cảm biến", room_id, "sensor")
             if not entity:
                 return {"reply": "Phòng này chưa có cảm biến.", "action": {"tool": name, "ok": False}}
-            return await act_sensor(db, drivers, entity, room_id)
+            return await act_sensor(db, drivers, entity, room_id, metric)
 
         if name == "get_weather":
             # an explicit day in the user's text outranks what the model passed
@@ -545,13 +587,14 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
     executed = {a.get("tool") for a in actions if isinstance(a, dict)}
     if re.search(r"thoi tiet|du bao|kha nang mua|mua (khong|hay khong|roi|nhieu)", norm) \
             and "get_weather" not in executed:
-        extra = act_weather(weather, weather_day(norm))
+        extra = act_weather(weather, weather_day(norm),
+                            rain=rain_question(norm), evening=evening_question(norm))
         replies.append(extra["reply"])
         actions.append(extra["action"])
     if re.search(r"nhiet do|do am", norm) and "get_sensor" not in executed:
         sensor = resolve_entity(db, norm, room_id, "sensor")
         if sensor:
-            extra = await act_sensor(db, drivers, sensor, room_id)
+            extra = await act_sensor(db, drivers, sensor, room_id, sensor_metric(norm))
             replies.append(extra["reply"])
             actions.append(extra.get("action", {"tool": "get_sensor"}))
 

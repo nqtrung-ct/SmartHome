@@ -126,6 +126,8 @@ class TuyaDriver(Driver):
     def set_state(self, entity: Row, device: Row, command: str, params: dict) -> dict:
         if entity["entity_type"] == "sensor":
             raise DriverError("Cảm biến chỉ đọc, không bật/tắt được")
+        if loads(entity["driver_data"]).get("readonly"):
+            raise DriverError("Công tắc này chỉ xem trạng thái, không điều khiển từ xa được")
         if command not in ("on", "off", "toggle"):
             raise DriverError("Thiết bị Tuya chỉ hỗ trợ bật/tắt")
         dev = self._device(device)

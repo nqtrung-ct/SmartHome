@@ -118,8 +118,12 @@ async function renderDashboard() {
         const state = safeJson(e.state);
         let control = "";
         if (e.entity_type === "switch" || e.entity_type === "light") {
-          const on = state.state === "on";
-          control = `<span><button class="small-btn ${on ? "" : "primary"}" onclick="toggleEntity(${e.id}, ${on})">${on ? "Tắt" : "Bật"}</button></span>`;
+          if (e.readonly) {
+            control = `<span class="small muted">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
+          } else {
+            const on = state.state === "on";
+            control = `<span><button class="small-btn ${on ? "" : "primary"}" onclick="toggleEntity(${e.id}, ${on})">${on ? "Tắt" : "Bật"}</button></span>`;
+          }
         } else if (e.entity_type === "climate") {
           const temp = state.temperature || 26;
           control = `<span class="small muted">
@@ -158,6 +162,11 @@ function sensorText(state) {
   if (state.humidity != null) bits.push("💧 " + state.humidity + "%");
   if (state.battery != null) bits.push("🔋 " + state.battery + "%");
   return bits.join(" · ") || "chưa có số liệu";
+}
+
+// devices-tab entities carry driver_data; dashboard rows carry a computed flag
+function isReadonly(e) {
+  return e.readonly === true || safeJson(e.driver_data).readonly === true;
 }
 
 window.toggleEntity = async (id, on) => {
@@ -552,7 +561,7 @@ async function renderDevices() {
             <div><b>${esc(e.name)}</b> <span class="badge">${typeVi(e.entity_type)}</span>
               <span class="small muted">${esc(e.aliases)}</span></div>
             <div class="row">
-              ${(e.entity_type === "switch" || e.entity_type === "light") ?
+              ${(e.entity_type === "switch" || e.entity_type === "light") && !isReadonly(e) ?
                 `<button class="small-btn" onclick="cmdEntity(${e.id},'on')">Bật</button>
                  <button class="small-btn" onclick="cmdEntity(${e.id},'off')">Tắt</button>` : ""}
               <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
