@@ -337,8 +337,13 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     if (has_on and has_off) or re.search(r"\broi\b|\bsau do\b", norm):
         return None
 
-    # timers
-    if re.search(r"\b(nhac|hen|bao)\b", norm) or re.search(r"\d+\s*(phut|gio|tieng)|\d{1,2}:\d{2}", norm):
+    # timers: fast shortcut unless the sentence is clearly multi-intent
+    # ("bật đèn và 15 phút nữa nhắc tôi..." needs the LLM to do both)
+    timerish = re.search(r"\b(nhac|hen|bao)\b", norm) or re.search(
+        r"\d+\s*(phut|gio|tieng)|\d{1,2}:\d{2}", norm
+    )
+    multi_intent = re.search(r"\broi\b|\bsau do\b|\bva\b|\bva ca\b|\bthem\b|\bngoai ra\b", norm)
+    if timerish and not multi_intent:
         minutes, time_str, message = _parse_timer(norm, text)
         if minutes or time_str:
             return act_timer(db, room_id, message or "hẹn giờ", minutes=minutes, time_str=time_str)
@@ -456,39 +461,80 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         f"Thời gian hiện tại: {datetime.now().strftime('%H:%M, %d/%m/%Y')}.\n"
         f"{_llm_context(db, room_id)}\n"
         "Ưu tiên gọi công cụ để điều khiển thiết bị. Chỉ trả lời văn bản khi không có công cụ phù hợp. "
+        "Nếu câu có nhiều việc, hãy gọi TẤT CẢ các công cụ cần thiết trong cùng một lượt trả lời. "
         "Trả lời ngắn gọn, thân thiện."
     )
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": text},
     ]
-    try:
-        result = await _call_ollama(cfg, messages)
-    except Exception as exc:
-        return {
-            "reply": f"Mình chưa hiểu câu này, và không gọi được mô hình ngôn ngữ ({exc}).",
-            "actions": [], "engine": "llm-error",
-        }
 
-    message = result.get("message", {})
-    tool_calls = message.get("tool_calls") or []
+    # Tool-calling loop: execute each round of calls, feed the results back and
+    # let the model continue ("mở máy lạnh VÀ cho tôi biết thời tiết" often
+    # arrives as one call per turn). Replies from every round are combined.
     replies, actions = [], []
-    for call in tool_calls:
-        fn = call.get("function", {})
-        name = fn.get("name", "")
-        args = fn.get("arguments", {})
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except ValueError:
-                args = {}
-        outcome = await execute_tool(db, drivers, weather, name, args, room_id)
-        replies.append(outcome["reply"])
-        actions.append(outcome.get("action", {"tool": name}))
+    content = ""
+    for _round in range(4):
+        try:
+            result = await _call_ollama(cfg, messages)
+        except Exception as exc:
+            if replies:
+                break  # already did something useful; answer with what we have
+            return {
+                "reply": f"Mình chưa hiểu câu này, và không gọi được mô hình ngôn ngữ ({exc}).",
+                "actions": [], "engine": "llm-error",
+            }
+
+        message = result.get("message", {})
+        content = (message.get("content") or "").strip()
+        tool_calls = message.get("tool_calls") or []
+        if not tool_calls:
+            break
+
+        # echo the assistant turn so the tool results pair up correctly
+        messages.append({"role": "assistant", "content": message.get("content") or "",
+                         "tool_calls": tool_calls})
+        for call in tool_calls:
+            fn = call.get("function", {})
+            name = fn.get("name", "")
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {}
+            outcome = await execute_tool(db, drivers, weather, name, args, room_id)
+            replies.append(outcome["reply"])
+            actions.append(outcome.get("action", {"tool": name}))
+            messages.append({
+                "role": "tool",
+                "name": name,
+                "tool_name": name,  # ollama builds vary on the field name
+                "content": json.dumps(
+                    {"reply": outcome["reply"], "ok": outcome.get("action", {}).get("ok", True)},
+                    ensure_ascii=False,
+                ),
+            })
+
+    # Deterministic safety net: small models sometimes answer only the first
+    # half of a multi-part sentence. If the text asked about weather/sensors
+    # and nothing answered that part yet, do it here.
+    norm = normalize(text)
+    executed = {a.get("tool") for a in actions if isinstance(a, dict)}
+    if re.search(r"thoi tiet|du bao|kha nang mua|mua (khong|hay khong|roi|nhieu)", norm) \
+            and "get_weather" not in executed:
+        extra = act_weather(weather)
+        replies.append(extra["reply"])
+        actions.append(extra["action"])
+    if re.search(r"nhiet do|do am", norm) and "get_sensor" not in executed:
+        sensor = resolve_entity(db, norm, room_id, "sensor")
+        if sensor:
+            extra = await act_sensor(db, drivers, sensor, room_id)
+            replies.append(extra["reply"])
+            actions.append(extra.get("action", {"tool": "get_sensor"}))
 
     if replies:
         return {"reply": " ".join(replies), "actions": actions, "engine": "llm"}
-    content = (message.get("content") or "").strip()
     if content:
         return {"reply": content, "actions": [], "engine": "llm"}
     return {"reply": "Mình chưa hiểu ý bạn.", "actions": [], "engine": "llm"}
