@@ -1,10 +1,13 @@
 # Optional extras - install what you need:
 #   pip install -r optional-requirements.txt
 #
-# sherpa-onnx : speech-to-text (Zipformer-vi) + Silero VAD
+# sherpa-onnx : speech-to-text (Zipformer-vi)
+# piper-tts   : Vietnamese text-to-speech for scripts/tts_http_example.py
+#               (voice: vi_VN-vais1000-medium from huggingface.co/rhasspy/piper-voices)
 # tinytuya    : local control of Tuya WiFi devices (needs local keys)
 # numpy       : used with sherpa-onnx for audio buffers
 
 sherpa-onnx>=1.10
+piper-tts>=1.3
 tinytuya>=1.13
 numpy>=1.26

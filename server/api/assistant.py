@@ -20,12 +20,16 @@ router = APIRouter()
 
 
 def _ollama_models(cfg):
-    """Installed Ollama model names, or (None, error)."""
+    """Installed Ollama models [{name, size_gb}], or (None, error)."""
     base = str(cfg.get("llm.base_url", "http://127.0.0.1:11434")).rstrip("/")
     try:
         resp = httpx.get(base + "/api/tags", timeout=5)
         resp.raise_for_status()
-        return [m.get("name", "") for m in resp.json().get("models", [])], None
+        models = [
+            {"name": m.get("name", ""), "size_gb": round(m.get("size", 0) / 1e9, 1)}
+            for m in resp.json().get("models", [])
+        ]
+        return models, None
     except Exception as exc:
         return None, str(exc)
 
@@ -51,6 +55,8 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "reachable": llm_error is None,
             "models": models or [],
             "error": llm_error,
+            # friendly name of the currently running Ollama model, if any
+            "loaded": next((m["name"] for m in (models or []) if m["name"] == cfg.get("llm.model")), None),
         },
         "stt": {
             "engine": cfg.get("stt.engine"),
@@ -58,13 +64,43 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "has_tokens": (model_dir / "tokens.txt").exists(),
             "onnx_files": onnx_files,
             "loaded": type(pipeline.stt).__name__ == "SttSherpa",
+            "available": _sherpa_importable(),
+            "error": None if type(pipeline.stt).__name__ == "SttSherpa" else _stt_error_hint(cfg, model_dir),
         },
         "tts": {
             "engine": cfg.get("tts.engine"),
             "http_url": cfg.get("tts.http_url", ""),
             "loaded": type(pipeline.tts).__name__ == "TtsHttp",
+            "error": None if type(pipeline.tts).__name__ == "TtsHttp" else _tts_error_hint(cfg),
         },
     }
+
+
+def _sherpa_importable() -> bool:
+    try:
+        import sherpa_onnx  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _stt_error_hint(cfg, model_dir) -> str:
+    if cfg.get("stt.engine") == "none":
+        return "Engine đang là 'none'"
+    if not _sherpa_importable():
+        return "Chưa cài module sherpa-onnx: pip install -r optional-requirements.txt"
+    if not (model_dir / "tokens.txt").exists():
+        return f"Thiếu tokens.txt trong {model_dir}"
+    return "Thiếu file encoder/decoder/joiner .onnx trong " + str(model_dir)
+
+
+def _tts_error_hint(cfg) -> str:
+    if cfg.get("tts.engine") == "none":
+        return "Engine đang là 'none'"
+    if not cfg.get("tts.http_url"):
+        return "Engine 'http' nhưng chưa nhập http_url"
+    return "Không kết nối được TTS service"
 
 
 def _set_yaml_value(path: Path, section: str, key: str, value) -> None:

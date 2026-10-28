@@ -394,10 +394,16 @@ async def _call_ollama(cfg: Config, messages: list) -> dict:
         "messages": messages,
         "tools": TOOLS,
         "stream": False,
+        # qwen3 "thinks" by default: slow on small GPUs and tool calls stop
+        # coming back; older Ollama builds reject the flag, so retry without
+        "think": False,
     }
     url = cfg.get("llm.base_url", "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
     async with httpx.AsyncClient(timeout=float(cfg.get("llm.timeout", 30))) as client:
         resp = await client.post(url, json=payload)
+        if resp.status_code == 400:
+            payload.pop("think", None)
+            resp = await client.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()
 

@@ -280,7 +280,7 @@ async function renderAssistant() {
 
   // --- LLM ---
   const llmModels = st.llm.models.length
-    ? st.llm.models.map((m) => `<option value="${esc(m)}" ${m === st.llm.model ? "selected" : ""}>${esc(m)}</option>`).join("")
+    ? st.llm.models.map((m) => `<option value="${esc(m.name)}" ${m.name === st.llm.model ? "selected" : ""}>${esc(m.name)} (${m.size_gb} GB)</option>`).join("")
     : `<option value="${esc(st.llm.model)}">${esc(st.llm.model)}</option>`;
   el.innerHTML = `
     <div class="card">
@@ -292,7 +292,8 @@ async function renderAssistant() {
           <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
           <button class="small-btn" onclick="testLlm()">▶ Thử LLM</button>
         </div>
-        <p class="small muted">Đổi model: <code>ollama pull &lt;tên&gt;</code>. Model hiện tại: <b>${esc(st.llm.model)}</b> tại ${esc(st.llm.base_url)}.</p>
+        <p class="small muted">Đổi model: <code>ollama pull &lt;tên&gt;</code> rồi bấm 💾. Model hiện tại: <b>${esc(st.llm.model)}</b> tại ${esc(st.llm.base_url)}.<br>
+          Gợi ý trên GTX 1660: <b>qwen2.5:3b-instruct</b> gọi tool chuẩn tiếng Việt và nhanh nhất; qwen3:4b chậm hơn (3-16 s); qwen3:1.7b trả lời rỗng khi tắt chế độ suy nghĩ — không nên dùng.</p>
         <div id="llm-test-out" class="console-out muted small">Thử một câu đa việc (chỉ LLM trả lời được) để kiểm tra tool-calling.</div>`
       : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
          <code>ollama pull qwen3:4b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
@@ -300,6 +301,7 @@ async function renderAssistant() {
 
     <div class="card">
       <h2>🎙 Nhận dạng giọng nói (STT) ${dot(st.stt.loaded, "model đã nạp", "chưa nạp")}</h2>
+      ${!st.stt.loaded && st.stt.error ? `<p class="small error">Lý do: ${esc(st.stt.error)}</p>` : ""}
       <div class="row">
         <label class="small muted">Engine</label>
         <select id="stt-engine">
@@ -314,11 +316,12 @@ async function renderAssistant() {
           : "❌ chưa có"}</p>
       ${!st.stt.loaded ? `<p class="small">Cài đặt: <code>pip install -r optional-requirements.txt</code>, tải model Zipformer-vi (mục Vietnamese) từ
         <a href="https://k2-fsa.github.io/sherpa/onnx/pretrained_models/index.html" target="_blank" rel="noopener">sherpa-onnx</a>,
-        giải nén vào <code>data/models/stt/</code>, chọn engine sherpa rồi Lưu.</p>` : ""}
+        giải nén vào <code>data/models/stt/</code> (tokens.txt + encoder/decoder/joiner .onnx), chọn engine sherpa rồi Lưu.</p>` : ""}
     </div>
 
     <div class="card">
       <h2>🔊 Chuyển giọng nói (TTS) ${dot(st.tts.loaded, "sẵn sàng", "chỉ hiện text")}</h2>
+      ${!st.tts.loaded && st.tts.error ? `<p class="small error">Lý do: ${esc(st.tts.error)}</p>` : ""}
       <div class="row">
         <label class="small muted">Engine</label>
         <select id="tts-engine">
