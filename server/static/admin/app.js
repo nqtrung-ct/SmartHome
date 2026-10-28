@@ -799,10 +799,13 @@ window.openEditModal = (entityId) => {
   $("#e-name").value = e.name;
   $("#e-alias").value = e.aliases || "";
   $("#e-hw").textContent = `Thiết bị gốc: ${d.name}${d.host ? " · " + d.host : ""}`;
-  // hub: sửa phòng của thiết bị gốc; thiết bị thường: phòng riêng
+  // hiện phòng hiệu dụng (phòng riêng nếu có, không thì phòng thiết bị gốc);
+  // chọn "— theo thiết bị gốc —" để quay lại kế thừa
+  const effRoom = e.room_id ?? d.room_id ?? null;
   $("#e-room").innerHTML = isHub
     ? roomSelectOptions(roomsCache, d.room_id)
-    : entityRoomOptions(roomsCache, e.room_id);
+    : entityRoomOptions(roomsCache, effRoom);
+  editCtx.roomInit = +$("#e-room").value || null;
   $("#e-children-wrap").classList.toggle("hidden", !isHub);
   if (isHub) {
     const children = d.entities.filter((x) => x.id !== e.id);
@@ -827,16 +830,19 @@ $("#e-add-child").onclick = () => {
 $("#e-cancel").onclick = () => $("#edit-modal").classList.add("hidden");
 
 $("#e-save").onclick = async () => {
-  const { e, d, removed } = editCtx;
+  const { e, d, removed, roomInit } = editCtx;
   const isHub = e.entity_type === "controller";
   const name = $("#e-name").value.trim();
   const aliases = $("#e-alias").value.trim();
   const roomId = +$("#e-room").value || null;
+  const roomChanged = roomId !== roomInit;  // không đụng phòng = giữ nguyên kế thừa
   if (!name) { toast("Nhập tên thiết bị"); return; }
   try {
     await api(`/entities/${e.id}`, { method: "PATCH", body: JSON.stringify({ name, aliases }) });
     if (isHub) {
-      await api(`/devices/${d.id}`, { method: "PATCH", body: JSON.stringify({ room_id: roomId }) });
+      if (roomChanged) {
+        await api(`/devices/${d.id}`, { method: "PATCH", body: JSON.stringify({ room_id: roomId }) });
+      }
       for (const id of removed) await api(`/entities/${id}`, { method: "DELETE" });
       for (const row of $$("#e-children .ec-row")) {
         const child = {
@@ -851,7 +857,7 @@ $("#e-save").onclick = async () => {
           await api(`/devices/${d.id}/entities`, { method: "POST", body: JSON.stringify(child) });
         }
       }
-    } else {
+    } else if (roomChanged) {
       await api(`/entities/${e.id}`, { method: "PATCH", body: JSON.stringify({ room_id: roomId }) });
     }
     $("#edit-modal").classList.add("hidden");
