@@ -37,7 +37,7 @@ Ghi chú làm việc trong repo này (cho Claude Code và lập trình viên). C
 
 ## Quy ước
 
-- So khớp lệnh/alias đều qua `server.util.normalize()` (bỏ dấu, lowercase) — regex và alias viết cho bản đã normalize.
+- So khớp lệnh/alias đều qua `server.util.normalize()` (bỏ dấu, lowercase) — regex và alias viết cho bản đã normalize. Alias khớp **theo từ riêng** (`_alias_in`) — không dùng substring trần, kẻo alias ngắn "ac" trúng "khách" rồi tắt nhầm điều hòa thật.
 - Câu trả lời giọng nói **không nêu phòng** khi lệnh không nói rõ phòng (mic ở phòng nào thì thiết bị phòng đó là mặc định); chỉ thêm tên phòng khi lệnh nêu rõ (xem `_room_where()` trong `text_command.py`).
 - **Phòng của thực thể**: `entities.room_id` (NULL = theo phòng thiết bị gốc); mọi nơi nhóm/theo phòng dùng phòng hiệu dụng `COALESCE(e.room_id, d.room_id)` — xem `_entity_room()` trong `text_command.py`. Tab Thiết bị nhóm theo phòng; sửa tên/phòng qua modal ✏️; modal của hub (entity `controller`) còn thêm/sửa/xóa **thiết bị con** (UI gọi entity là "thiết bị con" với hub). Xóa hết thiết bị của một phần cứng thì phần cứng bị xóa theo (`DELETE /entities/{id}` tự dọn).
 - **Entity readonly** (`"readonly": true` trong `driver_data`): UI ẩn nút, `act_switch` và `POST /entities/{id}/command` từ chối — áp dụng cho mọi driver. Dùng cho thiết bị chỉ-trạng-thái (breaker, hub luôn bật). Hub luôn bật còn dùng entity_type `controller` (chỉ tồn tại trong DB, không chọn được trong UI — badge "điều khiển", chấm xanh, từ chối bật/tắt).

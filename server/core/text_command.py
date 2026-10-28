@@ -135,13 +135,18 @@ def _room_name(db: Database, room_id) -> str:
     return row["name"] if row else ""
 
 
+def _alias_in(alias: str, norm: str) -> bool:
+    """Alias phải đứng thành từ riêng trong câu — tránh 'ac' lọt vào 'khách'."""
+    return re.search(rf"(?:^|\s){re.escape(alias)}(?:\s|$)", norm) is not None
+
+
 def _room_from_text(db: Database, norm: str) -> int | None:
     """Explicit room mentioned in the text? Longest alias wins."""
     best: tuple[int, int] | None = None
     for room in db.query("SELECT * FROM rooms"):
         for alias in [room["name"]] + room["aliases"].split(","):
             alias_n = normalize(alias)
-            if alias_n and alias_n in norm:
+            if alias_n and _alias_in(alias_n, norm):
                 if best is None or len(alias_n) > best[1]:
                     best = (room["id"], len(alias_n))
     return best[0] if best else None
@@ -181,7 +186,7 @@ def resolve_entity(db: Database, text: str, room_id=None, entity_type=None):
             continue
         in_scope = scope_room and _entity_room(db, entity) == scope_room
         for alias in _entity_aliases(entity):
-            if alias in norm:
+            if _alias_in(alias, norm):
                 ranked.append((len(alias) + (100 if in_scope else 0), dict(entity)))
                 break
     if not ranked:
