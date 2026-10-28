@@ -117,7 +117,10 @@ async function renderDashboard() {
       const entities = room.entities.map((e) => {
         const state = safeJson(e.state);
         let control = "";
-        if (e.entity_type === "switch" || e.entity_type === "light") {
+        if (e.entity_type === "controller") {
+          // always-on IR hub: green dot, no controls
+          control = `<span class="small ok">● Đang bật</span>`;
+        } else if (e.entity_type === "switch" || e.entity_type === "light") {
           if (e.readonly) {
             control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
           } else {
@@ -156,7 +159,10 @@ async function renderDashboard() {
 
 function safeJson(s) { try { return JSON.parse(s || "{}"); } catch { return {}; } }
 function typeVi(t) {
-  return { switch: "công tắc", light: "đèn", climate: "điều hòa", sensor: "cảm biến", camera: "camera" }[t] || t;
+  return {
+    switch: "công tắc", light: "đèn", climate: "điều hòa",
+    sensor: "cảm biến", camera: "camera", controller: "điều khiển",
+  }[t] || t;
 }
 function sensorText(state) {
   const bits = [];
@@ -604,6 +610,7 @@ async function renderDevices() {
         <select id="ent-type-${d.id}">
           <option value="switch">công tắc</option><option value="light">đèn</option>
           <option value="climate">điều hòa</option><option value="sensor">cảm biến</option>
+          <option value="controller">điều khiển</option>
         </select>
         <input id="ent-alias-${d.id}" placeholder="Bí danh (VD: điều hòa, máy lạnh)" style="width:200px">
         <button class="small-btn" onclick="addEntity(${d.id})">+ Thực thể</button>

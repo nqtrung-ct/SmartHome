@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS entities(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  entity_type TEXT NOT NULL,          -- switch | light | climate | sensor | camera
+  entity_type TEXT NOT NULL,          -- switch | light | climate | sensor | camera | controller
   aliases TEXT NOT NULL DEFAULT '',
   driver_data TEXT NOT NULL DEFAULT '{}',
   state TEXT NOT NULL DEFAULT '{}',
