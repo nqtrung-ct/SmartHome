@@ -51,6 +51,46 @@ def store_secret(cfg, group: str, key: str, value: str) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def set_yaml_value(path, section: str, key: str, value) -> None:
+    """Set section.key in a YAML file, preserving comments and other lines."""
+    import json
+    import re
+    from pathlib import Path
+
+    path = Path(path)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    out: list[str] = []
+    cur = None
+    section_seen = False
+    insert_at = None
+    replaced = False
+    entry = f"  {key}: {json.dumps(value, ensure_ascii=False)}"
+    for line in lines:
+        header = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
+        if header:
+            if cur == section:
+                insert_at = len(out)  # boundary: the next section starts here
+            cur = header.group(1)
+            if cur == section:
+                section_seen = True
+        if cur == section and not replaced:
+            mkey = re.match(rf"^(\s+{re.escape(key)}\s*:\s*)(.*?)(\s*#.*)?$", line)
+            if mkey:
+                # keep the line's trailing comment, replace just the value
+                out.append(f"{mkey.group(1)}{json.dumps(value, ensure_ascii=False)}{mkey.group(3) or ''}")
+                replaced = True
+                continue
+        out.append(line)
+    if not replaced:
+        if not section_seen:
+            out += [f"{section}:", entry]
+        elif insert_at is not None:
+            out.insert(insert_at, entry)
+        else:
+            out.append(entry)  # section is the last one in the file
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 def parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value)
 

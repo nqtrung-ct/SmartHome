@@ -87,7 +87,7 @@ $("#tabs").addEventListener("click", (ev) => {
 function loadTab(tab) {
   ({ dashboard: renderDashboard, rooms: renderRooms, assistant: renderAssistant,
      devices: renderDevices, discovery: renderDiscovery, voice: renderVoice,
-     console: renderConsole, events: renderEvents }[tab] || (() => {}))();
+     console: renderConsole, events: renderEvents, settings: renderSettings }[tab] || (() => {}))();
 }
 
 // ---------------------------------------------------------------- dashboard: room cards by floor
@@ -907,6 +907,86 @@ async function renderEvents() {
         <td>${esc(r.message)}</td></tr>`).join("")}</table>` : "<p class='muted'>Trống.</p>"}
   </div>`;
 }
+
+// ---------------------------------------------------------------- settings
+
+const toggle = (id, checked, label) => `
+  <label class="setting-toggle">
+    <input type="checkbox" id="${id}" ${checked ? "checked" : ""}>
+    <span>${label}</span>
+  </label>`;
+
+async function renderSettings() {
+  const el = $("#tab-settings");
+  const st = await api("/settings").catch(() => null);
+  if (!st) { el.innerHTML = `<div class="card muted">Không tải được cài đặt.</div>`; return; }
+
+  el.innerHTML = `
+    <div class="card">
+      <h2>📡 Kết nối Zigbee (MQTT)</h2>
+      ${toggle("s-mqtt", st.mqtt.enabled, "Kết nối Mosquitto / Zigbee2MQTT")}
+      <p class="small muted">Chỉ bật khi đã cài Mosquitto + Zigbee2MQTT (xem docs/setup-windows.md §4).
+      Tắt sẽ ngừng thử kết nối và ngừng nhận sensor Zigbee.</p>
+      <div class="row">
+        <label class="small muted">Broker</label><input id="s-mqtt-host" value="${esc(st.mqtt.host)}" style="width:140px">
+        <label class="small muted">Port</label><input id="s-mqtt-port" value="${st.mqtt.port}" style="width:80px">
+        <label class="small muted">Topic</label><input id="s-mqtt-topic" value="${esc(st.mqtt.base_topic)}" style="width:150px">
+      </div>
+    </div>
+    <div class="card">
+      <h2>🔎 Quét mạng</h2>
+      ${toggle("s-scan", st.discovery.network_scan, "Ping toàn bộ mạng khi quét (tìm thiết bị chưa biết)")}
+      <div class="row">
+        <label class="small muted">Dải mạng</label>
+        <input id="s-subnet" value="${esc(st.discovery.subnet)}" placeholder="auto hoặc 192.168.1.0/24" style="width:200px">
+      </div>
+      <p class="small muted">"auto" = tự dò theo card mạng mặc định. Tắt ping sẽ quét nhanh hơn nhưng chỉ thấy thiết bị phát broadcast.</p>
+    </div>
+    <div class="card">
+      <h2>🌦 Vị trí thời tiết</h2>
+      <div class="row">
+        <label class="small muted">Vĩ độ</label><input id="s-lat" value="${st.weather.latitude}" style="width:110px">
+        <label class="small muted">Kinh độ</label><input id="s-lon" value="${st.weather.longitude}" style="width:110px">
+        <span class="small muted">(mở-meteo, miễn phí, không cần key)</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>🖥 Server</h2>
+      ${toggle("s-mdns", st.server.advertise_mdns, "Thông báo server qua mDNS (app điện thoại tự tìm được) — áp dụng sau khi restart")}
+      <p class="small muted">Đang chạy tại <code>http://${esc(st.server.lan_ip)}:${st.server.port}</code> · trang quản trị <code>/admin</code> · màn hiển thị <code>/</code></p>
+      <div class="row">
+        <label class="small muted">Đổi token quản trị</label>
+        <input id="s-token" type="password" placeholder="token mới (≥ 6 ký tự)" style="width:200px">
+        <span class="small muted">⚠️ các nơi đang đăng nhập khác sẽ phải nhập token mới.</span>
+      </div>
+    </div>
+    <button class="primary" onclick="saveSettings()" style="padding:12px 28px">💾 Lưu cài đặt</button>`;
+}
+
+window.saveSettings = async () => {
+  const body = {
+    mqtt_enabled: $("#s-mqtt").checked,
+    mqtt_host: $("#s-mqtt-host").value.trim() || null,
+    mqtt_port: +$("#s-mqtt-port").value || null,
+    mqtt_base_topic: $("#s-mqtt-topic").value.trim() || null,
+    discovery_network_scan: $("#s-scan").checked,
+    discovery_subnet: $("#s-subnet").value.trim() || "auto",
+    weather_latitude: parseFloat($("#s-lat").value),
+    weather_longitude: parseFloat($("#s-lon").value),
+    advertise_mdns: $("#s-mdns").checked,
+    admin_token: $("#s-token").value.trim() || null,
+  };
+  try {
+    const res = await api("/settings", { method: "POST", body: JSON.stringify(body) });
+    if (res.admin_token_changed) {
+      const tok = $("#s-token").value.trim();
+      token = tok;
+      localStorage.setItem("sh_token", tok);
+    }
+    toast(res.changed.length ? "Đã lưu: " + res.changed.join("; ") : "Không có gì thay đổi");
+    $("#s-token").value = "";
+  } catch (e) { toast("Lỗi: " + e.message); }
+};
 
 // ---------------------------------------------------------------- boot
 

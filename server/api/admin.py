@@ -303,3 +303,101 @@ def patch_client(request: Request, client_id: int, body: ClientPatch, _: None = 
 def delete_client(request: Request, client_id: int, _: None = Depends(require_admin)):
     request.app.state.db.execute("DELETE FROM voice_clients WHERE id=?", (client_id,))
     return {"ok": True}
+
+
+# --- settings ----------------------------------------------------------------
+
+
+from server.util import lan_ip, set_yaml_value  # noqa: E402
+
+
+@router.get("/settings")
+def get_settings(request: Request, _: None = Depends(require_admin)):
+    cfg = request.app.state.cfg
+    return {
+        "mqtt": {
+            "enabled": bool(cfg.get("mqtt.enabled", False)),
+            "host": cfg.get("mqtt.host", "127.0.0.1"),
+            "port": cfg.get("mqtt.port", 1883),
+            "base_topic": cfg.get("mqtt.base_topic", "zigbee2mqtt"),
+        },
+        "discovery": {
+            "network_scan": bool(cfg.get("discovery.network_scan", True)),
+            "subnet": cfg.get("discovery.subnet", "auto"),
+        },
+        "weather": {
+            "latitude": cfg.get("weather.latitude"),
+            "longitude": cfg.get("weather.longitude"),
+        },
+        "server": {
+            "port": cfg.get("server.port"),
+            "advertise_mdns": bool(cfg.get("server.advertise_mdns", True)),
+            "admin_token_set": bool(cfg.get("server.admin_token")),
+            "lan_ip": lan_ip(),
+        },
+    }
+
+
+class SettingsIn(BaseModel):
+    mqtt_enabled: bool | None = None
+    mqtt_host: str | None = None
+    mqtt_port: int | None = None
+    mqtt_base_topic: str | None = None
+    discovery_network_scan: bool | None = None
+    discovery_subnet: str | None = None
+    weather_latitude: float | None = None
+    weather_longitude: float | None = None
+    advertise_mdns: bool | None = None  # applies after restart
+    admin_token: str | None = None
+
+
+@router.post("/settings")
+def update_settings(request: Request, body: SettingsIn, _: None = Depends(require_admin)):
+    """Persist settings to config.yaml and apply what can be applied live."""
+    app = request.app
+    cfg = app.state.cfg
+    changed = []
+
+    def apply(section, key, value, *, live=True):
+        cfg._data.setdefault(section, {})[key] = value
+        set_yaml_value(cfg.path, section, key, value)
+        changed.append(f"{section}.{key}")
+
+    if body.mqtt_enabled is not None:
+        apply("mqtt", "enabled", body.mqtt_enabled)
+    if body.mqtt_host:
+        apply("mqtt", "host", body.mqtt_host.strip())
+    if body.mqtt_port:
+        apply("mqtt", "port", int(body.mqtt_port))
+    if body.mqtt_base_topic:
+        apply("mqtt", "base_topic", body.mqtt_base_topic.strip())
+
+    if body.discovery_network_scan is not None:
+        apply("discovery", "network_scan", body.discovery_network_scan)
+    if body.discovery_subnet is not None:
+        apply("discovery", "subnet", body.discovery_subnet.strip() or "auto")
+    if body.weather_latitude is not None:
+        apply("weather", "latitude", float(body.weather_latitude))
+    if body.weather_longitude is not None:
+        apply("weather", "longitude", float(body.weather_longitude))
+    if body.advertise_mdns is not None:
+        apply("server", "advertise_mdns", body.advertise_mdns)
+
+    token_changed = False
+    if body.admin_token and body.admin_token.strip():
+        new_token = body.admin_token.strip()
+        if len(new_token) < 6:
+            raise HTTPException(status_code=400, detail="Token quá ngắn (tối thiểu 6 ký tự)")
+        apply("server", "admin_token", new_token)
+        token_changed = True
+
+    # live effects
+    zigbee = app.state.drivers.get("zigbee")
+    if zigbee is not None and body.mqtt_enabled is not None:
+        if body.mqtt_enabled:
+            zigbee.start()
+        else:
+            zigbee.stop()
+
+    log_event(app.state.db, "settings", "Đã lưu cài đặt: " + ("; ".join(changed) or "không đổi"))
+    return {"ok": True, "changed": changed, "admin_token_changed": token_changed}

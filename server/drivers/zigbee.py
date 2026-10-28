@@ -23,15 +23,19 @@ class ZigbeeDriver(Driver):
         self.base_topic = cfg.get("mqtt.base_topic", "zigbee2mqtt")
         self.client = None
         self._stop = threading.Event()
+        self._running = False
 
     # -- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
-        if not self.cfg.get("mqtt.enabled", True):
+        if not self.cfg.get("mqtt.enabled", False) or self._running:
             return
+        self._running = True
+        self._stop = threading.Event()
         threading.Thread(target=self._run, name="zigbee-mqtt", daemon=True).start()
 
     def stop(self) -> None:
+        self._running = False
         self._stop.set()
         if self.client:
             try:

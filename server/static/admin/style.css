@@ -92,6 +92,11 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
 .floor-col .card { margin-bottom: 14px; }
 .manage-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .manage-row:last-child { border-bottom: none; }
+.setting-toggle {
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 8px 0; font-size: 15px;
+}
+.setting-toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
 
 code { background: var(--card2); padding: 1px 6px; border-radius: 5px; font-size: 13px; }
 

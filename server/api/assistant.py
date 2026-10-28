@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from server.api.deps import require_admin
 from server.db import log_event
+from server.util import set_yaml_value
 from server.voice.stt import make_stt
 from server.voice.tts import make_tts
 
@@ -103,41 +104,6 @@ def _tts_error_hint(cfg) -> str:
     return "Không kết nối được TTS service"
 
 
-def _set_yaml_value(path: Path, section: str, key: str, value) -> None:
-    """Set section.key in a YAML file, preserving comments and other lines."""
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    out: list[str] = []
-    cur = None
-    section_seen = False
-    insert_at = None
-    replaced = False
-    entry = f"  {key}: {json.dumps(value, ensure_ascii=False)}"
-    for line in lines:
-        header = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
-        if header:
-            if cur == section:
-                insert_at = len(out)  # boundary: the next section starts here
-            cur = header.group(1)
-            if cur == section:
-                section_seen = True
-        if cur == section and not replaced:
-            mkey = re.match(rf"^(\s+{re.escape(key)}\s*:\s*)(.*?)(\s*#.*)?$", line)
-            if mkey:
-                # keep the line's trailing comment, replace just the value
-                out.append(f"{mkey.group(1)}{json.dumps(value, ensure_ascii=False)}{mkey.group(3) or ''}")
-                replaced = True
-                continue
-        out.append(line)
-    if not replaced:
-        if not section_seen:
-            out += [f"{section}:", entry]
-        elif insert_at is not None:
-            out.insert(insert_at, entry)
-        else:
-            out.append(entry)  # section is the last one in the file
-    path.write_text("\n".join(out) + "\n", encoding="utf-8")
-
-
 class AssistantConfigIn(BaseModel):
     llm_model: str | None = None
     stt_engine: str | None = None  # none | sherpa
@@ -153,19 +119,19 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
 
     if body.llm_model:
         cfg._data.setdefault("llm", {})["model"] = body.llm_model
-        _set_yaml_value(cfg.path, "llm", "model", body.llm_model)
+        set_yaml_value(cfg.path, "llm", "model", body.llm_model)
         changed.append(f"llm.model = {body.llm_model}")
     if body.stt_engine in ("none", "sherpa"):
         cfg._data.setdefault("stt", {})["engine"] = body.stt_engine
-        _set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)
+        set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)
         changed.append(f"stt.engine = {body.stt_engine}")
     if body.tts_engine in ("none", "http"):
         cfg._data.setdefault("tts", {})["engine"] = body.tts_engine
-        _set_yaml_value(cfg.path, "tts", "engine", body.tts_engine)
+        set_yaml_value(cfg.path, "tts", "engine", body.tts_engine)
         changed.append(f"tts.engine = {body.tts_engine}")
     if body.tts_http_url is not None:
         cfg._data.setdefault("tts", {})["http_url"] = body.tts_http_url
-        _set_yaml_value(cfg.path, "tts", "http_url", body.tts_http_url)
+        set_yaml_value(cfg.path, "tts", "http_url", body.tts_http_url)
         changed.append(f"tts.http_url = {body.tts_http_url}")
 
     # rebuild the engines the pipeline uses (fall back to "none" on bad settings)
