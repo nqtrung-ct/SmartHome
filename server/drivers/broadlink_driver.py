@@ -1,0 +1,120 @@
+"""Broadlink RM4 IR blasters: send/learn IR codes.
+
+AC remotes send their full state every press, so IR climate entities store a
+small map of learned states, e.g. {"off": hex, "cool_25": hex, "cool_26": hex}.
+"""
+from __future__ import annotations
+
+import re
+import time
+
+import broadlink
+from broadlink.exceptions import ReadError, StorageError
+
+from server.drivers.base import Driver, DriverError, Row, loads
+
+
+class BroadlinkDriver(Driver):
+    name = "broadlink"
+
+    def __init__(self, cfg):
+        self.timeout = int(cfg.get("broadlink.timeout", 5))
+        self.local_ip = cfg.get("broadlink.local_ip") or None
+
+    # -- connection ---------------------------------------------------------
+
+    def _connect(self, device: Row):
+        extra = loads(device["extra"])
+        mac = extra.get("mac") or device["mac"]
+        if not device["host"] or not mac:
+            raise DriverError("Thiếu địa chỉ IP hoặc MAC của Broadlink")
+        dev = broadlink.gendevice(
+            int(extra.get("devtype", 0)),
+            (device["host"], 80),
+            bytes.fromhex(mac.replace(":", "").replace("-", "")),
+        )
+        dev.auth()
+        return dev
+
+    def probe(self, device: Row) -> dict:
+        """Fill in mac/devtype by rediscovering on the LAN."""
+        for dev in broadlink.discover(timeout=self.timeout, local_ip_address=self.local_ip):
+            if dev.host[0] == device["host"]:
+                return {
+                    "mac": dev.mac.hex(),
+                    "devtype": dev.type,
+                    "model": str(dev.model),
+                    "name": dev.name,
+                }
+        raise DriverError(f"Không tìm thấy Broadlink tại {device['host']}")
+
+    # -- IR -----------------------------------------------------------------
+
+    def learn_ir(self, device: Row, timeout: int = 30) -> str | None:
+        dev = self._connect(device)
+        dev.enter_learning()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(1)
+            try:
+                packet = dev.check_data()
+                return packet.hex()
+            except (ReadError, StorageError):
+                continue
+        return None
+
+    def send_ir(self, device: Row, code_hex: str) -> None:
+        try:
+            dev = self._connect(device)
+            dev.send_data(bytes.fromhex(code_hex))
+        except DriverError:
+            raise
+        except Exception as exc:  # network/auth failures
+            raise DriverError(f"Gửi IR lỗi: {exc}") from exc
+
+    # -- state --------------------------------------------------------------
+
+    def set_state(self, entity: Row, device: Row, command: str, params: dict) -> dict:
+        codes = loads(entity["driver_data"]).get("codes", {})
+        if not codes:
+            raise DriverError(f"'{entity['name']}' chưa học mã IR nào")
+
+        if entity["entity_type"] == "climate":
+            key = self._climate_key(codes, command, params)
+        else:
+            key = command if command in codes else ("toggle" if "toggle" in codes else command)
+
+        if key not in codes:
+            options = ", ".join(sorted(codes))
+            raise DriverError(f"Chưa học mã '{key}' cho {entity['name']} (đã có: {options})")
+        self.send_ir(device, codes[key])
+        return {"state": command, **params}
+
+    @staticmethod
+    def _climate_key(codes: dict, command: str, params: dict) -> str:
+        if command in ("on", "off", "toggle"):
+            for candidate in (command, "toggle"):
+                if candidate in codes:
+                    return candidate
+            return command
+        mode = params.get("mode", "cool")
+        temp = int(params.get("temperature", 26))
+        exact = f"{mode}_{temp}"
+        if exact in codes:
+            return exact
+        # nearest learned temperature for this mode, else any mode
+        temps = [
+            (abs(int(m.group(2)) - temp), m.group(0))
+            for m in (re.match(r"([a-z]+)_(\d{2})$", k) for k in codes)
+            if m and m.group(1) == mode
+        ]
+        if temps:
+            return min(temps)[1]
+        any_temp = [
+            (abs(int(m.group(2)) - temp), m.group(0))
+            for m in (re.match(r"([a-z]+)_(\d{2})$", k) for k in codes)
+            if m
+        ]
+        if any_temp:
+            return min(any_temp)[1]
+        return exact

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartHome</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login" class="overlay hidden">
+  <div class="card login-card">
+    <h2>🔑 Đăng nhập</h2>
+    <p>Nhập <code>admin_token</code> từ <code>config.yaml</code></p>
+    <input id="login-token" type="password" placeholder="admin token" autocomplete="off">
+    <button id="login-btn" class="primary">Vào</button>
+    <div id="login-error" class="error"></div>
+  </div>
+</div>
+
+<header>
+  <h1>🏠 SmartHome</h1>
+  <nav id="tabs">
+    <button data-tab="dashboard" class="active">Tổng quan</button>
+    <button data-tab="devices">Thiết bị</button>
+    <button data-tab="discovery">Quét mạng</button>
+    <button data-tab="voice">Máy thoại</button>
+    <button data-tab="console">Lệnh</button>
+    <button data-tab="events">Nhật ký</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-dashboard" class="tab"></section>
+  <section id="tab-devices" class="tab hidden"></section>
+  <section id="tab-discovery" class="tab hidden"></section>
+  <section id="tab-voice" class="tab hidden"></section>
+  <section id="tab-console" class="tab hidden"></section>
+  <section id="tab-events" class="tab hidden"></section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

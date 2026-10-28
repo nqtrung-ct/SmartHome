@@ -1,0 +1,47 @@
+# SmartHome server configuration.
+# Copy to config.yaml and edit. Values can also be overridden with environment
+# variables: SMARTHOME_<SECTION>__<KEY> (double underscore separates section
+# from key), e.g. SMARTHOME_SERVER__ADMIN_TOKEN, SMARTHOME_DISCOVERY__NETWORK_SCAN.
+
+server:
+  host: 0.0.0.0          # LAN only - do not port-forward this on the router
+  port: 8124
+  admin_token: "changeme"   # token for the admin web UI - CHANGE THIS
+  data_dir: data            # everything the server creates lives here
+  advertise_mdns: true      # announce _smarthome._tcp so the Android app can auto-find the server
+
+mqtt:                       # Mosquitto + Zigbee2MQTT (see instructions/phase-1-refer.md)
+  enabled: true
+  host: 127.0.0.1
+  port: 1883
+  base_topic: zigbee2mqtt
+
+stt:                        # speech-to-text
+  engine: none              # "none" until models are installed; then "sherpa"
+  model_dir: data/models/stt   # put the Zipformer-vi model files here (tokens.txt, *.onnx)
+  num_threads: 2
+
+tts:                        # text-to-speech
+  engine: none              # "none" | "http"
+  http_url: ""              # engine "http": POST {"text": "..."} -> audio/wav bytes
+
+llm:                        # command understanding via Ollama
+  engine: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen3:4b           # alternatives: gemma3:4b, qwen2.5:3b-instruct
+  timeout: 30
+
+weather:                    # open-meteo, free, no API key
+  latitude: 21.0285
+  longitude: 105.8542
+
+discovery:
+  network_scan: true
+  subnet: auto              # "auto" or e.g. 192.168.1.0/24
+  mdns_seconds: 3
+  ssdp_seconds: 3
+  wsdiscovery: true         # ONVIF cameras (Imou)
+
+broadlink:
+  timeout: 5
+  # local_ip: 192.168.1.10  # set only if discovery finds nothing (multi-NIC machines)

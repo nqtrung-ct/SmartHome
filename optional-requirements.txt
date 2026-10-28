@@ -1,0 +1,10 @@
+# Optional extras - install what you need:
+#   pip install -r optional-requirements.txt
+#
+# sherpa-onnx : speech-to-text (Zipformer-vi) + Silero VAD
+# tinytuya    : local control of Tuya WiFi devices (needs local keys)
+# numpy       : used with sherpa-onnx for audio buffers
+
+sherpa-onnx>=1.10
+tinytuya>=1.13
+numpy>=1.26

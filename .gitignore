@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# runtime data: database, learned IR codes, models, logs, secrets
+data/
+
+# real config contains tokens; keep config.example.yaml in git
+config.yaml
+
+# local git settings (contains PAT) - never commit
+git_settings.md
+
+# android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.apk
+*.aab
+
+.DS_Store
+Thumbs.db

@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0f1115"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="#e8eaf0"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <!-- ================= setup ================= -->
+        <LinearLayout
+            android:id="@+id/setupCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="@drawable/card_bg"
+            android:orientation="vertical"
+            android:padding="18dp"
+            android:visibility="visible">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Ghép nối với server"
+                android:textColor="#e8eaf0"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Mở admin UI trên máy tính → tab Máy thoại → Tạo mã ghép nối."
+                android:textColor="#9aa3b2"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/serverInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:hint="http://192.168.1.10:8124"
+                android:inputType="textUri"
+                android:textColor="#e8eaf0"
+                android:textColorHint="#5a6270" />
+
+            <Button
+                android:id="@+id/discoverBtn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="🔍 Tự tìm server" />
+
+            <EditText
+                android:id="@+id/nameInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:hint="Tên máy (VD: Điện thoại phòng khách)"
+                android:inputType="text"
+                android:textColor="#e8eaf0"
+                android:textColorHint="#5a6270" />
+
+            <EditText
+                android:id="@+id/codeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:hint="Mã ghép nối (6 số)"
+                android:inputType="number"
+                android:textColor="#e8eaf0"
+                android:textColorHint="#5a6270" />
+
+            <Button
+                android:id="@+id/pairBtn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:backgroundTint="#4f8cff"
+                android:text="Ghép nối"
+                android:textColor="#ffffff" />
+
+            <TextView
+                android:id="@+id/setupStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="#9aa3b2"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- ================= main ================= -->
+        <LinearLayout
+            android:id="@+id/mainCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="○ Đang kết nối..."
+                android:textColor="#9aa3b2"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/roomText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Phòng: —"
+                android:textColor="#e8eaf0"
+                android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/talkBtn"
+                android:layout_width="match_parent"
+                android:layout_height="180dp"
+                android:layout_marginTop="18dp"
+                android:background="@drawable/btn_talk_bg"
+                android:text="@string/talk_button"
+                android:textColor="#ffffff"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="Bạn nói:"
+                android:textColor="#9aa3b2"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/transcriptText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:background="@drawable/card_bg"
+                android:minHeight="44dp"
+                android:padding="12dp"
+                android:text=""
+                android:textColor="#e8eaf0"
+                android:textSize="15sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="Trợ lý trả lời:"
+                android:textColor="#9aa3b2"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/replyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:background="@drawable/card_bg"
+                android:minHeight="44dp"
+                android:padding="12dp"
+                android:text=""
+                android:textColor="#3ecf8e"
+                android:textSize="15sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
