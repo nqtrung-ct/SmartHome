@@ -51,6 +51,19 @@ def store_secret(cfg, group: str, key: str, value: str) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def load_secret(cfg, group: str, key: str) -> str | None:
+    """Read a value stored by store_secret, or None."""
+    import json
+
+    path = cfg.data_path("secrets.json")
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get(group, {}).get(key)
+    except Exception:
+        return None
+
+
 def set_yaml_value(path, section: str, key: str, value) -> None:
     """Set section.key in a YAML file, preserving comments and other lines."""
     import json

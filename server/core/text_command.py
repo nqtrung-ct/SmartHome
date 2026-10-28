@@ -235,6 +235,8 @@ async def act_sensor(db, drivers, entity, room_id=None, metric=None) -> dict:
         except Exception:
             state = {}
     room = _room_name(db, _entity_room(db, entity) or room_id)
+    if room:
+        room = room.removeprefix("Phòng ").removeprefix("phòng ").strip()
     if not state:
         state = {"temperature": None, "humidity": None}
     bits = []
@@ -242,6 +244,13 @@ async def act_sensor(db, drivers, entity, room_id=None, metric=None) -> dict:
         bits.append(f"nhiệt độ {state['temperature']:.1f} độ C")
     if state.get("humidity") is not None and metric in (None, "humidity"):
         bits.append(f"độ ẩm {state['humidity']:.0f}%")
+    if state.get("voltage") is not None and metric in (None, "voltage"):
+        bits.append(f"điện áp {state['voltage']:.0f} volt")
+    if state.get("power") is not None and metric in (None, "power"):
+        p = state["power"]
+        bits.append(f"đang tiêu thụ {p / 1000:.1f} kW" if p >= 1000 else f"đang tiêu thụ {p:.0f} oát")
+    if state.get("energy") is not None and metric in (None, "energy"):
+        bits.append(f"tổng dùng {state['energy']:.1f} số điện (kWh)")
     if room:
         reply = f"Phòng {room.lower()}: {', '.join(bits)}." if bits else f"Phòng {room.lower()} chưa có số liệu."
     elif bits:
@@ -282,6 +291,12 @@ def sensor_metric(norm: str) -> str | None:
         return "temperature"
     if has_hum and not has_temp:
         return "humidity"
+    if re.search(r"\bdien ap\b|\bvol\b", norm):
+        return "voltage"
+    if re.search(r"\bcong suat\b|\bkw\b", norm):
+        return "power"
+    if re.search(r"\bso dien\b|\bdien nang\b|\bkwh\b", norm):
+        return "energy"
     return None
 
 
@@ -386,8 +401,11 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     has_on = bool(re.search(r"\b(bat|mo|bat len)\b", norm))
     has_off = bool(re.search(r"\b(tat|tat di)\b", norm))
 
-    # multi-part sentences -> let the LLM handle them
-    if (has_on and has_off) or re.search(r"\broi\b|\bsau do\b", norm):
+    # multi-part sentences -> let the LLM handle them. "Rồi" as an aspect
+    # particle ("đã dùng bao nhiêu số điện rồi") is not a connector: with no
+    # on/off verb the sentence is still a single question.
+    if (has_on and has_off) or re.search(r"\bsau do\b", norm) or (
+            re.search(r"\broi\b", norm) and (has_on or has_off)):
         return None
 
     # timers: fast shortcut unless the sentence is clearly multi-intent
@@ -409,8 +427,10 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         return act_weather(weather, weather_day(norm),
                            rain=rain_question(norm), evening=evening_question(norm))
 
-    # temperature question without a verb -> sensor
-    if not (has_on or has_off) and ("nhiet do" in norm or "do am" in norm):
+    # temperature/metering question without a verb -> sensor
+    if not (has_on or has_off) and re.search(
+        r"nhiet do|do am|dien ap|cong suat|so dien|dien nang|kwh|\bkw\b|tieu thu", norm
+    ):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
             return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
@@ -493,8 +513,14 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
 
         if name == "get_sensor":
             metric_arg = str(args.get("metric", ""))
-            metric = "temperature" if "temp" in metric_arg else "humidity" if "hum" in metric_arg else None
-            entity = resolve_entity(db, metric_arg or "cảm biến", room_id, "sensor")
+            metric = ("temperature" if "temp" in metric_arg else
+                      "humidity" if "hum" in metric_arg else
+                      "voltage" if "volt" in metric_arg else
+                      "power" if "power" in metric_arg or "kw" in metric_arg else
+                      "energy" if "energy" in metric_arg or "kwh" in metric_arg else None)
+            # English metric names never match Vietnamese aliases - fall back
+            entity = resolve_entity(db, metric_arg or "cảm biến", room_id, "sensor") \
+                or resolve_entity(db, "cảm biến", room_id, "sensor")
             if not entity:
                 return {"reply": "Phòng này chưa có cảm biến.", "action": {"tool": name, "ok": False}}
             return await act_sensor(db, drivers, entity, room_id, metric)

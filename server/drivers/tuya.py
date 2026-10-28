@@ -49,6 +49,24 @@ def _sensor_dps_map(dps: dict) -> dict:
     return mapping
 
 
+def decode_phase(data) -> dict:
+    """Metering breaker 'phase_x' raw: 8 bytes = [V*10: 2B][W*0.01: 4B][?: 2B]."""
+    import base64
+
+    if not data:
+        return {}
+    try:
+        raw = base64.b64decode(data)
+    except Exception:
+        return {}
+    if len(raw) != 8:
+        return {}
+    return {
+        "voltage": int.from_bytes(raw[0:2], "big") / 10,
+        "power": int.from_bytes(raw[2:6], "big") / 100,
+    }
+
+
 class TuyaDriver(Driver):
     name = "tuya"
 
@@ -146,9 +164,37 @@ class TuyaDriver(Driver):
             raise DriverError(f"Lỗi điều khiển Tuya: {exc}") from exc
         return {"state": command}
 
+    def cloud_meter(self, api_key, api_secret, region, device_ids: list[str]) -> dict[str, dict]:
+        """Voltage/power/energy of metering breakers via the Tuya cloud.
+
+        This firmware hides the metering dps over LAN (detect_available_dps
+        skips them), but cloud getstatus carries phase_a raw blobs plus the
+        accumulated kWh. Returns {device_id: {"voltage", "power", "energy"}}.
+        """
+        import tinytuya
+
+        cloud = tinytuya.Cloud(apiKey=api_key, apiSecret=api_secret, apiRegion=region)
+        out: dict[str, dict] = {}
+        for dev_id in device_ids:
+            res = cloud.getstatus(dev_id)
+            if isinstance(res, dict):
+                res = res.get("result")
+            if not isinstance(res, list):
+                continue
+            codes = {x.get("code"): x.get("value") for x in res if isinstance(x, dict)}
+            meter = decode_phase(codes.get("phase_a", ""))
+            energy = codes.get("total_forward_energy")
+            if energy is not None:
+                meter["energy"] = round(energy / 100, 2)
+            if meter:
+                out[dev_id] = meter
+        return out
+
     def get_state(self, entity: Row, device: Row) -> dict:
-        dps = self._status_dps(device)
         data = loads(entity["driver_data"])
+        if data.get("cloud_meter"):
+            return {}  # state comes from the scheduler's cloud poll
+        dps = self._status_dps(device)
         dps_map = data.get("dps_map")
         if dps_map:  # sensor entity: translate dps ids (+scale) -> metrics
             out = {}

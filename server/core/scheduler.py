@@ -13,7 +13,8 @@ async def _poll_tuya_sensors(app) -> None:
     """Refresh tuya sensor/switch states for the dashboard.
 
     Battery-powered Tuya sensors sleep between reports and refuse connections;
-    on failure keep the last known state quietly.
+    on failure keep the last known state quietly. Entities flagged cloud_meter
+    are skipped here - their state comes from _poll_tuya_cloud.
     """
     driver = app.state.drivers.get("tuya")
     if not driver:
@@ -25,6 +26,8 @@ async def _poll_tuya_sensors(app) -> None:
            WHERE e.entity_type IN ('sensor', 'switch') AND d.driver='tuya'"""
     )
     for row in rows:
+        if json.loads(row["driver_data"] or "{}").get("cloud_meter"):
+            continue
         entity = {"id": row["eid"], "driver_data": row["driver_data"]}
         device = {"id": row["did"], "host": row["host"], "extra": row["extra"]}
         try:
@@ -43,12 +46,57 @@ async def _poll_tuya_sensors(app) -> None:
         )
 
 
+async def _poll_tuya_cloud(app) -> None:
+    """Voltage/power/energy of metering breakers via the Tuya cloud - this
+    firmware hides the metering dps over LAN. Credentials (api_key, api_secret,
+    region) live in data/secrets.json under group 'tuya_cloud'."""
+    from server.util import load_secret
+
+    cfg = app.state.cfg
+    api_key = load_secret(cfg, "tuya_cloud", "api_key")
+    api_secret = load_secret(cfg, "tuya_cloud", "api_secret")
+    if not api_key or not api_secret:
+        return
+    region = load_secret(cfg, "tuya_cloud", "region") or "sg"
+    driver = app.state.drivers.get("tuya")
+    db: Database = app.state.db
+    if not driver:
+        return
+    targets: dict[int, str] = {}
+    for row in db.query(
+        """SELECT e.id, e.driver_data, d.extra FROM entities e
+           JOIN devices d ON d.id = e.device_id WHERE d.driver='tuya'"""
+    ):
+        if not json.loads(row["driver_data"] or "{}").get("cloud_meter"):
+            continue
+        dev_id = json.loads(row["extra"] or "{}").get("id")
+        if dev_id:
+            targets[row["id"]] = dev_id
+    if not targets:
+        return
+    try:
+        meters = await asyncio.to_thread(
+            driver.cloud_meter, api_key, api_secret, region,
+            list(dict.fromkeys(targets.values())),
+        )
+    except Exception:
+        return
+    for eid, dev_id in targets.items():
+        meter = meters.get(dev_id)
+        if meter:
+            db.execute(
+                "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+                (json.dumps(meter, ensure_ascii=False), now_iso(), eid),
+            )
+
+
 async def scheduler_loop(app) -> None:
     db: Database = app.state.db
     from server.db import cleanup_old_rows
 
     last_cleanup_day = None
     last_sensor_poll = 0.0
+    last_cloud_poll = 0.0
     while True:
         try:
             today = now_iso()[:10]
@@ -75,6 +123,9 @@ async def scheduler_loop(app) -> None:
             if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 60)):
                 last_sensor_poll = time.time()
                 await _poll_tuya_sensors(app)
+            if time.time() - last_cloud_poll >= int(app.state.cfg.get("tuya.cloud_seconds", 180)):
+                last_cloud_poll = time.time()
+                await _poll_tuya_cloud(app)
         except asyncio.CancelledError:
             return
         except Exception as exc:

@@ -119,7 +119,7 @@ async function renderDashboard() {
         let control = "";
         if (e.entity_type === "switch" || e.entity_type === "light") {
           if (e.readonly) {
-            control = `<span class="small muted">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
+            control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
           } else {
             const on = state.state === "on";
             control = `<span><button class="small-btn ${on ? "" : "primary"}" onclick="toggleEntity(${e.id}, ${on})">${on ? "Tắt" : "Bật"}</button></span>`;
@@ -158,9 +158,12 @@ function typeVi(t) {
 }
 function sensorText(state) {
   const bits = [];
-  if (state.temperature != null) bits.push(state.temperature + "°C");
+  if (state.temperature != null) bits.push("🌡 " + state.temperature + "°C");
   if (state.humidity != null) bits.push("💧 " + state.humidity + "%");
   if (state.battery != null) bits.push("🔋 " + state.battery + "%");
+  if (state.power != null) bits.push("⚡ " + (state.power >= 1000 ? (state.power / 1000).toFixed(1) + " kW" : state.power.toFixed(0) + " W"));
+  if (state.voltage != null) bits.push(state.voltage.toFixed(0) + "V");
+  if (state.energy != null) bits.push("🔢 " + state.energy.toFixed(1) + " kWh");
   return bits.join(" · ") || "chưa có số liệu";
 }
 
