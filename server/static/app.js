@@ -96,8 +96,11 @@ async function renderDashboard() {
   const el = $("#tab-dashboard");
   const [overview, floors] = await Promise.all([api("/overview"), loadFloors()]);
 
+  // only rooms that actually control/read something
+  const withDevices = overview.rooms.filter((r) => r.entities.length > 0);
+
   const groups = new Map();
-  for (const room of overview.rooms) {
+  for (const room of withDevices) {
     const f = room.floor || "";
     if (!groups.has(f)) groups.set(f, []);
     groups.get(f).push(room);
@@ -109,7 +112,7 @@ async function renderDashboard() {
     ...(groups.has("") ? [""] : []),
   ];
 
-  const sections = order.map((floor) => {
+  const columns = order.map((floor) => {
     const cards = groups.get(floor).map((room) => {
       const entities = room.entities.map((e) => {
         const state = safeJson(e.state);
@@ -132,16 +135,17 @@ async function renderDashboard() {
             <div class="sub">${esc(e.device_name)} · ${typeVi(e.entity_type)}</div></div>
             ${control}
           </div>`;
-      }).join("") || `<div class="muted small" style="padding:8px 0">Phòng trống</div>`;
+      }).join("");
 
       return `<div class="card"><h2>🚪 ${esc(room.name)}</h2>${entities}</div>`;
     }).join("");
     const heading = floor ? `🏢 ${esc(floor)}` : "🏢 Chưa xếp tầng";
-    return `<h3 class="floor-heading">${heading}</h3><div class="grid">${cards}</div>`;
+    return `<div class="floor-col"><h3 class="floor-heading">${heading}</h3>${cards}</div>`;
   }).join("");
 
-  el.innerHTML = sections ||
-    `<div class="card muted">Chưa có phòng nào. Vào tab <b>Phòng &amp; tầng</b> để thêm phòng, rồi thêm thiết bị ở tab <b>Quét mạng</b> hoặc <b>Thiết bị</b>.</div>`;
+  el.innerHTML = columns
+    ? `<div class="floor-columns">${columns}</div>`
+    : `<div class="card muted">Chưa có phòng nào có thiết bị. Thêm phòng ở tab <b>Phòng &amp; tầng</b>, rồi thêm thiết bị ở tab <b>Quét mạng</b> hoặc <b>Thiết bị</b>.<br><span class="small">Phòng đã tạo nhưng chưa có thiết bị sẽ được ẩn ở trang này.</span></div>`;
 }
 
 function safeJson(s) { try { return JSON.parse(s || "{}"); } catch { return {}; } }
