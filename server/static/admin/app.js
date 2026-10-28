@@ -537,6 +537,19 @@ function micCleanup() {
 
 // ---------------------------------------------------------------- devices
 
+// "Điều khiển" = hubs that command other devices (IR remote); only these take
+// manual entities - Tuya/Zigbee entities come from adoption, cameras stand alone
+function isControllerDevice(d) {
+  return d.driver === "broadlink";
+}
+
+function deviceTypeVi(driver) {
+  return {
+    broadlink: "Điều khiển", tuya: "Tuya WiFi", zigbee: "Zigbee",
+    onvif: "Camera", generic: "Khác", dummy: "Ảo (test)",
+  }[driver] || driver;
+}
+
 async function renderDevices() {
   const el = $("#tab-devices");
   const [devices, rooms] = await Promise.all([api("/devices"), api("/rooms")]);
@@ -577,7 +590,7 @@ async function renderDevices() {
 
     return `<div class="card">
       <div class="row" style="justify-content:space-between">
-        <h2 style="margin:0">${esc(d.name)} <span class="badge">${esc(d.driver)}</span>
+        <h2 style="margin:0">${esc(d.name)} <span class="badge">${esc(deviceTypeVi(d.driver))}</span>
           ${d.host ? `<span class="small muted">${esc(d.host)}</span>` : ""}</h2>
         <div class="row">
           <select onchange="setDeviceRoom(${d.id}, this.value)">${roomSelectOptions(rooms, d.room_id)}</select>
@@ -585,6 +598,7 @@ async function renderDevices() {
         </div>
       </div>
       ${entities}
+      ${isControllerDevice(d) ? `
       <div class="row" style="margin-top:10px">
         <input id="ent-name-${d.id}" placeholder="Tên thực thể (VD: Điều hòa)" style="width:180px">
         <select id="ent-type-${d.id}">
@@ -593,7 +607,7 @@ async function renderDevices() {
         </select>
         <input id="ent-alias-${d.id}" placeholder="Bí danh (VD: điều hòa, máy lạnh)" style="width:200px">
         <button class="small-btn" onclick="addEntity(${d.id})">+ Thực thể</button>
-      </div>
+      </div>` : ""}
     </div>`;
   }).join("") || `<div class="card muted">Chưa có thiết bị nào.</div>`;
 }
