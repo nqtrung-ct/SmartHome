@@ -558,12 +558,8 @@ async function renderDevices() {
   roomsCache = rooms;
 
   if (!devices.length) {
-    el.innerHTML = `
-      <div class="row" style="margin-bottom:14px">
-        <button class="primary" onclick="openDeviceModal()">➕ Thêm thiết bị thủ công</button>
-        <span class="small muted">Hoặc quét mạng ở tab "Quét mạng" rồi chọn "Thêm vào hệ thống".</span>
-      </div>
-      <div class="card muted">Chưa có thiết bị nào.</div>`;
+    el.innerHTML = `<div class="card muted">Chưa có thiết bị nào.<br>
+      <span class="small">Vào tab <b>Quét mạng</b> để quét và thêm thiết bị, hoặc dùng nút "➕ Thêm tay" ở đó.</span></div>`;
     return;
   }
 
@@ -634,8 +630,7 @@ async function renderDevices() {
 
   el.innerHTML = `
     <div class="row" style="margin-bottom:14px">
-      <button class="primary" onclick="openDeviceModal()">➕ Thêm thiết bị thủ công</button>
-      <span class="small muted">Nhấn ✏️ để sửa tên, phòng (và thiết bị con với điều khiển).</span>
+      <span class="small muted">Nhấn ✏️ để sửa tên, phòng (và thiết bị con với điều khiển). Thêm thiết bị mới ở tab "Quét mạng".</span>
     </div>
     <div class="floor-columns">${columns}${unassignedCol}</div>`;
 }
