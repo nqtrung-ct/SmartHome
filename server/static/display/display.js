@@ -46,8 +46,7 @@ async function refresh() {
     if (!resp.ok) throw new Error(resp.status);
     data = await resp.json();
   } catch {
-    $("updated").textContent = "Mất kết nối server — thử lại…";
-    return;
+    return; // keep the last good data on screen; try again next cycle
   }
 
   // weather
@@ -105,8 +104,6 @@ async function refresh() {
         </div>`;
       }).join("")
     : `<p class="muted">Không có hẹn giờ.</p>`;
-
-  $("updated").textContent = "Cập nhật " + data.updated_at;
 }
 
 refresh();
