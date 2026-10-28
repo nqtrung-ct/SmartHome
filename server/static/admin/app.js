@@ -434,21 +434,11 @@ async function renderDevices() {
   }
 
   const entityRow = ([e, d]) => {
-    const data = safeJson(e.driver_data);
-    const codes = Object.keys(data.codes || {});
     const isHub = e.entity_type === "controller";
     const readonly = isReadonly(e) || isHub;
     const controls = (e.entity_type === "switch" || e.entity_type === "light") && !readonly
       ? `<button class="small-btn" onclick="cmdEntity(${e.id},'on')">Bật</button>
          <button class="small-btn" onclick="cmdEntity(${e.id},'off')">Tắt</button>` : "";
-    const learnUi = d.driver === "broadlink"
-      ? `<div class="row small" style="padding:6px 0 9px;border-bottom:1px solid var(--border)">
-           <input id="learn-${e.id}" placeholder="Tên nút (off / cool_26 / toggle)" style="width:200px">
-           <button class="small-btn" onclick="learnCode(${e.id})">📡 Học mã</button>
-           <span id="learn-status-${e.id}" class="small muted"></span>
-           ${codes.length ? `<span>Mã đã học: ${codes.map((c) =>
-             `<button class="small-btn" onclick="sendCode(${e.id}, '${esc(c)}')">${esc(c)}</button>`).join(" ")}</span>` : ""}
-         </div>` : "";
     return `<div class="entity">
         <div style="flex:1;min-width:0">
           <div class="name">${esc(e.name)} <span class="badge">${typeVi(e.entity_type)}</span></div>
@@ -459,7 +449,7 @@ async function renderDevices() {
           <button class="small-btn" onclick="openEditModal(${e.id})" title="Sửa tên, phòng, thiết bị con">✏️</button>
           <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
         </div>
-      </div>${learnUi}`;
+      </div>`;
   };
 
   // cột theo tầng như dashboard
@@ -510,33 +500,6 @@ window.delEntity = async (id) => {
 };
 window.cmdEntity = async (id, command) => {
   try { await api(`/entities/${id}/command`, { method: "POST", body: JSON.stringify({ command }) }); }
-  catch (e) { toast("Lỗi: " + e.message); }
-};
-
-window.learnCode = async (entityId) => {
-  const button = $(`#learn-${entityId}`).value.trim();
-  if (!button) { toast("Nhập tên nút trước"); return; }
-  const status = $(`#learn-status-${entityId}`);
-  try {
-    await api(`/entities/${entityId}/learn`, { method: "POST", body: JSON.stringify({ button }) });
-  } catch (e) { status.textContent = "Lỗi: " + e.message; return; }
-  const poll = setInterval(async () => {
-    try {
-      const job = await api(`/entities/${entityId}/learn`);
-      if (job.status === "learning") { status.textContent = "Đang chờ bấm remote..."; return; }
-      clearInterval(poll);
-      status.textContent = job.status === "done" ? "✅ Đã lưu" : (job.status === "timeout" ? "⏰ Hết giờ" : "❌ " + (job.error || job.status));
-      setTimeout(renderDevices, 800);
-    } catch { clearInterval(poll); }
-  }, 1500);
-};
-window.sendCode = async (entityId, codeName) => {
-  // IR codes: switch-style keys send directly, "<mode>_<temp>" parses out mode+temp
-  const m = codeName.match(/^([a-z]+)_(\d{2})$/);
-  const body = m
-    ? { command: "set", params: { mode: m[1], temperature: +m[2] } }
-    : { command: codeName, params: {} };
-  try { await api(`/entities/${entityId}/command`, { method: "POST", body: JSON.stringify(body) }); toast("Đã gửi: " + codeName); }
   catch (e) { toast("Lỗi: " + e.message); }
 };
 
@@ -664,7 +627,7 @@ window.openEditModal = (entityId) => {
   if (isHub) {
     const children = d.entities.filter((x) => x.id !== e.id);
     $("#e-children").innerHTML = children.map(childRow).join("")
-      || `<p class="small muted">Chưa có thiết bị con. Thêm rồi học mã IR ngay trên dòng của nó ở tab Thiết bị.</p>`;
+      || `<p class="small muted">Chưa có thiết bị con. Bấm "＋ Thiết bị con" để thêm.</p>`;
   }
   $("#edit-modal").classList.remove("hidden");
   $("#e-name").focus();
