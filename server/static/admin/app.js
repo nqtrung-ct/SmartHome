@@ -124,21 +124,14 @@ async function renderDashboard() {
     const cards = groups.get(floor).map((room) => {
       const entities = room.entities.map((e) => {
         const state = safeJson(e.state);
+        // tổng quan chỉ xem trạng thái — điều khiển ở tab Thiết bị hoặc bằng giọng nói
         let control = "";
         if (e.entity_type === "switch" || e.entity_type === "light") {
-          if (e.readonly) {
-            control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
-          } else {
-            const on = state.state === "on";
-            control = `<span><button class="small-btn ${on ? "" : "primary"}" onclick="toggleEntity(${e.id}, ${on})">${on ? "Tắt" : "Bật"}</button></span>`;
-          }
+          control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
         } else if (e.entity_type === "climate") {
-          const temp = state.temperature || 26;
-          control = `<span class="small muted">
-              <input type="number" id="temp-${e.id}" value="${temp}" min="16" max="30" style="width:60px">
-              <button class="small-btn" onclick="setClimate(${e.id})">Bật</button>
-              <button class="small-btn" onclick="climateOff(${e.id})">Tắt</button>
-            </span>`;
+          const on = state.state === "on";
+          const temp = on && state.temperature ? ` · ${state.temperature}°C` : "";
+          control = `<span class="small ${on ? "ok" : "muted"}">${on ? `❄ Đang bật${temp}` : "○ Đang tắt"}</span>`;
         } else if (e.entity_type === "sensor") {
           // values older than an hour are stale - show a dash, not old numbers
           const stale = e.updated_at && (Date.now() - new Date(e.updated_at).getTime() > 3600000);
@@ -179,29 +172,6 @@ function sensorText(state) {
   // tổng kWh đã tiêu thụ: không hiện trên UI (chỉ trả lời khi hỏi bằng giọng nói)
   return bits.join(" · ") || "chưa có số liệu";
 }
-
-// devices-tab entities carry driver_data; dashboard rows carry a computed flag
-function isReadonly(e) {
-  return e.readonly === true || safeJson(e.driver_data).readonly === true;
-}
-
-window.toggleEntity = async (id, on) => {
-  try {
-    await api(`/entities/${id}/command`, { method: "POST", body: JSON.stringify({ command: on ? "off" : "on" }) });
-    renderDashboard();
-  } catch (e) { toast("Lỗi: " + e.message); }
-};
-window.setClimate = async (id) => {
-  const temp = parseInt($("#temp-" + id).value, 10);
-  try {
-    await api(`/entities/${id}/command`, { method: "POST", body: JSON.stringify({ command: "set", params: { mode: "cool", temperature: temp } }) });
-    renderDashboard();
-  } catch (e) { toast("Lỗi: " + e.message); }
-};
-window.climateOff = async (id) => {
-  await api(`/entities/${id}/command`, { method: "POST", body: JSON.stringify({ command: "off" }) }).catch((e) => toast("Lỗi: " + e.message));
-  renderDashboard();
-};
 
 // ---------------------------------------------------------------- rooms & floors (gộp trong tab Thiết đặt)
 
@@ -434,18 +404,12 @@ async function renderDevices() {
   }
 
   const entityRow = ([e, d]) => {
-    const isHub = e.entity_type === "controller";
-    const readonly = isReadonly(e) || isHub;
-    const controls = (e.entity_type === "switch" || e.entity_type === "light") && !readonly
-      ? `<button class="small-btn" onclick="cmdEntity(${e.id},'on')">Bật</button>
-         <button class="small-btn" onclick="cmdEntity(${e.id},'off')">Tắt</button>` : "";
     return `<div class="entity">
         <div style="flex:1;min-width:0">
           <div class="name">${esc(e.name)} <span class="badge">${typeVi(e.entity_type)}</span></div>
           <div class="sub">${esc(d.name)}${d.host ? " · " + esc(d.host) : ""}${e.aliases ? " · bí danh: " + esc(e.aliases) : ""}</div>
         </div>
         <div class="row">
-          ${controls}
           <button class="small-btn" onclick="openEditModal(${e.id})" title="Sửa tên, phòng, thiết bị con">✏️</button>
           <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
         </div>
@@ -497,10 +461,6 @@ window.delEntity = async (id) => {
     await api(`/entities/${id}`, { method: "DELETE" });
   }
   renderDevices();
-};
-window.cmdEntity = async (id, command) => {
-  try { await api(`/entities/${id}/command`, { method: "POST", body: JSON.stringify({ command }) }); }
-  catch (e) { toast("Lỗi: " + e.message); }
 };
 
 // ---------------------------------------------------------------- manual device modal
