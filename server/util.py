@@ -22,6 +22,35 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def lan_ip() -> str | None:
+    """LAN IPv4 of the interface holding the default route (UDP trick, no traffic sent).
+
+    Machines with VirtualBox/WSL/VPN adapters have several candidates; this picks
+    the one that actually reaches the internet, which is the home LAN.
+    """
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local = s.getsockname()[0]
+        s.close()
+        return local
+    except OSError:
+        return None
+
+
+def store_secret(cfg, group: str, key: str, value: str) -> None:
+    """Persist device secrets (Tuya keys, RTSP passwords) into data/secrets.json."""
+    import json
+
+    path = cfg.data_path("secrets.json")
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    data.setdefault(group, {})[key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value)
 

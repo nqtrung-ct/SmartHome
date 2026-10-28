@@ -18,7 +18,7 @@ from pathlib import Path
 
 from server.config import Config
 from server.db import Database, log_event
-from server.util import now_iso
+from server.util import lan_ip, now_iso
 
 # A few common OUI prefixes so "unknown device" can at least say who made it.
 OUI_VENDORS = {
@@ -27,6 +27,12 @@ OUI_VENDORS = {
     "D0:73:D5": "Tuya/SmartLife",
     "10:D5:61": "Tuya/SmartLife",
     "84:E3:42": "Tuya/SmartLife",
+    "50:C7:BF": "TP-Link",
+    "14:CC:20": "TP-Link",
+    "5C:E9:31": "TP-Link",
+    "A8:57:4E": "TP-Link",
+    "E8:CC:18": "D-Link",
+    "34:08:04": "D-Link",
     "24:6F:28": "Espressif (ESP32)",
     "30:AE:A4": "Espressif (ESP32)",
     "A4:CF:12": "Espressif (ESP32)",
@@ -100,11 +106,35 @@ def upsert(db: Database, method: str, ident: str, **fields) -> None:
 
 
 def scan_broadlink(db: Database, cfg: Config) -> None:
+    """Broadlink UDP discovery.
+
+    The library guesses the broadcast interface when local_ip is not given, and
+    guesses wrong on machines with extra adapters (VirtualBox, WSL, VPN). Try the
+    configured IP, then the auto-detected LAN IP, then the library default, and
+    merge everything found.
+    """
     import broadlink
 
-    local_ip = cfg.get("broadlink.local_ip") or None
-    devices = broadlink.discover(timeout=int(cfg.get("broadlink.timeout", 5)), local_ip_address=local_ip)
-    for dev in devices:
+    timeout = int(cfg.get("broadlink.timeout", 5))
+    candidates: list[str | None] = []
+    configured = cfg.get("broadlink.local_ip")
+    if configured:
+        candidates.append(configured)
+    auto = lan_ip()
+    if auto and auto not in candidates:
+        candidates.append(auto)
+    candidates.append(None)
+
+    found: dict[str, object] = {}
+    for local_ip in candidates:
+        try:
+            devices = broadlink.discover(timeout=timeout, local_ip_address=local_ip) or []
+        except Exception:
+            devices = []
+        for dev in devices:
+            found.setdefault(dev.mac.hex(), dev)
+
+    for dev in found.values():
         mac = dev.mac.hex()
         upsert(
             db, "broadlink", mac,
@@ -303,14 +333,10 @@ def _lan_subnet(cfg: Config) -> ipaddress.IPv4Network | None:
     configured = cfg.get("discovery.subnet", "auto")
     if configured and configured != "auto":
         return ipaddress.ip_network(configured, strict=False)
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local = s.getsockname()[0]
-        s.close()
-        return ipaddress.ip_network(f"{local}/24", strict=False)
-    except OSError:
+    local = lan_ip()
+    if not local:
         return None
+    return ipaddress.ip_network(f"{local}/24", strict=False)
 
 
 def _ping(ip: str) -> bool:
@@ -391,4 +417,25 @@ def run_scan(db: Database, cfg: Config, progress=None) -> list[str]:
         done.append(name)
         if progress:
             progress(done)
+    _cleanup_network_rows(db)
     return done
+
+
+def _cleanup_network_rows(db: Database) -> None:
+    """The ping sweep finds everything, which makes the list noisy.
+
+    Drop generic 'network' rows for IPs a specific scanner already identified,
+    and lend MAC addresses from the sweep to the specific rows.
+    """
+    db.execute(
+        """DELETE FROM discovered
+           WHERE method='network' AND adopted_device_id IS NULL AND ip != ''
+             AND ip IN (SELECT ip FROM discovered WHERE method != 'network' AND ip != '')"""
+    )
+    with db.conn() as c:
+        c.execute(
+            """UPDATE discovered SET mac = COALESCE((
+                   SELECT n.mac FROM discovered n
+                   WHERE n.method='network' AND n.mac != '' AND n.ip = discovered.ip LIMIT 1), mac)
+               WHERE mac = '' AND method != 'network'"""
+        )

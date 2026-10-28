@@ -17,6 +17,59 @@
   </div>
 </div>
 
+<div id="device-modal" class="overlay hidden">
+  <div class="card modal-card">
+    <h2 id="m-title">➕ Thêm thiết bị thủ công</h2>
+    <label>Tên thiết bị *
+      <input id="m-name" placeholder="VD: Điều hòa phòng khách">
+    </label>
+    <label>Loại thiết bị
+      <select id="m-driver">
+        <option value="broadlink">Broadlink (IR)</option>
+        <option value="tuya">Tuya WiFi</option>
+        <option value="zigbee">Zigbee (đã pair trong Zigbee2MQTT)</option>
+        <option value="onvif">Camera (ONVIF/RTSP)</option>
+        <option value="generic">Khác (chỉ ghi nhận)</option>
+        <option value="dummy">Ảo (test không cần phần cứng)</option>
+      </select>
+    </label>
+    <label class="driver-field df-broadlink df-tuya df-onvif">Địa chỉ IP *
+      <input id="m-host" placeholder="192.168.1.50">
+    </label>
+    <label class="driver-field df-broadlink">MAC (để trống = tự dò qua IP)
+      <input id="m-mac" placeholder="e8:16:56:..">
+    </label>
+    <label class="driver-field df-tuya">Device ID (Tuya) *
+      <input id="m-tuya-id" placeholder="xxxxxxxxxxxxxxxxxx">
+    </label>
+    <label class="driver-field df-tuya">Local key *
+      <input id="m-tuya-key" type="password" placeholder="lấy qua tài khoản Tuya IoT / tinytuya">
+    </label>
+    <label class="driver-field df-onvif">Mật khẩu RTSP (lưu vào data/secrets.json)
+      <input id="m-rtsp" type="password" placeholder="mã bảo mật in trên thân camera">
+    </label>
+    <label>Phòng
+      <select id="m-room"></select>
+    </label>
+    <label class="small" style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="m-newroom" style="width:auto"> Tạo phòng mới cho thiết bị này
+    </label>
+    <div id="m-newroom-wrap" class="hidden" style="padding-left:8px">
+      <label>Tên phòng mới *
+        <input id="m-newroom-name" placeholder="VD: Phòng ngủ">
+      </label>
+      <label>Tầng
+        <select id="m-newroom-floor"></select>
+      </label>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="m-save" class="primary">💾 Lưu</button>
+      <button id="m-cancel">Hủy</button>
+      <span id="m-error" class="error"></span>
+    </div>
+  </div>
+</div>
+
 <header>
   <h1>🏠 SmartHome</h1>
   <nav id="tabs">

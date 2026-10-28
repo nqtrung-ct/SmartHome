@@ -23,6 +23,31 @@ class BroadlinkDriver(Driver):
 
     # -- connection ---------------------------------------------------------
 
+    def _discover(self):
+        """Discover, trying the configured IP, the auto LAN IP, then the library default.
+
+        On machines with VirtualBox/WSL/VPN adapters the library's own guess
+        broadcasts on the wrong interface and finds nothing.
+        """
+        from server.util import lan_ip
+
+        candidates: list[str | None] = []
+        if self.local_ip:
+            candidates.append(self.local_ip)
+        auto = lan_ip()
+        if auto and auto not in candidates:
+            candidates.append(auto)
+        candidates.append(None)
+        found = []
+        for local_ip in candidates:
+            try:
+                found = broadlink.discover(timeout=self.timeout, local_ip_address=local_ip) or []
+            except Exception:
+                found = []
+            if found:
+                return found
+        return found
+
     def _connect(self, device: Row):
         extra = loads(device["extra"])
         mac = extra.get("mac") or device["mac"]
@@ -38,7 +63,7 @@ class BroadlinkDriver(Driver):
 
     def probe(self, device: Row) -> dict:
         """Fill in mac/devtype by rediscovering on the LAN."""
-        for dev in broadlink.discover(timeout=self.timeout, local_ip_address=self.local_ip):
+        for dev in self._discover():
             if dev.host[0] == device["host"]:
                 return {
                     "mac": dev.mac.hex(),

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from server.api.deps import require_admin
 from server.db import log_event
 from server.drivers.base import DriverError, loads
-from server.util import now_iso
+from server.util import now_iso, store_secret
 
 router = APIRouter()
 
@@ -54,9 +54,15 @@ def list_devices(request: Request, _: None = Depends(require_admin)):
 async def create_device(request: Request, body: DeviceIn, _: None = Depends(require_admin)):
     app = request.app
     db = app.state.db
-    if body.driver not in app.state.drivers:
+    # "onvif" = camera: recorded, not controllable yet (no driver needed)
+    if body.driver not in app.state.drivers and body.driver != "onvif":
         raise HTTPException(status_code=400, detail=f"Không có driver '{body.driver}'")
     extra = dict(body.extra)
+
+    rtsp_password = extra.pop("rtsp_password", None)
+    if rtsp_password and body.host:
+        store_secret(app.state.cfg, "rtsp", body.host.strip(), rtsp_password)
+
     if body.driver == "broadlink" and body.host and not extra.get("mac"):
         # try to fill mac/devtype from the LAN automatically
         try:
@@ -72,7 +78,22 @@ async def create_device(request: Request, body: DeviceIn, _: None = Depends(requ
          json.dumps(extra, ensure_ascii=False), body.room_id, now_iso()),
     )
     log_event(db, "admin", f"Đã thêm thiết bị '{body.name}' ({body.driver})")
-    return {"id": device_id}
+
+    # drivers that can build default entities from what we know (tuya switch, zigbee sensor)
+    entities: list[int] = []
+    driver = app.state.drivers.get(body.driver)
+    if driver:
+        try:
+            device_row = db.one("SELECT * FROM devices WHERE id=?", (device_id,))
+            for spec in await asyncio.to_thread(driver.adopt, device_row, extra):
+                entities.append(db.execute(
+                    "INSERT INTO entities(device_id, name, entity_type, aliases, driver_data) VALUES (?,?,?,?,?)",
+                    (device_id, spec["name"], spec["entity_type"],
+                     spec.get("aliases", ""), json.dumps(spec.get("driver_data", {}), ensure_ascii=False)),
+                ))
+        except Exception as exc:
+            log_event(db, "admin", f"Không tạo được thực thể mặc định: {exc}", level="warn")
+    return {"id": device_id, "entities": entities}
 
 
 @router.patch("/devices/{device_id}")
@@ -244,33 +265,3 @@ def learn_status(request: Request, entity_id: int, _: None = Depends(require_adm
     if not job:
         raise HTTPException(status_code=404, detail="Chưa có phiên học nào")
     return job
-
-
-# --- demo seeding --------------------------------------------------------------
-
-
-@router.post("/demo", status_code=201)
-def seed_demo(request: Request, _: None = Depends(require_admin)):
-    """Rooms + a virtual device so the whole stack can be tested without hardware."""
-    app = request.app.state
-    db = app.db
-    if not db.one("SELECT id FROM rooms WHERE name='Phòng khách'"):
-        db.execute("INSERT INTO rooms(name, aliases) VALUES ('Phòng khách','khách,khach')")
-        db.execute("INSERT INTO rooms(name, aliases) VALUES ('Phòng ngủ','ngủ,ngu')")
-    living = db.one("SELECT id FROM rooms WHERE name='Phòng khách'")
-    device_id = db.execute(
-        "INSERT INTO devices(name, driver, host, room_id, created_at) VALUES (?,?,?,?,?)",
-        ("Thiết bị demo", "dummy", "", living["id"], now_iso()),
-    )
-    for name, etype, aliases in [
-        ("Đèn trần", "light", "đèn,đèn trần"),
-        ("Quạt", "switch", "quạt"),
-        ("Điều hòa", "climate", "điều hòa,máy lạnh,ac"),
-        ("Cảm biến", "sensor", "cảm biến,nhiệt độ,độ ẩm"),
-    ]:
-        db.execute(
-            "INSERT INTO entities(device_id, name, entity_type, aliases, driver_data) VALUES (?,?,?,?,?)",
-            (device_id, name, etype, aliases, "{}"),
-        )
-    log_event(db, "admin", "Đã tạo dữ liệu demo (phòng + thiết bị ảo)")
-    return {"ok": True, "device_id": device_id}

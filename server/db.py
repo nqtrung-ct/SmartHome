@@ -10,6 +10,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS rooms(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
+  floor TEXT NOT NULL DEFAULT '',
   aliases TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS devices(
@@ -91,6 +92,13 @@ class Database:
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Lightweight column migrations for databases created before an upgrade."""
+        cols = {row["name"] for row in self.query("PRAGMA table_info(rooms)")}
+        if "floor" not in cols:
+            self.execute("ALTER TABLE rooms ADD COLUMN floor TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def conn(self):

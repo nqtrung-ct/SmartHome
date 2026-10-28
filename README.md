@@ -19,7 +19,7 @@ Admin UI ─────► │ REST API  (http://<ip>:8124, token)             
                 └──────────────────────────────────────────────────────────┘
 ```
 
-- **Device** = một món phần cứng; **Entity** = một chức danh điều khiển được (điều hòa, đèn, cảm biến); **Room** gom entity + máy thoại (giúp "bật điều hòa" hiểu đúng phòng); **Voice client** = điện thoại (token + phòng).
+- **Device** = một món phần cứng; **Entity** = một chức danh điều khiển được (điều hòa, đèn, cảm biến); **Room** gom entity + máy thoại, có **tầng** để nhóm trên dashboard (giúp "bật điều hòa" hiểu đúng phòng); **Voice client** = điện thoại (token + phòng).
 - Lệnh thường gặp đi **fast path** (regex, không cần LLM); câu phức tạp / nhiều việc / hội thoại rơi sang **LLM** (Ollama, tool calling). Thời tiết: open-meteo, không cần key.
 
 ## Chạy thử trong 2 phút (không phần cứng)
@@ -31,7 +31,7 @@ Copy-Item config.example.yaml config.yaml   # đổi admin_token
 python -m server
 ```
 
-Mở `http://localhost:8124` → **Tổng quan → 🌱 Dữ liệu demo** → tab **Lệnh**: thử `bật đèn`, `điều hòa 26 độ`, `15 phút nữa nhắc tôi tắt bếp`, `thời tiết hôm nay thế nào`.
+Mở `http://localhost:8124` → **Tổng quan** thêm phòng (kèm tầng) → **Quét mạng → ➕ Thêm tay** tạo thiết bị ảo gán vào phòng → thêm thực thể (đèn, quạt...) trong tab **Thiết bị** → tab **Lệnh**: thử `bật đèn`, `điều hòa 26 độ`, `15 phút nữa nhắc tôi tắt bếp`, `thời tiết hôm nay thế nào`.
 
 Chi tiết đầy đủ (mô hình AI, Broadlink/Zigbee/Tuya, app Android, firewall): [`docs/setup-windows.md`](docs/setup-windows.md).
 

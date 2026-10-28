@@ -7,8 +7,20 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 let token = localStorage.getItem("sh_token") || "";
-let roomsCache = [];
 let eventsTimer = null;
+
+const FLOORS = ["Trệt", "Tầng 1", "Tầng 2", "Tầng 3", "Tầng 4", "Tầng 5", "Mái / Sân thượng"];
+const FLOOR_OPTIONS = (selected) =>
+  `<option value="">— chọn tầng —</option>` +
+  FLOORS.map((f) => `<option value="${f}" ${f === selected ? "selected" : ""}>${f}</option>`).join("");
+
+const floorSortKey = (f) => (f ? FLOORS.indexOf(f) === -1 ? 90 + f.charCodeAt(0) : FLOORS.indexOf(f) : 99);
+const roomLabel = (r) => (r.floor ? `${r.floor} · ${r.name}` : r.name);
+
+function roomSelectOptions(rooms, selected) {
+  return `<option value="">— chưa gán —</option>` + rooms.map((r) =>
+    `<option value="${r.id}" ${r.id === selected ? "selected" : ""}>${esc(roomLabel(r))}</option>`).join("");
+}
 
 // ---------------------------------------------------------------- api helper
 
@@ -78,35 +90,46 @@ function loadTab(tab) {
 
 async function renderDashboard() {
   const el = $("#tab-dashboard");
-  const [overview] = await Promise.all([api("/overview")]);
-  roomsCache = overview.rooms;
+  const overview = await api("/overview");
   const counts = overview.counts;
 
-  const roomCards = overview.rooms.map((room) => {
-    const entities = room.entities.map((e) => {
-      const state = safeJson(e.state);
-      let control = "";
-      if (e.entity_type === "switch" || e.entity_type === "light") {
-        const on = state.state === "on";
-        control = `<span><button class="small-btn ${on ? "" : "primary"}" onclick="toggleEntity(${e.id}, ${on})">${on ? "Tắt" : "Bật"}</button></span>`;
-      } else if (e.entity_type === "climate") {
-        const temp = state.temperature || 26;
-        control = `<span class="small muted">
-            <input type="number" id="temp-${e.id}" value="${temp}" min="16" max="30" style="width:60px">
-            <button class="small-btn" onclick="setClimate(${e.id})">Đặt</button>
-            <button class="small-btn" onclick="climateOff(${e.id})">Tắt</button>
-          </span>`;
-      } else if (e.entity_type === "sensor") {
-        control = `<span class="small muted">${sensorText(state)}</span>`;
-      }
-      return `<div class="entity">
-          <div><div class="name">${esc(e.name)}</div>
-          <div class="sub">${esc(e.device_name)} · ${typeVi(e.entity_type)}</div></div>
-          ${control}
-        </div>`;
-    }).join("") || `<div class="muted small" style="padding:8px 0">Phòng trống</div>`;
+  // group rooms by floor
+  const groups = new Map();
+  for (const room of overview.rooms) {
+    const f = room.floor || "Chưa xếp tầng";
+    if (!groups.has(f)) groups.set(f, []);
+    groups.get(f).push(room);
+  }
+  const floors = [...groups.keys()].sort((a, b) => floorSortKey(a) - floorSortKey(b));
 
-    return `<div class="card"><h2>🚪 ${esc(room.name)}</h2>${entities}</div>`;
+  const sections = floors.map((floor) => {
+    const cards = groups.get(floor).map((room) => {
+      const entities = room.entities.map((e) => {
+        const state = safeJson(e.state);
+        let control = "";
+        if (e.entity_type === "switch" || e.entity_type === "light") {
+          const on = state.state === "on";
+          control = `<span><button class="small-btn ${on ? "" : "primary"}" onclick="toggleEntity(${e.id}, ${on})">${on ? "Tắt" : "Bật"}</button></span>`;
+        } else if (e.entity_type === "climate") {
+          const temp = state.temperature || 26;
+          control = `<span class="small muted">
+              <input type="number" id="temp-${e.id}" value="${temp}" min="16" max="30" style="width:60px">
+              <button class="small-btn" onclick="setClimate(${e.id})">Đặt</button>
+              <button class="small-btn" onclick="climateOff(${e.id})">Tắt</button>
+            </span>`;
+        } else if (e.entity_type === "sensor") {
+          control = `<span class="small muted">${sensorText(state)}</span>`;
+        }
+        return `<div class="entity">
+            <div><div class="name">${esc(e.name)}</div>
+            <div class="sub">${esc(e.device_name)} · ${typeVi(e.entity_type)}</div></div>
+            ${control}
+          </div>`;
+      }).join("") || `<div class="muted small" style="padding:8px 0">Phòng trống</div>`;
+
+      return `<div class="card"><h2>🚪 ${esc(room.name)}</h2>${entities}</div>`;
+    }).join("");
+    return `<h3 class="floor-heading">🏢 ${esc(floor)}</h3><div class="grid">${cards}</div>`;
   }).join("");
 
   const unassigned = overview.unassigned.length
@@ -122,13 +145,18 @@ async function renderDashboard() {
       <span class="badge">${counts.voice_clients} máy thoại</span>
       <span class="badge">${counts.timers_pending} hẹn giờ chờ</span>
     </div>
-    <div class="row" style="margin-bottom:14px">
-      <input id="new-room" placeholder="Tên phòng mới (VD: Phòng ngủ)">
-      <input id="new-room-aliases" placeholder="Bí danh (VD: ngủ,bedroom)" style="width:220px">
-      <button class="primary" onclick="addRoom()">+ Thêm phòng</button>
-      <button onclick="seedDemo()">🌱 Dữ liệu demo</button>
+    <div class="card">
+      <h2>➕ Thêm phòng</h2>
+      <div class="row">
+        <input id="new-room" placeholder="Tên phòng (VD: Phòng ngủ)">
+        <select id="new-room-floor">${FLOOR_OPTIONS("")}</select>
+        <input id="new-room-aliases" placeholder="Bí danh (VD: ngủ,bedroom)" style="width:200px">
+        <button class="primary" onclick="addRoom()">Thêm</button>
+      </div>
+      <p class="small muted">Tầng dùng để nhóm phòng trên trang này; bí danh giúp nhận ra phòng khi nói ("bật đèn phòng ngủ").</p>
     </div>
-    <div class="grid">${roomCards}</div>${unassigned}`;
+    ${sections || `<div class="card muted">Chưa có phòng nào. Thêm phòng ở trên, rồi thêm thiết bị trong tab "Quét mạng" hoặc "Thiết bị".</div>`}
+    ${unassigned}`;
 }
 
 function safeJson(s) { try { return JSON.parse(s || "{}"); } catch { return {}; } }
@@ -146,13 +174,10 @@ function sensorText(state) {
 window.addRoom = async () => {
   const name = $("#new-room").value.trim();
   if (!name) return;
-  await api("/rooms", { method: "POST", body: JSON.stringify({ name, aliases: $("#new-room-aliases").value }) });
-  renderDashboard();
-};
-
-window.seedDemo = async () => {
-  await api("/demo", { method: "POST" });
-  toast("Đã tạo dữ liệu demo");
+  await api("/rooms", {
+    method: "POST",
+    body: JSON.stringify({ name, floor: $("#new-room-floor").value, aliases: $("#new-room-aliases").value }),
+  });
   renderDashboard();
 };
 
@@ -179,28 +204,11 @@ window.climateOff = async (id) => {
 async function renderDevices() {
   const el = $("#tab-devices");
   const [devices, rooms] = await Promise.all([api("/devices"), api("/rooms")]);
-  roomsCache = rooms;
-  const roomOptions = (selected) =>
-    `<option value="">— chưa gán —</option>` + rooms.map((r) =>
-      `<option value="${r.id}" ${r.id === selected ? "selected" : ""}>${esc(r.name)}</option>`).join("");
 
   el.innerHTML = `
-    <div class="card">
-      <h2>➕ Thêm thiết bị thủ công</h2>
-      <div class="row">
-        <input id="dev-name" placeholder="Tên thiết bị" style="width:170px">
-        <select id="dev-driver">
-          <option value="broadlink">Broadlink (IR)</option>
-          <option value="tuya">Tuya WiFi</option>
-          <option value="zigbee">Zigbee</option>
-          <option value="dummy">Ảo (test)</option>
-          <option value="generic">Khác</option>
-        </select>
-        <input id="dev-host" placeholder="IP (nếu có)" style="width:130px">
-        <select id="dev-room">${roomOptions(null)}</select>
-        <button class="primary" onclick="addDevice()">Thêm</button>
-      </div>
-      <p class="small muted">Thường thì quét mạng rồi "Thêm vào hệ thống" sẽ dễ hơn.</p>
+    <div class="row" style="margin-bottom:14px">
+      <button class="primary" onclick="openDeviceModal()">➕ Thêm thiết bị thủ công</button>
+      <span class="small muted">Hoặc quét mạng ở tab "Quét mạng" rồi chọn "Thêm vào hệ thống".</span>
     </div>
     <div id="device-list"></div>`;
 
@@ -236,7 +244,7 @@ async function renderDevices() {
         <h2 style="margin:0">${esc(d.name)} <span class="badge">${esc(d.driver)}</span>
           ${d.host ? `<span class="small muted">${esc(d.host)}</span>` : ""}</h2>
         <div class="row">
-          <select onchange="setDeviceRoom(${d.id}, this.value)">${roomOptions(d.room_id)}</select>
+          <select onchange="setDeviceRoom(${d.id}, this.value)">${roomSelectOptions(rooms, d.room_id)}</select>
           <button class="small-btn danger" onclick="delDevice(${d.id})">Xóa</button>
         </div>
       </div>
@@ -251,18 +259,9 @@ async function renderDevices() {
         <button class="small-btn" onclick="addEntity(${d.id})">+ Thực thể</button>
       </div>
     </div>`;
-  }).join("") || `<div class="card muted">Chưa có thiết bị nào. Quét mạng ở tab "Quét mạng" hoặc thêm dữ liệu demo ở tab Tổng quan.</div>`;
+  }).join("") || `<div class="card muted">Chưa có thiết bị nào.</div>`;
 }
 
-window.addDevice = async () => {
-  const body = {
-    name: $("#dev-name").value.trim(), driver: $("#dev-driver").value,
-    host: $("#dev-host").value.trim(), room_id: +$("#dev-room").value || null,
-  };
-  if (!body.name) return;
-  try { await api("/devices", { method: "POST", body: JSON.stringify(body) }); renderDevices(); }
-  catch (e) { toast("Lỗi: " + e.message); }
-};
 window.setDeviceRoom = async (id, roomId) => {
   await api(`/devices/${id}`, { method: "PATCH", body: JSON.stringify({ room_id: +roomId || null }) });
 };
@@ -315,6 +314,103 @@ window.sendCode = async (entityId, codeName) => {
   catch (e) { toast("Lỗi: " + e.message); }
 };
 
+// ---------------------------------------------------------------- manual device modal
+
+const DRIVERS = [
+  ["broadlink", "Broadlink (IR)"],
+  ["tuya", "Tuya WiFi"],
+  ["zigbee", "Zigbee (đã pair trong Zigbee2MQTT)"],
+  ["onvif", "Camera (ONVIF/RTSP)"],
+  ["generic", "Khác (chỉ ghi nhận)"],
+  ["dummy", "Ảo (test không cần phần cứng)"],
+];
+let modalCtx = {}; // {discoveredId?: number}
+
+window.openDeviceModal = async (ctx = {}) => {
+  modalCtx = ctx;
+  $("#m-title").textContent = ctx.discoveredId ? "➕ Thêm thiết bị (từ kết quả quét)" : "➕ Thêm thiết bị thủ công";
+  $("#m-name").value = ctx.name || "";
+  $("#m-host").value = ctx.host || "";
+  $("#m-driver").value = ctx.driver || "broadlink";
+  $("#m-mac").value = "";
+  $("#m-tuya-id").value = "";
+  $("#m-tuya-key").value = "";
+  $("#m-rtsp").value = "";
+  $("#m-error").textContent = "";
+  $("#m-newroom").checked = false;
+  $("#m-newroom-wrap").classList.add("hidden");
+  $("#m-newroom-name").value = "";
+  $("#m-newroom-floor").innerHTML = FLOOR_OPTIONS("");
+  toggleDriverFields();
+
+  const rooms = await api("/rooms").catch(() => []);
+  $("#m-room").innerHTML = roomSelectOptions(rooms, ctx.room_id ?? null);
+
+  $("#device-modal").classList.remove("hidden");
+  $("#m-name").focus();
+};
+
+function toggleDriverFields() {
+  const driver = $("#m-driver").value;
+  $$(".driver-field").forEach((el) => el.classList.add("hidden"));
+  $$(`.driver-field.df-${driver}`).forEach((el) => el.classList.remove("hidden"));
+}
+$("#m-driver").addEventListener("change", toggleDriverFields);
+$("#m-newroom").addEventListener("change", () =>
+  $("#m-newroom-wrap").classList.toggle("hidden", !$("#m-newroom").checked));
+$("#m-cancel").onclick = () => $("#device-modal").classList.add("hidden");
+
+$("#m-save").onclick = async () => {
+  const err = $("#m-error");
+  err.textContent = "";
+  const name = $("#m-name").value.trim();
+  const driver = $("#m-driver").value;
+  const host = $("#m-host").value.trim();
+  if (!name) { err.textContent = "Nhập tên thiết bị"; return; }
+  if ((driver === "broadlink" || driver === "tuya" || driver === "onvif") && !host) {
+    err.textContent = "Thiết bị loại này cần địa chỉ IP"; return;
+  }
+  try {
+    // room: existing or create new (with floor) on the fly
+    let roomId = +$("#m-room").value || null;
+    if ($("#m-newroom").checked) {
+      const roomName = $("#m-newroom-name").value.trim();
+      if (!roomName) { err.textContent = "Nhập tên phòng mới"; return; }
+      const room = await api("/rooms", {
+        method: "POST",
+        body: JSON.stringify({ name: roomName, floor: $("#m-newroom-floor").value }),
+      });
+      roomId = room.id;
+    }
+
+    const extra = {};
+    if (driver === "tuya") {
+      const id = $("#m-tuya-id").value.trim();
+      const key = $("#m-tuya-key").value.trim();
+      if (!id || !key) { err.textContent = "Tuya cần Device ID và Local key"; return; }
+      extra.id = id; extra.key = key; extra.ver = "3.3";
+    }
+    if (driver === "broadlink" && $("#m-mac").value.trim()) extra.mac = $("#m-mac").value.trim();
+    if (driver === "onvif" && $("#m-rtsp").value) extra.rtsp_password = $("#m-rtsp").value;
+
+    const result = await api("/devices", {
+      method: "POST",
+      body: JSON.stringify({ name, driver, host, mac: extra.mac || "", room_id: roomId, extra }),
+    });
+    if (modalCtx.discoveredId) {
+      await api(`/discovery/${modalCtx.discoveredId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ adopted_device_id: result.id }),
+      }).catch(() => {});
+    }
+    $("#device-modal").classList.add("hidden");
+    toast(`Đã thêm "${name}"` + (result.entities.length ? ` (+${result.entities.length} thực thể)` : ""));
+    loadTab(currentTab);
+  } catch (e) {
+    err.textContent = "Lỗi: " + e.message;
+  }
+};
+
 // ---------------------------------------------------------------- discovery
 
 async function renderDiscovery() {
@@ -324,9 +420,11 @@ async function renderDiscovery() {
       <h2>🔎 Quét mạng</h2>
       <div class="row">
         <button class="primary" id="scan-btn" onclick="startScan()">Bắt đầu quét</button>
+        <button id="manual-btn" onclick="openDeviceModal()">➕ Thêm tay</button>
         <span id="scan-status" class="muted small"></span>
       </div>
-      <p class="small muted">Quét Broadlink, Tuya, mDNS, SSDP, camera ONVIF, Zigbee và ping toàn bộ mạng. Mất ~20-40 giây.</p>
+      <p class="small muted">Quét Broadlink, Tuya, mDNS, SSDP, camera ONVIF, Zigbee và ping toàn bộ mạng. Mất ~20-40 giây.<br>
+      "Thêm tay" dùng khi quét không thấy: nhập IP, loại thiết bị, tầng/phòng và các thông số khác.</p>
     </div>
     <div id="discovery-list"></div>`;
   refreshDiscovered();
@@ -337,12 +435,13 @@ async function refreshDiscovered() {
   if (!list) return;
   const rows = await api("/discovery").catch(() => []);
   const rooms = await api("/rooms").catch(() => []);
-  const roomOptions = `<option value="">— chưa gán phòng —</option>` + rooms.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
 
   list.innerHTML = rows.length ? `
     <div class="card"><table>
       <tr><th>Thiết bị</th><th>IP / ID</th><th>Nguồn</th><th>Hãng</th><th></th></tr>
-      ${rows.map((r) => `
+      ${rows.map((r) => {
+        const guessedDriver = { broadlink: "broadlink", tuya: "tuya", wsdiscovery: "onvif" }[r.method] || "generic";
+        return `
         <tr>
           <td><b>${esc(r.name || "?")}</b>
             ${r.supported ? `<span class="badge supported">hỗ trợ</span>` : `<span class="badge">chưa hỗ trợ</span>`}
@@ -354,16 +453,15 @@ async function refreshDiscovered() {
           <td>
             ${!r.adopted_device_id ? `
             <div class="row">
-              <input id="adopt-name-${r.id}" placeholder="Tên" value="${esc(r.name || "")}" style="width:140px">
-              <select id="adopt-room-${r.id}">${roomOptions}</select>
-              ${r.method === "tuya" ? `<input id="adopt-key-${r.id}" placeholder="local key" style="width:130px">` : ""}
-              ${r.method === "wsdiscovery" ? `<input id="adopt-pass-${r.id}" placeholder="mật khẩu RTSP" style="width:130px">` : ""}
+              <input id="adopt-name-${r.id}" placeholder="Tên" value="${esc(r.name || "")}" style="width:130px">
+              <select id="adopt-room-${r.id}">${roomSelectOptions(rooms, null)}</select>
               <button class="small-btn primary" onclick="adopt(${r.id})">Thêm vào hệ thống</button>
-              ${!r.supported ? `<button class="small-btn" onclick="adopt(${r.id}, true)">Thêm tay</button>` : ""}
-            </div>` : `<span class="small muted">ID thiết bị #${r.adopted_device_id}</span>`}
+              <button class="small-btn" onclick='openDeviceModal({discoveredId:${r.id}, name:${JSON.stringify(r.name || "")}, host:${JSON.stringify(r.ip || "")}, driver:"${guessedDriver}"})'>⚙️ Nhập tay</button>
+            </div>` : `<span class="small muted">Thiết bị #${r.adopted_device_id}</span>`}
           </td>
-        </tr>`).join("")}
-    </table></div>` : `<div class="card muted">Chưa quét gì. Bấm "Bắt đầu quét".</div>`;
+        </tr>`;
+      }).join("")}
+    </table></div>` : `<div class="card muted">Chưa quét gì. Bấm "Bắt đầu quét", hoặc "Thêm tay" nếu biết IP thiết bị.</div>`;
 }
 
 window.startScan = async () => {
@@ -378,15 +476,16 @@ window.startScan = async () => {
   }, 1500);
 };
 
-window.adopt = async (id, force = false) => {
-  const body = { force, name: $(`#adopt-name-${id}`).value.trim() || null, room_id: +$(`#adopt-room-${id}`).value || null };
-  const key = $(`#adopt-key-${id}`); if (key) body.local_key = key.value.trim();
-  const pass = $(`#adopt-pass-${id}`); if (pass) body.rtsp_password = pass.value.trim();
+window.adopt = async (id) => {
+  const body = {
+    name: $(`#adopt-name-${id}`).value.trim() || null,
+    room_id: +$(`#adopt-room-${id}`).value || null,
+  };
   try {
     const res = await api(`/discovery/${id}/adopt`, { method: "POST", body: JSON.stringify(body) });
     toast(res.warning ? "Đã thêm nhưng có cảnh báo: " + res.warning : "Đã thêm thiết bị #" + res.device_id);
     refreshDiscovered();
-  } catch (e) { toast("Lỗi: " + e.message); }
+  } catch (e) { toast("Lỗi: " + e.message + " — thử nút ⚙️ Nhập tay"); }
 };
 
 // ---------------------------------------------------------------- voice clients
@@ -394,8 +493,6 @@ window.adopt = async (id, force = false) => {
 async function renderVoice() {
   const el = $("#tab-voice");
   const [clients, rooms] = await Promise.all([api("/voice-clients"), api("/rooms")]);
-  const roomOptions = (sel) => `<option value="">— chưa gán —</option>` + rooms.map((r) =>
-    `<option value="${r.id}" ${r.id === sel ? "selected" : ""}>${esc(r.name)}</option>`).join("");
 
   el.innerHTML = `
     <div class="card">
@@ -414,7 +511,7 @@ async function renderVoice() {
         ${clients.map((c) => `
           <tr>
             <td><b>${esc(c.name)}</b></td>
-            <td><select onchange="setClientRoom(${c.id}, this.value)">${roomOptions(c.room_id)}</select></td>
+            <td><select onchange="setClientRoom(${c.id}, this.value)">${roomSelectOptions(rooms, c.room_id)}</select></td>
             <td>${c.online ? '<span class="badge on">đang kết nối</span>' : '<span class="badge">offline</span>'}</td>
             <td class="small muted">${esc(c.last_seen || "-")}</td>
             <td><button class="small-btn danger" onclick="delClient(${c.id})">✕</button></td>
@@ -446,7 +543,8 @@ async function renderConsole() {
       <h2>⌨️ Lệnh văn bản</h2>
       <p class="small muted">Thử như đang nói trong một phòng: "bật đèn", "tắt điều hòa phòng khách", "điều hòa 26 độ", "15 phút nữa nhắc tôi tắt bếp", "thời tiết hôm nay thế nào".</p>
       <div class="row">
-        <select id="cmd-room">${`<option value="">— không phòng —</option>` + rooms.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("")}</select>
+        <select id="cmd-room">${`<option value="">— không phòng —</option>` + rooms.map((r) =>
+          `<option value="${r.id}">${esc(roomLabel(r))}</option>`).join("")}</select>
         <input id="cmd-text" placeholder="Nhập lệnh..." style="flex:1; min-width:220px" onkeydown="if(event.key==='Enter')sendCommand()">
         <button class="primary" onclick="sendCommand()">Gửi</button>
       </div>

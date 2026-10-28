@@ -67,11 +67,13 @@ def me(request: Request, token: str = Query("")):
 
 class RoomIn(BaseModel):
     name: str
+    floor: str = ""
     aliases: str = ""
 
 
 class RoomPatch(BaseModel):
     name: str | None = None
+    floor: str | None = None
     aliases: str | None = None
 
 
@@ -94,8 +96,8 @@ def create_room(request: Request, body: RoomIn, _: None = Depends(require_admin)
         raise HTTPException(status_code=400, detail="Thiếu tên phòng")
     return {
         "id": request.app.state.db.execute(
-            "INSERT INTO rooms(name, aliases) VALUES (?,?)",
-            (body.name.strip(), body.aliases.strip()),
+            "INSERT INTO rooms(name, floor, aliases) VALUES (?,?,?)",
+            (body.name.strip(), body.floor.strip(), body.aliases.strip()),
         )
     }
 
@@ -105,6 +107,8 @@ def patch_room(request: Request, room_id: int, body: RoomPatch, _: None = Depend
     db = request.app.state.db
     if body.name is not None:
         db.execute("UPDATE rooms SET name=? WHERE id=?", (body.name.strip(), room_id))
+    if body.floor is not None:
+        db.execute("UPDATE rooms SET floor=? WHERE id=?", (body.floor.strip(), room_id))
     if body.aliases is not None:
         db.execute("UPDATE rooms SET aliases=? WHERE id=?", (body.aliases.strip(), room_id))
     return {"ok": True}

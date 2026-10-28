@@ -11,7 +11,7 @@ from server.api.deps import require_admin
 from server.core.discovery import run_scan
 from server.db import log_event
 from server.drivers.base import loads
-from server.util import now_iso
+from server.util import now_iso, store_secret
 
 router = APIRouter()
 
@@ -52,6 +52,20 @@ async def start_scan(request: Request, _: None = Depends(require_admin)):
 def scan_status(request: Request, _: None = Depends(require_admin)):
     job = getattr(request.app.state, "scan_job", None) or {"running": False, "done": True, "methods": []}
     return job
+
+
+class DiscoveredPatch(BaseModel):
+    adopted_device_id: int | None = None
+
+
+@router.patch("/discovery/{discovered_id}")
+def patch_discovered(request: Request, discovered_id: int, body: DiscoveredPatch, _: None = Depends(require_admin)):
+    """Link a discovered row to a device (used after manual add from a scan row)."""
+    request.app.state.db.execute(
+        "UPDATE discovered SET adopted_device_id=? WHERE id=?",
+        (body.adopted_device_id, discovered_id),
+    )
+    return {"ok": True}
 
 
 class AdoptIn(BaseModel):
@@ -108,14 +122,8 @@ async def adopt(request: Request, discovered_id: int, body: AdoptIn, _: None = D
     )
 
     # cameras: keep the RTSP password in data/secrets.json, not in the DB/git
-    if driver_name == "onvif" and body.rtsp_password:
-        import pathlib
-
-        secrets_path = app.cfg.data_path("secrets.json")
-        secrets_file = json.loads(secrets_path.read_text(encoding="utf-8")) if secrets_path.exists() else {}
-        secrets_file.setdefault("rtsp", {})[row["ip"]] = body.rtsp_password
-        secrets_path.parent.mkdir(parents=True, exist_ok=True)
-        secrets_path.write_text(json.dumps(secrets_file, indent=2), encoding="utf-8")
+    if driver_name == "onvif" and body.rtsp_password and row["ip"]:
+        store_secret(app.cfg, "rtsp", row["ip"], body.rtsp_password)
 
     driver = app.state.drivers.get(driver_name, app.state.drivers.get("generic"))
     entities = []
