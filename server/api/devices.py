@@ -199,9 +199,8 @@ class CommandIn(BaseModel):
     params: dict = {}
 
 
-@router.post("/entities/{entity_id}/command")
-async def entity_command(request: Request, entity_id: int, body: CommandIn, _: None = Depends(require_admin)):
-    app = request.app
+async def run_entity_command(app, entity_id: int, command: str, params: dict) -> dict:
+    """Thực thi lệnh lên entity — dùng chung cho admin API và màn hình treo tường."""
     db = app.state.db
     entity = db.one("SELECT * FROM entities WHERE id=?", (entity_id,))
     if not entity:
@@ -213,13 +212,19 @@ async def entity_command(request: Request, entity_id: int, body: CommandIn, _: N
     if not driver:
         raise HTTPException(status_code=400, detail=f"Không có driver '{device['driver']}'")
     try:
-        state = await asyncio.to_thread(driver.set_state, entity, device, body.command, body.params)
+        state = await asyncio.to_thread(driver.set_state, entity, device, command, params)
     except DriverError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     db.execute(
         "UPDATE entities SET state=?, updated_at=? WHERE id=?",
         (json.dumps(state, ensure_ascii=False), now_iso(), entity_id),
     )
+    return state
+
+
+@router.post("/entities/{entity_id}/command")
+async def entity_command(request: Request, entity_id: int, body: CommandIn, _: None = Depends(require_admin)):
+    state = await run_entity_command(request.app, entity_id, body.command, body.params)
     return {"state": state}
 
 

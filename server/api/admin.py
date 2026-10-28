@@ -1,6 +1,7 @@
 """Public endpoints: health, pairing, client self-info; plus rooms/floors CRUD."""
 from __future__ import annotations
 
+import asyncio
 import secrets
 import sqlite3
 from datetime import datetime, timedelta
@@ -22,7 +23,9 @@ def health() -> dict:
 
 @router.get("/display")
 def display(request: Request):
-    """Read-only snapshot for wall displays. Public (LAN-only server, no secrets)."""
+    """Snapshot cho màn hình treo tường. Public (server LAN-only, không có secret).
+    Chỉ trả các phòng có cảm biến nhiệt độ; kèm thiết bị điều khiển của phòng
+    (sensor/breaker không hiện — chỉ dùng để lọc phòng và lấy nhiệt độ)."""
     import json as _json
 
     app = request.app
@@ -37,36 +40,47 @@ def display(request: Request):
     rooms = []
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
         entities = db.query(
-            """SELECT e.name, e.entity_type, e.state, d.driver FROM entities e
-               JOIN devices d ON d.id=e.device_id
-               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type!='controller'""",
+            """SELECT e.id, e.name, e.entity_type, e.state, e.driver_data, d.driver
+               FROM entities e JOIN devices d ON d.id=e.device_id
+               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type NOT IN ('controller','sensor')""",
             (room["id"],),
         )
-        ents = []
-        lights_on = active = 0
         temp = humidity = None
+        # nhiệt độ/độ ẩm phòng lấy từ sensor trong phòng (nếu có nhiều cái, số mới nhất Wins)
+        for s in db.query(
+            """SELECT e.state, e.updated_at FROM entities e JOIN devices d ON d.id=e.device_id
+               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type='sensor'
+               ORDER BY e.updated_at DESC""",
+            (room["id"],),
+        ):
+            try:
+                st = _json.loads(s["state"] or "{}")
+            except ValueError:
+                continue
+            if temp is None and st.get("temperature") is not None:
+                temp = st["temperature"]
+            if humidity is None and st.get("humidity") is not None:
+                humidity = st["humidity"]
+            if temp is not None and humidity is not None:
+                break
+        if temp is None and humidity is None:
+            continue  # phòng không có cảm biến nhiệt độ thì không lên màn hình
+
+        ents = []
         for e in entities:
             try:
                 state = _json.loads(e["state"] or "{}")
             except ValueError:
                 state = {}
-            ents.append({"name": e["name"], "type": e["entity_type"], "state": state})
-            if e["driver"] == "broadlink":
-                continue  # thiết bị IR không phản hồi trạng thái thật — không đếm "đang bật"
-            if e["entity_type"] in ("light", "switch"):
-                if state.get("state") == "on":
-                    lights_on += 1
-                    active += 1
-            elif e["entity_type"] == "climate" and state.get("state") not in (None, "off"):
-                active += 1
-            elif e["entity_type"] == "sensor":
-                temp = state.get("temperature", temp)
-                humidity = state.get("humidity", humidity)
+            ents.append({
+                "id": e["id"], "name": e["name"], "type": e["entity_type"],
+                "driver": e["driver"], "state": state,
+                "controllable": e["entity_type"] in ("light", "switch", "climate")
+                                and "readonly" not in _json.loads(e["driver_data"] or "{}"),
+            })
         rooms.append({
             "id": room["id"], "name": room["name"], "floor": room["floor"],
-            "active": active > 0, "lights_on": lights_on,
-            "temperature": temp, "humidity": humidity,
-            "entity_count": len(ents),
+            "temperature": temp, "humidity": humidity, "entities": ents,
         })
 
     timers = [
@@ -78,10 +92,10 @@ def display(request: Request):
         )
     ]
 
+    # chỉ để tương thích client cũ — màn hình mới không dùng các số này nữa
     counts = {
         "rooms": len(rooms),
         "devices": db.one("SELECT COUNT(*) AS n FROM devices")["n"],
-        "on_now": sum(r["active"] for r in rooms),
         "sensors": db.one(
             "SELECT COUNT(*) AS n FROM entities WHERE entity_type='sensor'"
         )["n"],
@@ -99,6 +113,61 @@ def display(request: Request):
         "counts": counts,
         "updated_at": now_iso(),
     }
+
+
+# --- wall display: PIN unlock + control ---------------------------------------
+# Màn hình treo tường không có token admin; nhập đúng mã PIN 4 số (đặt trong
+# tab Thiết đặt) sẽ nhận token tạm hiệu lực 5 phút để gửi lệnh điều khiển.
+
+
+DISPLAY_UNLOCK_SECONDS = 300
+
+
+def _display_tokens(app) -> dict:
+    if not hasattr(app.state, "display_tokens"):
+        app.state.display_tokens = {}
+    return app.state.display_tokens
+
+
+class DisplayUnlockIn(BaseModel):
+    pin: str
+
+
+@router.post("/display/unlock")
+async def display_unlock(request: Request, body: DisplayUnlockIn):
+    pin = str(body.pin or "").strip()
+    expected = str(request.app.state.cfg.get("display.pin", "") or "").strip()
+    if not expected:
+        raise HTTPException(status_code=400, detail="Chưa bật điều khiển trên màn hình")
+    if pin != expected:
+        await asyncio.sleep(1)  # làm chậm dò mã
+        raise HTTPException(status_code=401, detail="Mã PIN không đúng")
+    token = secrets.token_hex(16)
+    tokens = _display_tokens(request.app)
+    now = datetime.now()
+    for k in [k for k, exp in tokens.items() if exp < now]:
+        del tokens[k]  # dọn token hết hạn luôn
+    tokens[token] = now + timedelta(seconds=DISPLAY_UNLOCK_SECONDS)
+    log_event(request.app.state.db, "display", "Màn hình mở khóa điều khiển")
+    return {"token": token, "expires_in": DISPLAY_UNLOCK_SECONDS}
+
+
+class DisplayCommandIn(BaseModel):
+    token: str
+    entity: int
+    command: str  # on | off | set
+    params: dict = {}
+
+
+@router.post("/display/command")
+async def display_command(request: Request, body: DisplayCommandIn):
+    tokens = _display_tokens(request.app)
+    expiry = tokens.get(str(body.token or ""))
+    if not expiry or expiry < datetime.now():
+        raise HTTPException(status_code=401, detail="Phiên mở khóa hết hạn, nhập lại mã PIN")
+    from server.api.devices import run_entity_command
+    state = await run_entity_command(request.app, body.entity, body.command, body.params)
+    return {"state": state}
 
 
 @router.post("/pair", status_code=201)
@@ -345,6 +414,9 @@ def get_settings(request: Request, _: None = Depends(require_admin)):
         "retention": {
             "days": int(cfg.get("retention.days", 30)),
         },
+        "display": {
+            "pin_set": bool(cfg.get("display.pin", "")),
+        },
     }
 
 
@@ -360,6 +432,7 @@ class SettingsIn(BaseModel):
     advertise_mdns: bool | None = None  # applies after restart
     retention_days: int | None = None
     admin_token: str | None = None
+    display_pin: str | None = None  # None=giữ nguyên, ""=xóa, "1234"=đặt mã mới
 
 
 @router.post("/settings")
@@ -405,6 +478,12 @@ def update_settings(request: Request, body: SettingsIn, _: None = Depends(requir
             raise HTTPException(status_code=400, detail="Token quá ngắn (tối thiểu 6 ký tự)")
         apply("server", "admin_token", new_token)
         token_changed = True
+
+    if body.display_pin is not None:
+        pin = body.display_pin.strip()
+        if pin and not (len(pin) == 4 and pin.isdigit()):
+            raise HTTPException(status_code=400, detail="Mã PIN màn hình phải đúng 4 chữ số")
+        apply("display", "pin", pin)
 
     # live effects
     zigbee = app.state.drivers.get("zigbee")

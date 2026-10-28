@@ -569,13 +569,13 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         return act_weather(weather, weather_day(norm),
                            rain=rain_question(norm), evening=evening_question(norm))
 
-    # power questions: solar home, grid draw is ~0 W and misleading; nhà không
-    # theo dõi điện năng nữa nên mọi câu hỏi dạng này đều về câu trả lời tĩnh
+    # power questions: solar home, grid draw is ~0 W and misleading - trợ lý
+    # không đọc số điện bằng giọng nói; Vol/kW nằm trên tab Tổng quan
     if not (has_on or has_off) and re.search(
         r"\bcong suat\b|\bkw\b|tieu thu|\bso dien\b|\bdien nang\b|\bkwh\b|\bdien ap\b|\bvol\b", norm
     ):
-        return {"reply": "Nhà mình dùng điện mặt trời nên các số đo điện từ lưới thường rất thấp "
-                         "và không nói lên nhiều. Mình không theo dõi điện năng nữa.",
+        return {"reply": "Nhà mình dùng điện mặt trời nên các số đo từ lưới thường rất thấp "
+                         "và không nói lên nhiều.",
                 "action": None}
 
     # temperature/humidity question without a verb -> sensor

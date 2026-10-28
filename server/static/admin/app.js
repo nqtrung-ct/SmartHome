@@ -920,6 +920,15 @@ async function renderSettings() {
       </div>
     </div>
     <div class="card">
+      <h2>📺 Màn hình treo tường</h2>
+      <div class="row">
+        <label class="small muted">Mã PIN điều khiển (4 số)</label>
+        <input id="s-dpin" type="password" inputmode="numeric" maxlength="4" placeholder="${st.display.pin_set ? "•••• (đã đặt)" : "chưa đặt"}" style="width:110px">
+        <button class="small-btn danger" onclick="clearDisplayPin()">Xóa mã</button>
+        <span class="small muted">Nhập đúng mã trên màn hình để mở khóa nút điều khiển (hiệu lực 5 phút). Bỏ trống ô nhập = giữ nguyên.</span>
+      </div>
+    </div>
+    <div class="card">
       <h2>🖥 Server</h2>
       ${toggle("s-mdns", st.server.advertise_mdns, "Thông báo server qua mDNS (app điện thoại tự tìm được) — áp dụng sau khi restart")}
       <p class="small muted">Đang chạy tại <code>http://${esc(st.server.lan_ip)}:${st.server.port}</code> · trang quản trị <code>/admin</code> · màn hiển thị <code>/</code></p>
@@ -960,6 +969,7 @@ window.saveSettings = async () => {
     advertise_mdns: $("#s-mdns").checked,
     retention_days: +$("#s-retention").value || null,
     admin_token: $("#s-token").value.trim() || null,
+    display_pin: /^\d{4}$/.test($("#s-dpin").value.trim()) ? $("#s-dpin").value.trim() : null,
   };
   try {
     const res = await api("/settings", { method: "POST", body: JSON.stringify(body) });
@@ -970,6 +980,15 @@ window.saveSettings = async () => {
     }
     toast(res.changed.length ? "Đã lưu: " + res.changed.join("; ") : "Không có gì thay đổi");
     $("#s-token").value = "";
+    $("#s-dpin").value = "";
+  } catch (e) { toast("Lỗi: " + e.message); }
+};
+
+window.clearDisplayPin = async () => {
+  try {
+    const res = await api("/settings", { method: "POST", body: JSON.stringify({ display_pin: "" }) });
+    toast(res.changed.includes("display.pin") ? "Đã xóa mã PIN màn hình" : "Không có gì thay đổi");
+    renderSettings();
   } catch (e) { toast("Lỗi: " + e.message); }
 };
 

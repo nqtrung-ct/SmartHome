@@ -8,6 +8,7 @@
   --muted: #8b95a7;
   --green: #3ecf8e;
   --blue: #4f8cff;
+  --red: #ef5a6f;
   --radius: 24px;
 }
 * { box-sizing: border-box; }
@@ -32,6 +33,12 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
   background: var(--card); color: var(--muted); border: 1px solid var(--border);
   border-radius: 14px; width: 44px; height: 44px; font-size: 20px; cursor: pointer;
 }
+.lock-ind {
+  min-width: 72px; text-align: center; padding: 6px 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+  font-size: 17px; color: var(--muted); cursor: pointer; user-select: none;
+}
+.lock-ind.on { color: var(--green); border-color: rgba(62, 207, 142, .4); }
 
 main {
   flex: 1; display: grid; gap: 22px; margin-top: 26px;
@@ -49,6 +56,7 @@ main {
 }
 .card h2 { margin: 0 0 18px; font-size: 19px; font-weight: 600; color: var(--muted); }
 .muted { color: var(--muted); }
+.small { font-size: 13.5px; }
 
 /* --- weather --- */
 .weather-top { display: flex; align-items: center; gap: 18px; }
@@ -62,47 +70,74 @@ main {
 .w-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .w-range { margin-top: 16px; font-size: 15px; text-align: center; }
 
-/* --- hero summary (gradient, like the scene card in the mockup) --- */
-.hero {
-  background: linear-gradient(135deg, #2a5cf6 0%, #7c3aed 55%, #b5179e 100%);
-  border: none; color: #fff;
-}
-.hero-title { font-size: 20px; font-weight: 700; }
-.hero-nums { font-size: 26px; margin-top: 10px; }
-.hero-nums b { font-size: 44px; font-weight: 800; }
-.hero-sub { margin-top: 6px; font-size: 15px; color: rgba(255, 255, 255, .8); }
-
-/* --- rooms --- */
-.room-list { display: flex; flex-direction: column; gap: 12px; }
-.room {
-  display: flex; align-items: center; gap: 16px;
-  background: var(--card2); border-radius: 18px; padding: 18px 22px;
-}
-.dot { width: 12px; height: 12px; border-radius: 50%; background: #4a5468; flex: none; }
-.dot.on { background: var(--green); box-shadow: 0 0 12px rgba(62, 207, 142, .7); }
-.room .r-name { font-size: 21px; font-weight: 600; }
-.room .r-sub { font-size: 14px; color: var(--muted); margin-top: 2px; }
-.room .r-right { margin-left: auto; text-align: right; }
-.room .r-temp { font-size: 26px; font-weight: 700; }
-.room .r-hum { font-size: 13.5px; color: var(--muted); }
+/* --- room cards --- */
+.room-grid { display: flex; flex-direction: column; gap: 16px; }
+.room-card { padding: 20px 24px; }
+.room-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+.room-name { font-size: 22px; font-weight: 700; }
 .badge {
   display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12.5px;
-  background: rgba(79, 140, 255, .15); color: var(--blue); margin-left: 8px; vertical-align: middle;
+  background: rgba(79, 140, 255, .15); color: var(--blue); margin-left: 6px; vertical-align: middle;
+}
+.room-env { margin-left: auto; display: flex; align-items: baseline; gap: 14px; }
+.room-temp { font-size: 28px; font-weight: 700; }
+.room-hum { font-size: 14px; color: var(--muted); }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.chip {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card2); border: 1px solid transparent; border-radius: 16px;
+  padding: 10px 16px; min-width: 130px;
+}
+.chip.ctl { cursor: pointer; }
+.chip.ctl:hover { border-color: var(--blue); }
+.chip.on { border-color: rgba(62, 207, 142, .45); }
+.chip-ic { font-size: 24px; }
+.chip-body { display: flex; flex-direction: column; }
+.chip-name { font-size: 15.5px; font-weight: 600; }
+.chip-st { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+.chip.on .chip-st { color: var(--green); }
+.ir-tag {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 10px;
+  font-size: 10.5px; background: rgba(167, 97, 238, .18); color: #c9a6ff;
 }
 
-/* --- devices grid --- */
-.dev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-.dev { text-align: center; }
-.dev b { display: block; font-size: 26px; margin-top: 8px; }
-.dev span:last-child { font-size: 13.5px; }
-.dev-ic {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 64px; height: 64px; border-radius: 50%; font-size: 30px;
+/* --- buttons --- */
+.btn {
+  background: var(--card2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  padding: 12px 26px; font-size: 17px; cursor: pointer;
 }
-.ic-yellow { background: rgba(255, 193, 7, .14); }
-.ic-blue   { background: rgba(79, 140, 255, .16); }
-.ic-green  { background: rgba(62, 207, 142, .14); }
-.ic-purple { background: rgba(167, 97, 238, .16); }
+.btn:hover { border-color: var(--blue); }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+.btn.danger { background: transparent; border-color: rgba(239, 90, 111, .5); color: var(--red); }
+.btn.ghost { background: transparent; color: var(--muted); }
+.row-center { display: flex; justify-content: center; gap: 12px; margin-top: 6px; }
+
+/* --- overlays (PIN + control) --- */
+.overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(5, 8, 14, .72); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+}
+.overlay.hidden { display: none; }
+.pin-box, .ctrl-box { width: min(420px, 92vw); text-align: center; }
+.pin-box h2, .ctrl-head { text-align: left; }
+.pin-input {
+  width: 180px; margin-top: 12px; padding: 14px; font-size: 30px; letter-spacing: 14px;
+  text-align: center; background: var(--card2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px; outline: none;
+}
+.pin-input:focus { border-color: var(--blue); }
+.pin-error { min-height: 22px; margin-top: 10px; color: var(--red); font-size: 14px; }
+.pin-box .row-center { margin-top: 8px; }
+
+.ctrl-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.ctrl-icon { font-size: 40px; }
+.ctrl-name { font-size: 22px; font-weight: 700; }
+.ctrl-head .btn { margin-left: auto; padding: 10px 14px; }
+.temp-row { display: flex; align-items: center; justify-content: center; gap: 22px; margin-bottom: 14px; }
+.temp-num { font-size: 40px; font-weight: 700; }
 
 /* --- timers --- */
 .timer { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
@@ -110,9 +145,6 @@ main {
 .t-time { font-size: 20px; font-weight: 700; color: var(--green); white-space: nowrap; }
 .t-msg { font-size: 16px; }
 .t-room { font-size: 13px; color: var(--muted); }
-
-footer { margin-top: 22px; color: var(--muted); font-size: 13px; }
-footer a { color: var(--muted); }
 
 /* wall displays are often portrait or small - keep it usable */
 @media (max-width: 1200px) {

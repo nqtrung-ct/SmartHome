@@ -31,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
         "wsdiscovery": True,
     },
     "broadlink": {"timeout": 5},
+    "display": {"pin": ""},  # mã 4 số mở khóa điều khiển trên màn hình treo tường
     "retention": {"days": 30},
 }
 

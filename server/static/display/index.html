@@ -13,13 +13,14 @@
     <p id="dateline">&nbsp;</p>
   </div>
   <div class="clock">
+    <span id="lock-ind" class="lock-ind" title="Trạng thái mở khóa điều khiển">🔒</span>
     <div id="clock">--:--</div>
     <button id="fullscreen" title="Toàn màn hình">⛶</button>
   </div>
 </header>
 
 <main id="grid">
-  <!-- cột trái: thời tiết + tổng quan -->
+  <!-- cột trái: thời tiết -->
   <section class="col-left">
     <div class="card weather">
       <div class="weather-top">
@@ -36,39 +37,51 @@
       </div>
       <div class="w-range muted" id="w-range">cao nhất --° · thấp nhất --°</div>
     </div>
-
-    <div class="card hero">
-      <div class="hero-title">Tổng quan nhà</div>
-      <div class="hero-nums"><b id="h-on">–</b> thiết bị đang bật</div>
-      <div class="hero-sub muted"><span id="h-rooms">–</span> phòng · <span id="h-timers">–</span> hẹn giờ chờ</div>
-    </div>
   </section>
 
-  <!-- cột giữa: trạng thái phòng -->
+  <!-- cột giữa: card từng phòng (chỉ phòng có cảm biến nhiệt độ) -->
   <section class="col-mid">
-    <div class="card rooms">
-      <h2>Trạng thái phòng</h2>
-      <div id="room-list" class="room-list"><p class="muted">Đang tải…</p></div>
-    </div>
+    <div id="room-grid" class="room-grid"><p class="muted">Đang tải…</p></div>
   </section>
 
-  <!-- cột phải: thiết bị + hẹn giờ -->
+  <!-- cột phải: hẹn giờ -->
   <section class="col-right">
-    <div class="card">
-      <h2>Thiết bị</h2>
-      <div class="dev-grid">
-        <div class="dev"><span class="dev-ic ic-yellow">💡</span><b id="d-lights">–</b><span class="muted">đèn bật</span></div>
-        <div class="dev"><span class="dev-ic ic-blue">❄️</span><b id="d-ac">–</b><span class="muted">điều hòa</span></div>
-        <div class="dev"><span class="dev-ic ic-green">🌡️</span><b id="d-sensors">–</b><span class="muted">cảm biến</span></div>
-        <div class="dev"><span class="dev-ic ic-purple">🎥</span><b id="d-cams">–</b><span class="muted">camera</span></div>
-      </div>
-    </div>
     <div class="card">
       <h2>Hẹn giờ sắp tới</h2>
       <div id="timer-list"><p class="muted">Không có hẹn giờ.</p></div>
     </div>
   </section>
 </main>
+
+<!-- modal nhập mã PIN để mở khóa điều khiển -->
+<div id="pin-overlay" class="overlay hidden">
+  <div class="pin-box card">
+    <h2>🔒 Mở khóa điều khiển</h2>
+    <p class="muted small">Nhập mã PIN 4 số (hiệu lực 5 phút)</p>
+    <input id="pin-input" class="pin-input" type="password" inputmode="numeric"
+           maxlength="4" autocomplete="off" placeholder="••••">
+    <div id="pin-error" class="pin-error"></div>
+    <div class="row-center">
+      <button id="pin-cancel" class="btn ghost">Đóng</button>
+      <button id="pin-ok" class="btn primary">Mở khóa</button>
+    </div>
+  </div>
+</div>
+
+<!-- bảng điều khiển thiết bị -->
+<div id="ctrl-overlay" class="overlay hidden">
+  <div class="ctrl-box card">
+    <div class="ctrl-head">
+      <span id="ctrl-icon" class="ctrl-icon">🔌</span>
+      <div>
+        <div id="ctrl-name" class="ctrl-name">Thiết bị</div>
+        <div id="ctrl-room" class="muted small">Phòng</div>
+      </div>
+      <button id="ctrl-close" class="btn ghost">✕</button>
+    </div>
+    <div id="ctrl-body"></div>
+  </div>
+</div>
 
 <script src="display.js"></script>
 </body>
