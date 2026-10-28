@@ -915,14 +915,43 @@ window.cancelTimer = async (id) => {
 
 // ---------------------------------------------------------------- events
 
-async function renderEvents() {
+let eventsDate = "";  // YYYY-MM-DD đang xem; rỗng = hôm nay
+
+const localDateStr = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+window.setEventsDate = (delta) => {
+  const [y, m, d] = eventsDate.split("-").map(Number);
+  eventsDate = localDateStr(new Date(y, m - 1, d + delta));
+  document.activeElement?.blur();
+  renderEvents(true);
+};
+
+window.onEventsDatePick = (value) => {
+  eventsDate = value;
+  document.activeElement?.blur();
+  renderEvents(true);
+};
+
+async function renderEvents(force = false) {
   const el = $("#tab-events");
-  const rows = await api("/events?limit=200").catch(() => []);
-  el.innerHTML = `<div class="card"><h2>📜 Nhật ký</h2>
-    ${rows.length ? `<table><tr><th>Thời gian</th><th>Nguồn</th><th>Nội dung</th></tr>
-      ${rows.map((r) => `<tr><td class="small muted" style="white-space:nowrap">${esc(r.ts)}</td>
+  // đang chọn ngày trên calendar thì đừng vẽ lại (sẽ đóng popup + mất focus)
+  if (!force && el.contains(document.activeElement)) return;
+  if (!eventsDate) eventsDate = localDateStr();
+  const rows = await api(`/events?date=${eventsDate}`).catch(() => []);
+  const today = localDateStr();
+  el.innerHTML = `<div class="card"><h2>📜 Nhật ký ${eventsDate === today ? "(hôm nay)" : ""}</h2>
+    <div class="row" style="margin-bottom:10px">
+      <button class="small-btn" onclick="setEventsDate(-1)">◀</button>
+      <input type="date" value="${eventsDate}" onchange="onEventsDatePick(this.value)" style="width:170px">
+      <button class="small-btn" onclick="setEventsDate(1)">▶</button>
+      ${eventsDate !== today ? `<button class="small-btn" onclick="onEventsDatePick('${today}')">Hôm nay</button>` : ""}
+      <span class="small muted">${rows.length} dòng</span>
+    </div>
+    ${rows.length ? `<table><tr><th>Giờ</th><th>Nguồn</th><th>Nội dung</th></tr>
+      ${rows.map((r) => `<tr><td class="small muted" style="white-space:nowrap">${esc(r.ts.slice(11, 19))}</td>
         <td><span class="badge ${r.level === "warn" ? "off" : ""}">${esc(r.source)}</span></td>
-        <td>${esc(r.message)}</td></tr>`).join("")}</table>` : "<p class='muted'>Trống.</p>"}
+        <td>${esc(r.message)}</td></tr>`).join("")}</table>` : "<p class='muted'>Không có gì trong ngày này.</p>"}
   </div>`;
 }
 

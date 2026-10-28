@@ -1,6 +1,8 @@
 """Console + shared read endpoints: overview, text command, timers, events."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
@@ -101,8 +103,19 @@ def cancel_timer(request: Request, timer_id: int, _: None = Depends(require_admi
 
 
 @router.get("/events")
-def events(request: Request, limit: int = 200, _: None = Depends(require_admin)):
-    rows = request.app.state.db.query(
-        "SELECT * FROM events ORDER BY id DESC LIMIT ?", (min(limit, 1000),)
-    )
+def events(request: Request, limit: int = 200, date: str = "", _: None = Depends(require_admin)):
+    """Không có `date`: N dòng mới nhất. Có `date` (YYYY-MM-DD): cả ngày đó, theo thứ tự thời gian."""
+    db = request.app.state.db
+    if date:
+        try:
+            day = datetime.fromisoformat(date[:10]).date()
+        except ValueError:
+            day = None
+        if day:
+            rows = db.query(
+                "SELECT * FROM events WHERE ts>=? AND ts<? ORDER BY id DESC LIMIT 1000",
+                (day.isoformat(), (day + timedelta(days=1)).isoformat()),
+            )
+            return [dict(r) for r in rows]
+    rows = db.query("SELECT * FROM events ORDER BY id DESC LIMIT ?", (min(limit, 1000),))
     return [dict(r) for r in rows]
