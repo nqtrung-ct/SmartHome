@@ -131,6 +131,7 @@ class EntityPatch(BaseModel):
     aliases: str | None = None
     driver_data: dict | None = None
     room_id: int | None = None  # None = theo phòng của thiết bị gốc
+    entity_type: str | None = None
 
 
 @router.post("/devices/{device_id}/entities", status_code=201)
@@ -169,12 +170,24 @@ def patch_entity(request: Request, entity_id: int, body: EntityPatch, _: None = 
         ):
             raise HTTPException(status_code=404, detail="Không có phòng này")
         db.execute("UPDATE entities SET room_id=? WHERE id=?", (body.room_id, entity_id))
+    if body.entity_type is not None:
+        if body.entity_type not in ("switch", "light", "climate", "sensor", "camera"):
+            raise HTTPException(status_code=400, detail="entity_type không hợp lệ")
+        db.execute("UPDATE entities SET entity_type=? WHERE id=?", (body.entity_type, entity_id))
     return {"ok": True}
 
 
 @router.delete("/entities/{entity_id}")
 def delete_entity(request: Request, entity_id: int, _: None = Depends(require_admin)):
-    request.app.state.db.execute("DELETE FROM entities WHERE id=?", (entity_id,))
+    db = request.app.state.db
+    row = db.one("SELECT device_id FROM entities WHERE id=?", (entity_id,))
+    db.execute("DELETE FROM entities WHERE id=?", (entity_id,))
+    if row and not db.one("SELECT id FROM entities WHERE device_id=?", (row["device_id"],)):
+        # hết thực thể thì bỏ luôn phần cứng để không còn thiết bị ma tàng hình trong DB
+        device = db.one("SELECT name FROM devices WHERE id=?", (row["device_id"],))
+        db.execute("DELETE FROM devices WHERE id=?", (row["device_id"],))
+        if device:
+            log_event(db, "admin", f"Đã xóa thiết bị '{device['name']}' (hết thiết bị)")
     return {"ok": True}
 
 

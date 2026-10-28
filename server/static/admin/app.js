@@ -9,6 +9,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 let token = localStorage.getItem("sh_token") || "";
 let eventsTimer = null;
 let floorsCache = [];
+let devicesCache = [];
+let roomsCache = [];
 
 async function loadFloors() {
   floorsCache = await api("/floors").catch(() => []);
@@ -23,6 +25,12 @@ const roomLabel = (r) => (r.floor ? `${r.floor} · ${r.name}` : r.name);
 function roomSelectOptions(rooms, selected) {
   return `<option value="">— chưa gán —</option>` + rooms.map((r) =>
     `<option value="${r.id}" ${r.id === selected ? "selected" : ""}>${esc(roomLabel(r))}</option>`).join("");
+}
+
+// phòng riêng của thiết bị; rỗng = kế thừa phòng thiết bị gốc
+function entityRoomOptions(rooms, own) {
+  return `<option value="">— theo thiết bị gốc —</option>` + rooms.map((r) =>
+    `<option value="${r.id}" ${r.id === own ? "selected" : ""}>${esc(roomLabel(r))}</option>`).join("");
 }
 
 // ---------------------------------------------------------------- api helper
@@ -543,22 +551,11 @@ function micCleanup() {
 
 // ---------------------------------------------------------------- devices
 
-// "Điều khiển" = hubs that command other devices (IR remote); only these take
-// manual entities - Tuya/Zigbee entities come from adoption, cameras stand alone
-function isControllerDevice(d) {
-  return d.driver === "broadlink";
-}
-
-function deviceTypeVi(driver) {
-  return {
-    broadlink: "Điều khiển", tuya: "Tuya WiFi", zigbee: "Zigbee",
-    onvif: "Camera", generic: "Khác", dummy: "Ảo (test)",
-  }[driver] || driver;
-}
-
 async function renderDevices() {
   const el = $("#tab-devices");
   const [devices, rooms] = await Promise.all([api("/devices"), api("/rooms"), loadFloors()]);
+  devicesCache = devices;
+  roomsCache = rooms;
 
   if (!devices.length) {
     el.innerHTML = `
@@ -581,14 +578,11 @@ async function renderDevices() {
     byRoom.get(rid).push(it);
   }
 
-  const entityRoomOptions = (own) =>
-    `<option value="">— theo thiết bị gốc —</option>` + rooms.map((r) =>
-      `<option value="${r.id}" ${r.id === own ? "selected" : ""}>${esc(roomLabel(r))}</option>`).join("");
-
   const entityRow = ([e, d]) => {
     const data = safeJson(e.driver_data);
     const codes = Object.keys(data.codes || {});
-    const readonly = isReadonly(e) || e.entity_type === "controller";
+    const isHub = e.entity_type === "controller";
+    const readonly = isReadonly(e) || isHub;
     const controls = (e.entity_type === "switch" || e.entity_type === "light") && !readonly
       ? `<button class="small-btn" onclick="cmdEntity(${e.id},'on')">Bật</button>
          <button class="small-btn" onclick="cmdEntity(${e.id},'off')">Tắt</button>` : "";
@@ -607,7 +601,7 @@ async function renderDevices() {
         </div>
         <div class="row">
           ${controls}
-          <select onchange="setEntityRoom(${e.id}, this.value)" title="Phòng của thiết bị">${entityRoomOptions(e.room_id)}</select>
+          <button class="small-btn" onclick="openEditModal(${e.id})" title="Sửa tên, phòng, thiết bị con">✏️</button>
           <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
         </div>
       </div>${learnUi}`;
@@ -638,63 +632,27 @@ async function renderDevices() {
     ? `<div class="floor-col"><h3 class="floor-heading">📦 Chưa gán phòng</h3>
          <div class="card">${unassigned.map(entityRow).join("")}</div></div>` : "";
 
-  // phần cứng gốc: đổi IP/ten, xóa, thêm thực thể cho hub
-  const hardware = devices.map((d) => `
-    <div class="entity" style="flex-wrap:wrap">
-      <div style="flex:1;min-width:0">
-        <div class="name">${esc(d.name)} <span class="badge">${esc(deviceTypeVi(d.driver))}</span></div>
-        <div class="sub">${d.host ? esc(d.host) + " · " : ""}${d.entities.length} thực thể</div>
-      </div>
-      <div class="row">
-        <select onchange="setDeviceRoom(${d.id}, this.value)" title="Phòng mặc định cho các thực thể con">
-          ${roomSelectOptions(rooms, d.room_id)}</select>
-        <button class="small-btn danger" onclick="delDevice(${d.id})">✕</button>
-      </div>
-      ${isControllerDevice(d) ? `
-      <div class="row" style="flex-basis:100%;padding-top:6px">
-        <input id="ent-name-${d.id}" placeholder="Tên thực thể (VD: Điều hòa)" style="width:180px">
-        <select id="ent-type-${d.id}">
-          <option value="switch">công tắc</option><option value="light">đèn</option>
-          <option value="climate">điều hòa</option><option value="sensor">cảm biến</option>
-        </select>
-        <input id="ent-alias-${d.id}" placeholder="Bí danh (VD: điều hòa, máy lạnh)" style="width:200px">
-        <button class="small-btn" onclick="addEntity(${d.id})">+ Thực thể</button>
-      </div>` : ""}
-    </div>`).join("");
-
   el.innerHTML = `
     <div class="row" style="margin-bottom:14px">
       <button class="primary" onclick="openDeviceModal()">➕ Thêm thiết bị thủ công</button>
-      <span class="small muted">Đổi phòng từng thiết bị bằng ô chọn trên dòng của nó. Phần cứng gốc (hub, IP) ở cuối trang.</span>
+      <span class="small muted">Nhấn ✏️ để sửa tên, phòng (và thiết bị con với điều khiển).</span>
     </div>
-    <div class="floor-columns">${columns}${unassignedCol}</div>
-    <div class="card" style="margin-top:16px"><h2>🔧 Thiết bị gốc</h2>${hardware}</div>`;
+    <div class="floor-columns">${columns}${unassignedCol}</div>`;
 }
 
-window.setEntityRoom = async (id, roomId) => {
-  await api(`/entities/${id}`, { method: "PATCH", body: JSON.stringify({ room_id: +roomId || null }) });
-  renderDevices();  // item di chuyển sang section phòng mới ngay
-};
-window.setDeviceRoom = async (id, roomId) => {
-  await api(`/devices/${id}`, { method: "PATCH", body: JSON.stringify({ room_id: +roomId || null }) });
-  renderDevices();
-};
-window.delDevice = async (id) => {
-  if (!confirm("Xóa thiết bị này?")) return;
-  await api(`/devices/${id}`, { method: "DELETE" }); renderDevices();
-};
-window.addEntity = async (deviceId) => {
-  const body = {
-    name: $(`#ent-name-${deviceId}`).value.trim(),
-    entity_type: $(`#ent-type-${deviceId}`).value,
-    aliases: $(`#ent-alias-${deviceId}`).value.trim(),
-  };
-  if (!body.name) { toast("Nhập tên thực thể trước đã"); return; }
-  await api(`/devices/${deviceId}/entities`, { method: "POST", body: JSON.stringify(body) }).catch((e) => toast(e.message));
-  renderDevices();
-};
 window.delEntity = async (id) => {
-  await api(`/entities/${id}`, { method: "DELETE" }); renderDevices();
+  const d = devicesCache.find((x) => x.entities.some((e) => e.id === id));
+  const e = d && d.entities.find((x) => x.id === id);
+  if (e && e.entity_type === "controller") {
+    // xóa hub = xóa cả thiết bị con gắn với nó
+    const n = d.entities.length - 1;
+    if (!confirm(n ? `Xóa '${e.name}' sẽ xóa luôn ${n} thiết bị con?` : `Xóa '${e.name}'?`)) return;
+    await api(`/devices/${d.id}`, { method: "DELETE" });
+  } else {
+    if (!confirm(`Xóa '${e ? e.name : id}'?`)) return;
+    await api(`/entities/${id}`, { method: "DELETE" });
+  }
+  renderDevices();
 };
 window.cmdEntity = async (id, command) => {
   try { await api(`/entities/${id}/command`, { method: "POST", body: JSON.stringify({ command }) }); }
@@ -814,6 +772,107 @@ $("#m-save").onclick = async () => {
   } catch (e) {
     err.textContent = "Lỗi: " + e.message;
   }
+};
+
+// ---------------------------------------------------------------- edit device modal
+
+let editCtx = null; // {e, d, removed: Set<childId>}
+
+function childRow(c) {
+  const type = c ? c.entity_type : "climate";
+  const opt = (v, label) => `<option value="${v}" ${type === v ? "selected" : ""}>${label}</option>`;
+  return `<div class="row ec-row" data-id="${c ? c.id : ""}" style="margin-bottom:6px">
+    <input class="ec-name" placeholder="Tên (VD: Điều hòa)" style="width:150px" value="${esc(c ? c.name : "")}">
+    <select class="ec-type">${opt("switch", "công tắc")}${opt("light", "đèn")}${opt("climate", "điều hòa")}${opt("sensor", "cảm biến")}</select>
+    <input class="ec-alias" placeholder="Bí danh (máy lạnh...)" style="width:150px" value="${esc(c ? c.aliases : "")}">
+    <button class="small-btn danger" onclick="removeChildRow(this)" title="Xóa thiết bị con">✕</button>
+  </div>`;
+}
+
+window.openEditModal = (entityId) => {
+  const d = devicesCache.find((x) => x.entities.some((e) => e.id === entityId));
+  const e = d && d.entities.find((x) => x.id === entityId);
+  if (!e || !d) return;
+  const isHub = e.entity_type === "controller";
+  editCtx = { e, d, removed: new Set() };
+  $("#e-title").textContent = isHub ? "✏️ Sửa điều khiển" : "✏️ Sửa thiết bị";
+  $("#e-name").value = e.name;
+  $("#e-alias").value = e.aliases || "";
+  $("#e-hw").textContent = `Thiết bị gốc: ${d.name}${d.host ? " · " + d.host : ""}`;
+  // hub: sửa phòng của thiết bị gốc; thiết bị thường: phòng riêng
+  $("#e-room").innerHTML = isHub
+    ? roomSelectOptions(roomsCache, d.room_id)
+    : entityRoomOptions(roomsCache, e.room_id);
+  $("#e-children-wrap").classList.toggle("hidden", !isHub);
+  if (isHub) {
+    const children = d.entities.filter((x) => x.id !== e.id);
+    $("#e-children").innerHTML = children.map(childRow).join("")
+      || `<p class="small muted">Chưa có thiết bị con. Thêm rồi học mã IR ngay trên dòng của nó ở tab Thiết bị.</p>`;
+  }
+  $("#edit-modal").classList.remove("hidden");
+  $("#e-name").focus();
+};
+
+window.removeChildRow = (btn) => {
+  const row = btn.parentElement;
+  if (row.dataset.id) editCtx.removed.add(+row.dataset.id);
+  row.remove();
+};
+
+$("#e-add-child").onclick = () => {
+  const empty = $("#e-children .small.muted");
+  if (empty) empty.remove();
+  $("#e-children").insertAdjacentHTML("beforeend", childRow(null));
+};
+$("#e-cancel").onclick = () => $("#edit-modal").classList.add("hidden");
+
+$("#e-save").onclick = async () => {
+  const { e, d, removed } = editCtx;
+  const isHub = e.entity_type === "controller";
+  const name = $("#e-name").value.trim();
+  const aliases = $("#e-alias").value.trim();
+  const roomId = +$("#e-room").value || null;
+  if (!name) { toast("Nhập tên thiết bị"); return; }
+  try {
+    await api(`/entities/${e.id}`, { method: "PATCH", body: JSON.stringify({ name, aliases }) });
+    if (isHub) {
+      await api(`/devices/${d.id}`, { method: "PATCH", body: JSON.stringify({ room_id: roomId }) });
+      for (const id of removed) await api(`/entities/${id}`, { method: "DELETE" });
+      for (const row of $$("#e-children .ec-row")) {
+        const child = {
+          name: row.querySelector(".ec-name").value.trim(),
+          entity_type: row.querySelector(".ec-type").value,
+          aliases: row.querySelector(".ec-alias").value.trim(),
+        };
+        if (!child.name) continue;
+        if (row.dataset.id) {
+          await api(`/entities/${row.dataset.id}`, { method: "PATCH", body: JSON.stringify(child) });
+        } else {
+          await api(`/devices/${d.id}/entities`, { method: "POST", body: JSON.stringify(child) });
+        }
+      }
+    } else {
+      await api(`/entities/${e.id}`, { method: "PATCH", body: JSON.stringify({ room_id: roomId }) });
+    }
+    $("#edit-modal").classList.add("hidden");
+    renderDevices();
+    toast("Đã lưu");
+  } catch (err) {
+    toast("Lỗi: " + err.message);
+  }
+};
+
+$("#e-delete").onclick = async () => {
+  const { e, d } = editCtx;
+  const isHub = e.entity_type === "controller";
+  const n = isHub ? d.entities.length - 1 : 0;
+  const msg = isHub && n ? `Xóa '${e.name}' sẽ xóa luôn ${n} thiết bị con?` : `Xóa '${e.name}'?`;
+  if (!confirm(msg)) return;
+  // hub hoặc thiết bị cuối cùng của phần cứng: xóa cả phần cứng
+  if (isHub || d.entities.length === 1) await api(`/devices/${d.id}`, { method: "DELETE" });
+  else await api(`/entities/${e.id}`, { method: "DELETE" });
+  $("#edit-modal").classList.add("hidden");
+  renderDevices();
 };
 
 // ---------------------------------------------------------------- discovery

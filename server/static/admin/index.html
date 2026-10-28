@@ -70,6 +70,36 @@
   </div>
 </div>
 
+<div id="edit-modal" class="overlay hidden">
+  <div class="card modal-card">
+    <h2 id="e-title">✏️ Sửa thiết bị</h2>
+    <label>Tên thiết bị
+      <input id="e-name">
+    </label>
+    <label>Bí danh (nhiều cái cách nhau dấu phẩy)
+      <input id="e-alias" placeholder="VD: điều hòa, máy lạnh">
+    </label>
+    <label>Phòng
+      <select id="e-room"></select>
+    </label>
+    <div id="e-hw" class="small muted" style="margin:4px 0 10px"></div>
+    <div id="e-children-wrap" class="hidden">
+      <h3 style="margin:10px 0 6px">Thiết bị con (điều khiển qua hồng ngoại)</h3>
+      <div id="e-children"></div>
+      <div class="row" style="margin-top:6px">
+        <button class="small-btn" id="e-add-child">＋ Thiết bị con</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:16px;justify-content:space-between">
+      <button class="small-btn danger" id="e-delete">🗑 Xóa</button>
+      <div class="row">
+        <button id="e-cancel">Hủy</button>
+        <button class="primary" id="e-save">💾 Lưu</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <header>
   <h1>🏠 SmartHome</h1>
   <nav id="tabs">
