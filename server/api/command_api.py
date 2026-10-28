@@ -22,7 +22,8 @@ def overview(request: Request, _: None = Depends(require_admin)):
         entities = db.query(
             """SELECT e.*, d.name AS device_name, d.driver FROM entities e
                JOIN devices d ON d.id=e.device_id
-               WHERE COALESCE(e.room_id, d.room_id)=? ORDER BY e.id""",
+               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type!='controller'
+               ORDER BY e.id""",
             (room["id"],),
         )
         rooms.append({
@@ -40,7 +41,8 @@ def overview(request: Request, _: None = Depends(require_admin)):
     unassigned = db.query(
         """SELECT e.*, d.name AS device_name, d.driver FROM entities e
            JOIN devices d ON d.id=e.device_id
-           WHERE COALESCE(e.room_id, d.room_id) IS NULL ORDER BY e.id"""
+           WHERE COALESCE(e.room_id, d.room_id) IS NULL AND e.entity_type!='controller'
+           ORDER BY e.id"""
     )
     return {
         "rooms": rooms,

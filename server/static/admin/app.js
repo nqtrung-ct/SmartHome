@@ -125,10 +125,7 @@ async function renderDashboard() {
       const entities = room.entities.map((e) => {
         const state = safeJson(e.state);
         let control = "";
-        if (e.entity_type === "controller") {
-          // always-on IR hub: green dot, no controls
-          control = `<span class="small ok">● Đang bật</span>`;
-        } else if (e.entity_type === "switch" || e.entity_type === "light") {
+        if (e.entity_type === "switch" || e.entity_type === "light") {
           if (e.readonly) {
             control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
           } else {
@@ -139,7 +136,7 @@ async function renderDashboard() {
           const temp = state.temperature || 26;
           control = `<span class="small muted">
               <input type="number" id="temp-${e.id}" value="${temp}" min="16" max="30" style="width:60px">
-              <button class="small-btn" onclick="setClimate(${e.id})">Đặt</button>
+              <button class="small-btn" onclick="setClimate(${e.id})">Bật</button>
               <button class="small-btn" onclick="climateOff(${e.id})">Tắt</button>
             </span>`;
         } else if (e.entity_type === "sensor") {
@@ -162,7 +159,7 @@ async function renderDashboard() {
 
   el.innerHTML = columns
     ? `<div class="floor-columns">${columns}</div>`
-    : `<div class="card muted">Chưa có phòng nào có thiết bị. Thêm phòng ở tab <b>Phòng &amp; tầng</b>, rồi thêm thiết bị ở tab <b>Quét mạng</b> hoặc <b>Thiết bị</b>.<br><span class="small">Phòng đã tạo nhưng chưa có thiết bị sẽ được ẩn ở trang này.</span></div>`;
+    : `<div class="card muted">Chưa có phòng nào có thiết bị. Thêm phòng ở <b>Thiết đặt → Phòng &amp; tầng</b>, rồi thêm thiết bị ở tab <b>Quét mạng</b>.<br><span class="small">Phòng đã tạo nhưng chưa có thiết bị sẽ được ẩn ở trang này.</span></div>`;
 }
 
 function safeJson(s) { try { return JSON.parse(s || "{}"); } catch { return {}; } }

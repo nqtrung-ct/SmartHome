@@ -38,7 +38,8 @@ def display(request: Request):
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
         entities = db.query(
             """SELECT e.name, e.entity_type, e.state FROM entities e
-               JOIN devices d ON d.id=e.device_id WHERE d.room_id=?""",
+               JOIN devices d ON d.id=e.device_id
+               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type!='controller'""",
             (room["id"],),
         )
         ents = []
