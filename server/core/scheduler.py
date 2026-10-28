@@ -10,7 +10,7 @@ from server.util import now_iso, parse_iso
 
 
 async def _poll_tuya_sensors(app) -> None:
-    """Refresh tuya temp/humidity sensors for the dashboard.
+    """Refresh tuya sensor/switch states for the dashboard.
 
     Battery-powered Tuya sensors sleep between reports and refuse connections;
     on failure keep the last known state quietly.
@@ -22,7 +22,7 @@ async def _poll_tuya_sensors(app) -> None:
     rows = db.query(
         """SELECT e.id AS eid, e.driver_data, d.id AS did, d.host, d.extra
            FROM entities e JOIN devices d ON d.id = e.device_id
-           WHERE e.entity_type='sensor' AND d.driver='tuya'"""
+           WHERE e.entity_type IN ('sensor', 'switch') AND d.driver='tuya'"""
     )
     for row in rows:
         entity = {"id": row["eid"], "driver_data": row["driver_data"]}

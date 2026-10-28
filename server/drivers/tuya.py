@@ -11,29 +11,41 @@ from server.db import Database
 from server.drivers.base import Driver, DriverError, Row, loads
 
 # Most temp/humidity sensors expose: dps 1 temperature, 2 humidity, 3 battery.
-FALLBACK_SENSOR_DPS = {"temperature": 1, "humidity": 2}
+FALLBACK_SENSOR_DPS = {
+    "temperature": {"dps": 1, "scale": 1},
+    "humidity": {"dps": 2, "scale": 1},
+}
 
 
 def _sensor_dps_map(dps: dict) -> dict:
-    """Guess {metric: dps id} from a status snapshot.
+    """Guess {metric: {dps, scale}} from a status snapshot.
 
     Tuya temp/humidity sensors use ascending dps ids (temperature, humidity,
-    battery). Only trusted for devices without a bool (on/off) channel -
-    a metering breaker's current/power readings also fall in the numeric
-    ranges and must not become a bogus "sensor".
+    battery). Many LED display models report tenths (323 = 32.3°C), which the
+    [100, 600] branch catches. Only trusted for devices without a bool
+    (on/off) channel - a metering breaker's current/power readings also fall
+    in the numeric ranges and must not become a bogus "sensor".
     """
     nums = sorted(
         (int(k), v) for k, v in dps.items()
         if isinstance(v, (int, float)) and not isinstance(v, bool)
     )
-    mapping: dict[str, int] = {}
+    mapping: dict[str, dict] = {}
+
+    def temp_scale(value) -> float | None:
+        if -20 <= value <= 60:
+            return 1
+        if 100 <= value <= 600:
+            return 0.1
+        return None
+
     for key, value in nums:
-        if "temperature" not in mapping and -20 <= value <= 60:
-            mapping["temperature"] = key
+        if "temperature" not in mapping and (scale := temp_scale(value)) is not None:
+            mapping["temperature"] = {"dps": key, "scale": scale}
         elif "humidity" not in mapping and 0 <= value <= 100:
-            mapping["humidity"] = key
+            mapping["humidity"] = {"dps": key, "scale": 1}
         elif "battery" not in mapping and 0 <= value <= 100:
-            mapping["battery"] = key
+            mapping["battery"] = {"dps": key, "scale": 1}
     return mapping
 
 
@@ -135,9 +147,15 @@ class TuyaDriver(Driver):
     def get_state(self, entity: Row, device: Row) -> dict:
         dps = self._status_dps(device)
         data = loads(entity["driver_data"])
-        if data.get("dps_map"):  # sensor entity: translate dps ids -> metrics
-            return {
-                metric: dps.get(str(dps_id))
-                for metric, dps_id in data["dps_map"].items()
-            }
-        return dps
+        dps_map = data.get("dps_map")
+        if dps_map:  # sensor entity: translate dps ids (+scale) -> metrics
+            out = {}
+            for metric, spec in dps_map.items():
+                dps_id, scale = (spec["dps"], spec.get("scale", 1)) if isinstance(spec, dict) else (spec, 1)
+                value = dps.get(str(dps_id))
+                if value is not None and scale != 1:
+                    value = round(value * scale, 2)
+                out[metric] = value
+            return out
+        # switch entity: report the on/off channel in the common {"state"} shape
+        return {"state": "on" if dps.get(str(data.get("dps", 1))) else "off"}
