@@ -109,6 +109,10 @@ class BroadlinkDriver(Driver):
             raise DriverError(f"'{entity['name']}' chưa học mã IR nào")
 
         if entity["entity_type"] == "climate":
+            # lệnh không nói mức quạt -> dùng mức mặc định trong driver_data
+            default_fan = loads(entity["driver_data"]).get("default_fan", "")
+            if default_fan and not params.get("fan"):
+                params = {**params, "fan": default_fan}
             key = self._climate_key(codes, command, params)
         else:
             key = command if command in codes else ("toggle" if "toggle" in codes else command)
@@ -128,20 +132,28 @@ class BroadlinkDriver(Driver):
             return command
         mode = params.get("mode", "cool")
         temp = int(params.get("temperature", 26))
-        exact = f"{mode}_{temp}"
+        fan = str(params.get("fan") or "")
+        # mã dạng "{mode}_{temp}" (1 mức quạt) hoặc "{mode}_{fan}_{temp}" (đủ mức)
+        exact = f"{mode}_{fan}_{temp}" if fan else f"{mode}_{temp}"
         if exact in codes:
             return exact
-        # nearest learned temperature for this mode, else any mode
-        temps = [
-            (abs(int(m.group(2)) - temp), m.group(0))
-            for m in (re.match(r"([a-z]+)_(\d{2})$", k) for k in codes)
-            if m and m.group(1) == mode
-        ]
-        if temps:
-            return min(temps)[1]
+
+        def nearest(prefix: str) -> str | None:
+            """Nhiệt độ gần nhất trong nhóm có tiền tố này (mode hoặc mode_fan)."""
+            cands = [
+                (abs(int(m.group(2)) - temp), m.group(0))
+                for m in (re.match(r"([a-z_]+)_(\d{2})$", k) for k in codes)
+                if m and m.group(1) == prefix
+            ]
+            return min(cands)[1] if cands else None
+
+        for prefix in (f"{mode}_{fan}" if fan else mode, mode):
+            got = nearest(prefix)
+            if got:
+                return got
         any_temp = [
             (abs(int(m.group(2)) - temp), m.group(0))
-            for m in (re.match(r"([a-z]+)_(\d{2})$", k) for k in codes)
+            for m in (re.match(r"([a-z_]+)_(\d{2})$", k) for k in codes)
             if m
         ]
         if any_temp:

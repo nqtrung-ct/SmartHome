@@ -83,6 +83,24 @@
       <select id="e-room"></select>
     </label>
     <div id="e-hw" class="small muted" style="margin:4px 0 10px"></div>
+    <div id="e-climate-wrap" class="hidden">
+      <div class="row">
+        <label>Nhiệt độ mặc định khi bật
+          <input id="e-deftemp" type="number" min="16" max="30" placeholder="theo lần cuối" style="width:130px">
+        </label>
+        <label>Mức quạt mặc định
+          <select id="e-deffan">
+            <option value="">— giữ như cũ —</option>
+            <option value="quiet">Yên lặng (thấp nhất)</option>
+            <option value="low">Thấp</option>
+            <option value="mid">Trung bình</option>
+            <option value="high">Cao</option>
+            <option value="auto">Tự động</option>
+          </select>
+        </label>
+      </div>
+      <p class="small muted">Áp dụng khi lệnh "bật" không nói rõ nhiệt độ/quạt. Lệnh có nói rõ thì luôn theo lệnh.</p>
+    </div>
     <div id="e-children-wrap" class="hidden">
       <h3 style="margin:10px 0 6px">Thiết bị con (điều khiển qua hồng ngoại)</h3>
       <div id="e-children"></div>

@@ -286,9 +286,12 @@ async def act_climate(db, drivers, entity, mode=None, temperature=None, mentione
     if mode == "off":
         command, params = "off", {}
     elif mode == "on":
-        # "bật" không kèm nhiệt độ: giữ nguyên nhiệt lần gần nhất (mặc định 26)
+        # "bật" không kèm nhiệt độ: lệnh không nói -> nhiệt mặc định (driver_data)
+        # -> lần gần nhất -> 26. Nói rõ nhiệt độ trong lệnh thì luôn thắng.
+        dd = loads(entity["driver_data"])
         last = loads(entity["state"]).get("temperature")
-        command, params = "set", {"mode": "cool", "temperature": int(temperature or last or 26)}
+        command, params = "set", {"mode": "cool",
+                                  "temperature": int(temperature or dd.get("default_temp") or last or 26)}
     else:
         command, params = "set", {"mode": mode or "cool", "temperature": int(temperature or 26)}
     state = await _set_state(db, drivers, entity, command, params)
