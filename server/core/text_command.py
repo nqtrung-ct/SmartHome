@@ -97,6 +97,16 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "list_active",
+            "description": "Liệt kê các thiết bị đang bật (đèn, công tắc, điều hòa có phản hồi trạng thái thật; không gồm thiết bị điều khiển bằng IR)",
+            "parameters": {"type": "object", "properties": {
+                "room": {"type": "string", "description": "Phòng nếu hỏi cụ thể, bỏ trống nếu cả nhà"},
+            }},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_weather",
             "description": "Lấy thời tiết hiện tại, hoặc dự báo ngày mai/ngày mốt",
             "parameters": {"type": "object", "properties": {
@@ -472,6 +482,39 @@ def volume_button(norm: str) -> str | None:
     return None
 
 
+def act_list_active(db: Database, room_id=None, mentioned_room=None) -> dict:
+    """"Cái gì đang bật?" — chỉ liệt kê thiết bị có phản hồi trạng thái thật;
+    thiết bị IR (broadlink) không biết mình bật/tắt nên không bao giờ xuất hiện."""
+    rooms = {r["id"]: r["name"] for r in db.query("SELECT id, name FROM rooms")}
+    rows = db.query(
+        """SELECT e.name, e.room_id, e.state, d.room_id AS device_room
+           FROM entities e JOIN devices d ON d.id=e.device_id
+           WHERE e.entity_type IN ('light','switch','climate') AND d.driver!='broadlink'"""
+    )
+    on = []
+    for e in rows:
+        try:
+            state = json.loads(e["state"] or "{}")
+        except ValueError:
+            state = {}
+        if state.get("state") != "on":
+            continue
+        eff = e["room_id"] or e["device_room"]
+        if room_id and eff != room_id:
+            continue
+        on.append((e["name"], rooms.get(eff, "")))
+    where = _room_where(db, room_id, mentioned_room)
+    if not on:
+        return {"reply": f"Hiện không có gì đang bật{where}.",
+                "action": {"tool": "list_active", "ok": True}}
+    if room_id:  # đã scoped theo phòng — tên thiết bị là đủ
+        names = ", ".join(n.lower() for n, _ in on)
+        return {"reply": f"Đang bật{where}: {names}.",
+                "action": {"tool": "list_active", "ok": True}}
+    items = ", ".join(f"{n.lower()} ({r.lower()})" if r else n.lower() for n, r in on)
+    return {"reply": f"Đang bật: {items}.", "action": {"tool": "list_active", "ok": True}}
+
+
 async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     norm = normalize(text)
     tokens = norm.split()
@@ -519,6 +562,12 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
             return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
+
+    # "cái gì đang bật?" — câu hỏi liệt kê, đặt TRƯỚC nhánh on/off vì chứa từ "bật";
+    # thiết bị IR không có trạng thái thật nên act_list_active tự loại khỏi danh sách
+    if re.search(r"\b(dang bat|dang mo|dang chay)\b", norm) and re.search(r"\b(gi|nao)\b", norm):
+        mentioned = _room_from_text(db, norm)
+        return act_list_active(db, mentioned or room_id, mentioned_room=mentioned)
 
     # âm lượng loa: đặt TRƯỚC nhánh on/off vì "tắt tiếng" chứa từ "tắt" —
     # không tắt nguồn loa; up/down chỉ nhận khi câu không có bật/tắt
@@ -616,6 +665,11 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
                 db, drivers, entity,
                 mode=args.get("mode"), temperature=args.get("temperature"), mentioned_room=mentioned,
             )
+
+        if name == "list_active":
+            room_arg = str(args.get("room") or "").strip()
+            scope = _room_from_text(db, normalize(room_arg)) if room_arg else room_id
+            return act_list_active(db, scope, mentioned_room=True if room_arg else None)
 
         if name == "get_sensor":
             metric_arg = str(args.get("metric", ""))
