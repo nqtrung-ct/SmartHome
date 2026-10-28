@@ -40,13 +40,9 @@ def synth16k(text: str) -> bytes:
     return out.astype(np.int16).tobytes()
 
 
-async def run_case(name: str, text: str, quiet_s: float) -> tuple[float, list[dict]]:
+async def run_case(token: str, name: str, text: str, quiet_s: float) -> tuple[float, list[dict]]:
     """Stream one utterance on a fresh connection; returns (speech_end, events)."""
-    async with httpx.AsyncClient(base_url=BASE, timeout=15) as c:
-        code = (await c.post("/api/pairing-codes", headers=AUTH)).json()["code"]
-        client = (await c.post("/api/pair", json={"code": code, "client_name": "hf-test"})).json()
-
-    ws_url = BASE.replace("http", "ws") + "/ws/voice?token=" + client["token"]
+    ws_url = BASE.replace("http", "ws") + "/ws/voice?token=" + token
     async with websockets.connect(ws_url) as ws:
         await ws.send(json.dumps({"type": "handsfree", "silence_ms": SILENCE_MS}))
         hello = json.loads(await ws.recv())
@@ -88,10 +84,21 @@ async def _reader(ws, events: list) -> None:
 async def main() -> None:
     global AUTH
     AUTH = {"Authorization": f"Bearer {TOKEN}"}
-    passed = 0
+    async with httpx.AsyncClient(base_url=BASE, timeout=15) as c:
+        code = (await c.post("/api/pairing-codes", headers=AUTH)).json()["code"]
+        client = (await c.post("/api/pair", json={"code": code, "client_name": "hf-test"})).json()
+    try:
+        await run_cases(client["token"])
+    finally:
+        # dọn client test để không đọng dòng rác trong tab Máy thoại
+        async with httpx.AsyncClient(base_url=BASE, timeout=15) as c:
+            await c.delete(f"/api/voice-clients/{client['client_id']}", headers=AUTH)
 
+
+async def run_cases(token: str) -> None:
+    passed = 0
     # 1) no wake word -> ignored, no command runs
-    _, events = await run_case("không có từ đánh thức",
+    _, events = await run_case(token, "không có từ đánh thức",
                                "Cho tôi biết thời tiết hôm nay.", QUIET_S)
     types = [e.get("type") for _, e in events]
     if "ignored" in types and "reply" not in types:
@@ -103,7 +110,7 @@ async def main() -> None:
     #    STT renders the keyword differently each take, so try a few times.
     keyword_ok = False
     for take in range(3):
-        speech_end, events = await run_case(f"kết thúc bằng từ khóa (lần {take + 1})",
+        speech_end, events = await run_case(token, f"kết thúc bằng từ khóa (lần {take + 1})",
                                             "Trợ lý ơi, cho tôi biết thời tiết hôm nay. Kết thúc.",
                                             QUIET_S)
         t_transcript = next(
@@ -119,7 +126,7 @@ async def main() -> None:
     passed += keyword_ok
 
     # 3) no "over" -> 3 s silence ends it, weather answered by voice
-    speech_end, events = await run_case("kết thúc bằng im lặng 3s",
+    speech_end, events = await run_case(token, "kết thúc bằng im lặng 3s",
                                         "Trợ lý ơi, cho tôi biết thời tiết hôm nay.", QUIET_S)
     t_transcript = next((t - speech_end for t, e in events if e.get("type") == "transcript"), None)
     reply = next((e.get("text", "") for _, e in events if e.get("type") == "reply"), "")

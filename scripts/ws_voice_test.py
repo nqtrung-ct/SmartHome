@@ -44,6 +44,11 @@ async def main():
             elif mtype == "end" and saw_reply:
                 break
 
+    # dọn client test để không đọng dòng rác trong tab Máy thoại
+    async with httpx.AsyncClient(base_url=BASE, timeout=15) as c:
+        await c.delete(f"/api/voice-clients/{client['client_id']}",
+                       headers={"Authorization": f"Bearer {TOKEN}"})
+
     print("\nWS voice gateway OK")
 
 
