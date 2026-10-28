@@ -86,6 +86,7 @@ async def _poll_tuya_cloud(app) -> None:
     for eid, dev_id in targets.items():
         meter = meters.get(dev_id)
         if meter:
+            meter.pop("energy", None)  # tổng kWh đã tiêu thụ: không dùng nữa
             db.execute(
                 "UPDATE entities SET state=?, updated_at=? WHERE id=?",
                 (json.dumps(meter, ensure_ascii=False), now_iso(), eid),
