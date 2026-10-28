@@ -18,11 +18,13 @@ WMO_VI = {
     95: "có dông", 96: "dông kèm mưa đá", 99: "dông kèm mưa đá nặng",
 }
 
+DAY_LABELS = {1: "Ngày mai", 2: "Ngày mốt"}
+
 
 class Weather:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self._cache: tuple[float, dict] | None = None
+        self._cache: tuple[float, tuple[dict, list[dict]]] | None = None
 
     def _fetch(self) -> dict:
         url = "https://api.open-meteo.com/v1/forecast"
@@ -32,41 +34,68 @@ class Weather:
             "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
             "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code",
             "timezone": "auto",
+            "forecast_days": 4,
         }
         resp = httpx.get(url, params=params, timeout=10)
         resp.raise_for_status()
         return resp.json()
 
-    def snapshot(self) -> dict:
-        """Structured current weather, cached 10 minutes. Raises on failure."""
+    def _data(self) -> tuple[dict, list[dict]]:
+        """(current snapshot, per-day forecast list), cached 10 minutes."""
         now = time.time()
         if self._cache and now - self._cache[0] < 600:
             return self._cache[1]
-        data = self._fetch()
-        cur, day = data["current"], data["daily"]
+        raw = self._fetch()
+        cur, day = raw["current"], raw["daily"]
         code = int(cur.get("weather_code", 0))
-        snap = {
+        current = {
             "temperature": round(cur["temperature_2m"]),
             "humidity": round(cur["relative_humidity_2m"]),
             "wind": round(cur["wind_speed_10m"]),
             "code": code,
             "condition": WMO_VI.get(code, "thời tiết bình thường"),
-            "temp_max": round(day["temperature_2m_max"][0]),
-            "temp_min": round(day["temperature_2m_min"][0]),
-            "rain_prob": day.get("precipitation_probability_max", [None])[0],
         }
-        self._cache = (now, snap)
-        return snap
+        rain_probs = day.get("precipitation_probability_max") or []
+        daily = []
+        for i, raw_code in enumerate(day.get("weather_code", [])):
+            code = int(raw_code)
+            daily.append({
+                "code": code,
+                "condition": WMO_VI.get(code, "thời tiết bình thường"),
+                "temp_max": round(day["temperature_2m_max"][i]),
+                "temp_min": round(day["temperature_2m_min"][i]),
+                "rain_prob": rain_probs[i] if i < len(rain_probs) else None,
+            })
+        self._cache = (now, (current, daily))
+        return current, daily
 
-    def summary(self) -> str:
-        """Short Vietnamese weather summary for voice replies."""
-        s = self.snapshot()
-        parts = [
-            f"Bây giờ {s['condition'].lower()}, {s['temperature']} độ C, "
-            f"độ ẩm {s['humidity']}%, gió {s['wind']} km/h.",
-            f"Hôm nay cao nhất {s['temp_max']} độ, thấp nhất {s['temp_min']} độ",
-        ]
+    def snapshot(self) -> dict:
+        """Current readings merged with today's forecast (for /api/display)."""
+        current, daily = self._data()
+        return {**current, **daily[0]}
+
+    def summary(self, day: int = 0) -> str:
+        """Short Vietnamese weather summary for voice replies. day: 0 today,
+        1 tomorrow, 2 the day after."""
+        if day <= 0:
+            s = self.snapshot()
+            parts = [
+                f"Bây giờ {s['condition'].lower()}, {s['temperature']} độ C, "
+                f"độ ẩm {s['humidity']}%, gió {s['wind']} km/h.",
+                f"Hôm nay cao nhất {s['temp_max']} độ, thấp nhất {s['temp_min']} độ",
+            ]
+            if s["rain_prob"] is not None:
+                parts[-1] += f", khả năng mưa {s['rain_prob']:.0f}%"
+            parts[-1] += "."
+            return " ".join(parts)
+
+        _, daily = self._data()
+        if day >= len(daily):
+            raise ValueError(f"mình chỉ có dự báo {len(daily)} ngày")
+        s = daily[day]
+        label = DAY_LABELS.get(day, f"Sau {day} ngày")
+        text = (f"{label} {s['condition'].lower()}, cao nhất {s['temp_max']} độ, "
+                f"thấp nhất {s['temp_min']} độ")
         if s["rain_prob"] is not None:
-            parts[-1] += f", khả năng mưa {s['rain_prob']:.0f}%"
-        parts[-1] += "."
-        return " ".join(parts)
+            text += f", khả năng mưa {s['rain_prob']:.0f}%"
+        return text + "."

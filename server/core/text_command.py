@@ -81,8 +81,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "Lấy thời tiết hiện tại và dự báo hôm nay",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "Lấy thời tiết hiện tại, hoặc dự báo ngày mai/ngày mốt",
+            "parameters": {"type": "object", "properties": {
+                "day": {"type": "string", "enum": ["today", "tomorrow", "day_after"],
+                        "description": "today=hôm nay, tomorrow=ngày mai, day_after=ngày mốt"},
+            }},
         },
     },
     {
@@ -247,12 +250,23 @@ async def act_sensor(db, drivers, entity, room_id=None) -> dict:
             "action": {"tool": "get_sensor", "ok": True, "state": state}}
 
 
-def act_weather(weather) -> dict:
+def weather_day(norm: str) -> int:
+    """Day offset the text asks about: 0 today (default), 1 tomorrow, 2 day after.
+    ("mốt" normalizes to "mot"; bare "mot" collides with số một so require "ngay mot".)"""
+    if re.search(r"\b(ngay mai|ngay kia|mai)\b", norm):
+        return 1
+    if re.search(r"\bngay mot\b", norm):
+        return 2
+    return 0
+
+
+def act_weather(weather, day: int = 0) -> dict:
     try:
-        return {"reply": weather.summary(), "action": {"tool": "get_weather", "ok": True}}
+        return {"reply": weather.summary(day),
+                "action": {"tool": "get_weather", "ok": True, "day": day}}
     except Exception as exc:
         return {"reply": f"Mình không lấy được thời tiết: {exc}",
-                "action": {"tool": "get_weather", "ok": False}}
+                "action": {"tool": "get_weather", "ok": False, "day": day}}
 
 
 def act_timer(db, room_id, message: str, minutes=None, time_str=None) -> dict:
@@ -348,9 +362,12 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         if minutes or time_str:
             return act_timer(db, room_id, message or "hẹn giờ", minutes=minutes, time_str=time_str)
 
-    # weather
-    if "thoi tiet" in norm or "du bao" in norm:
-        return act_weather(weather)
+    # weather (rain questions included: "ngày mai có mưa không") — single-intent
+    # only, multi-part sentences go to the LLM so no half gets dropped
+    if not multi_intent and re.search(
+        r"thoi tiet|du bao|kha nang mua|co mua|mua (khong|hay khong|roi|nhieu)", norm
+    ):
+        return act_weather(weather, weather_day(norm))
 
     # temperature question without a verb -> sensor
     if not (has_on or has_off) and ("nhiet do" in norm or "do am" in norm):
@@ -413,7 +430,8 @@ async def _call_ollama(cfg: Config, messages: list) -> dict:
         return resp.json()
 
 
-async def execute_tool(db, drivers, weather, name: str, args: dict, room_id) -> dict:
+async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
+                       day_hint: int = 0) -> dict:
     try:
         if name == "switch":
             entity = resolve_entity(db, args.get("entity", ""), room_id)
@@ -440,7 +458,9 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id) -> 
             return await act_sensor(db, drivers, entity, room_id)
 
         if name == "get_weather":
-            return act_weather(weather)
+            # an explicit day in the user's text outranks what the model passed
+            day = day_hint or {"tomorrow": 1, "day_after": 2}.get(str(args.get("day", "")), 0)
+            return act_weather(weather, day)
 
         if name == "set_timer":
             return act_timer(
@@ -461,6 +481,7 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         f"Thời gian hiện tại: {datetime.now().strftime('%H:%M, %d/%m/%Y')}.\n"
         f"{_llm_context(db, room_id)}\n"
         "Ưu tiên gọi công cụ để điều khiển thiết bị. Chỉ trả lời văn bản khi không có công cụ phù hợp. "
+        "Khi hỏi thời tiết ngày mai/mốt, gọi get_weather với day tương ứng. "
         "Nếu câu có nhiều việc, hãy gọi TẤT CẢ các công cụ cần thiết trong cùng một lượt trả lời. "
         "Trả lời ngắn gọn, thân thiện."
     )
@@ -503,7 +524,8 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
                     args = json.loads(args)
                 except ValueError:
                     args = {}
-            outcome = await execute_tool(db, drivers, weather, name, args, room_id)
+            outcome = await execute_tool(db, drivers, weather, name, args, room_id,
+                                         day_hint=weather_day(normalize(text)))
             replies.append(outcome["reply"])
             actions.append(outcome.get("action", {"tool": name}))
             messages.append({
@@ -523,7 +545,7 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
     executed = {a.get("tool") for a in actions if isinstance(a, dict)}
     if re.search(r"thoi tiet|du bao|kha nang mua|mua (khong|hay khong|roi|nhieu)", norm) \
             and "get_weather" not in executed:
-        extra = act_weather(weather)
+        extra = act_weather(weather, weather_day(norm))
         replies.append(extra["reply"])
         actions.append(extra["action"])
     if re.search(r"nhiet do|do am", norm) and "get_sensor" not in executed:
