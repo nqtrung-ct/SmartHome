@@ -1,6 +1,7 @@
 """Speech-to-text. sherpa-onnx Zipformer-vi when installed; "none" otherwise."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from server.config import Config
@@ -47,6 +48,7 @@ class SttSherpa:
         recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(**kwargs)
         self._recognizer = recognizer
         self._new_api = hasattr(recognizer, "create_stream")
+        self._lock = threading.Lock()  # hands-free runs STT from two tasks at once
 
     def transcribe(self, pcm16: bytes) -> str:
         import numpy as np
@@ -54,14 +56,15 @@ class SttSherpa:
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
         if samples.size == 0:
             return ""
-        if self._new_api:
-            stream = self._recognizer.create_stream()
-            stream.accept_waveform(16000, samples)
-            self._recognizer.decode_stream(stream)
-            return stream.result.text.strip()
-        self._recognizer.accept_waveform(16000, samples)
-        self._recognizer.decode()
-        return self._recognizer.get_result().strip()
+        with self._lock:
+            if self._new_api:
+                stream = self._recognizer.create_stream()
+                stream.accept_waveform(16000, samples)
+                self._recognizer.decode_stream(stream)
+                return stream.result.text.strip()
+            self._recognizer.accept_waveform(16000, samples)
+            self._recognizer.decode()
+            return self._recognizer.get_result().strip()
 
 
 def make_stt(cfg: Config):

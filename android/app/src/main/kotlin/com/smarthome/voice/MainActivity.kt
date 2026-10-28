@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var roomText: TextView
     private lateinit var talkBtn: Button
+    private lateinit var freeBtn: Button
     private lateinit var transcriptText: TextView
     private lateinit var replyText: TextView
 
@@ -55,6 +56,7 @@ class MainActivity : Activity() {
         statusText = findViewById(R.id.statusText)
         roomText = findViewById(R.id.roomText)
         talkBtn = findViewById(R.id.talkBtn)
+        freeBtn = findViewById(R.id.freeBtn)
         transcriptText = findViewById(R.id.transcriptText)
         replyText = findViewById(R.id.replyText)
 
@@ -62,6 +64,7 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.pairBtn).setOnClickListener { pair() }
         talkBtn.isEnabled = false
         talkBtn.setOnTouchListener { _, event -> handleTouch(event) }
+        freeBtn.setOnClickListener { toggleFreeMode() }
 
         volumeControlStream = AudioManager.STREAM_MUSIC
 
@@ -186,7 +189,7 @@ class MainActivity : Activity() {
                 reconnectAttempt = 0
                 runOnUiThread {
                     statusText.text = "● Đã kết nối"
-                    talkBtn.isEnabled = true
+                    if (freeMode) armHandsfree() else talkBtn.isEnabled = true
                 }
             }
 
@@ -207,9 +210,15 @@ class MainActivity : Activity() {
             override fun onMessage(json: JSONObject) {
                 runOnUiThread {
                     when (json.optString("type")) {
-                        "transcript" -> transcriptText.text = json.optString("text", "")
+                        "transcript" -> {
+                            transcriptText.text = json.optString("text", "")
+                            if (freeMode) statusText.text = "● Đang xử lý..."
+                        }
                         "reply" -> replyText.text = json.optString("text", "")
                         "announce" -> replyText.text = "🔔 " + json.optString("text", "")
+                        "ignored" -> transcriptText.text =
+                            json.optString("text", "") + "  (chưa có từ đánh thức)"
+                        "listening" -> if (freeMode) statusText.text = FREE_STATUS
                         "audio" -> player.start(json.optInt("sample_rate", 16000))
                         "end" -> player.finish()
                     }
@@ -269,12 +278,58 @@ class MainActivity : Activity() {
         statusText.text = "● Đang xử lý..."
     }
 
+    // ---------------------------------------------------------------- hands-free
+
+    private var freeMode = false
+
+    private fun toggleFreeMode() {
+        if (freeMode) {
+            freeMode = false
+            recorder?.stop()
+            recorder = null
+            client?.sendHandsfreeOff()
+            freeBtn.text = "🤖 Luôn nghe: TẮT"
+            talkBtn.isEnabled = client?.open == true
+            statusText.text = "● Đã kết nối"
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 2)
+            return
+        }
+        freeMode = true
+        freeBtn.text = "🤖 Luôn nghe: BẬT"
+        talkBtn.isEnabled = false
+        transcriptText.text = ""
+        replyText.text = ""
+        if (client?.open == true) armHandsfree() else connectClient()
+    }
+
+    /** Stream the mic continuously; the server listens for the wake word. */
+    private fun armHandsfree() {
+        val c = client ?: return
+        recorder?.stop()  // a recorder may still be alive from before a reconnect
+        recorder = null
+        if (c.sendHandsfree(3000)) {
+            recorder = AudioRecorder(16000) { chunk -> c.sendAudio(chunk) }
+            recorder?.start()
+            statusText.text = FREE_STATUS
+        }
+    }
+
+    companion object {
+        private const val FREE_STATUS = "● Đang nghe — nói “Trợ lý ơi …”"
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            startTalking()
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            if (requestCode == 1) startTalking()
+            if (requestCode == 2) toggleFreeMode()
         }
     }
 

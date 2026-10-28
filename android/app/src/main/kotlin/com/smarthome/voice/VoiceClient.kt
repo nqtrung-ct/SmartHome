@@ -71,6 +71,11 @@ class VoiceClient(
 
     fun sendStop(): Boolean = ws?.send("""{"type":"stop"}""") ?: false
 
+    fun sendHandsfree(silenceMs: Int): Boolean =
+        ws?.send("""{"type":"handsfree","silence_ms":$silenceMs}""") ?: false
+
+    fun sendHandsfreeOff(): Boolean = ws?.send("""{"type":"handsfree_off"}""") ?: false
+
     fun sendAudio(pcm: ByteArray): Boolean =
         open && ws?.send(pcm.toByteString()) == true
 

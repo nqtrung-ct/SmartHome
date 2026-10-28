@@ -38,11 +38,11 @@ class VoicePipeline:
             log_event(db, "tts", f"Không nạp được TTS (dùng none): {exc}", level="warn")
             self.tts = TtsNone()
 
-    async def process_audio(self, pcm16: bytes, room_id) -> dict:
+    async def process_audio(self, pcm16: bytes, room_id, skip_gate: bool = False) -> dict:
         """16 kHz mono PCM16 -> {transcript, reply, actions, engine}."""
         # energy gate: near-silent audio makes small STT models hallucinate
         # single words ("Đúng") and then waste a slow LLM round-trip
-        if not _has_speech_energy(pcm16):
+        if not skip_gate and not _has_speech_energy(pcm16):
             return {
                 "transcript": "",
                 "reply": "Mình không nghe rõ, bạn nói lại nhé.",
