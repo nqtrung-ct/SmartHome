@@ -166,10 +166,24 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Retry the WebSocket every few seconds after a drop (server restarts, WiFi blips). */
+    private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var destroyed = false
+    private var reconnectAttempt = 0
+
+    private fun scheduleReconnect() {
+        if (destroyed || client?.open == true) return
+        reconnectAttempt++
+        statusText.text = "○ Mất kết nối - tự kết nối lại (lần $reconnectAttempt)..."
+        reconnectHandler.removeCallbacksAndMessages(null)
+        reconnectHandler.postDelayed({ connectClient() }, 3000)
+    }
+
     private fun connectClient() {
         client?.close()
         client = VoiceClient(serverUrl, token, object : VoiceClient.Events {
             override fun onOpen() {
+                reconnectAttempt = 0
                 runOnUiThread {
                     statusText.text = "● Đã kết nối"
                     talkBtn.isEnabled = true
@@ -178,16 +192,16 @@ class MainActivity : Activity() {
 
             override fun onClosed() {
                 runOnUiThread {
-                    statusText.text = "○ Mất kết nối - nhấn nút nói để thử lại"
                     talkBtn.isEnabled = false
                 }
+                scheduleReconnect()
             }
 
             override fun onFailure(reason: String) {
                 runOnUiThread {
-                    statusText.text = "○ Mất kết nối ($reason)"
                     talkBtn.isEnabled = false
                 }
+                scheduleReconnect()
             }
 
             override fun onMessage(json: JSONObject) {
@@ -265,6 +279,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
+        reconnectHandler.removeCallbacksAndMessages(null)
         recorder?.stop()
         client?.close()
         player.stop()
