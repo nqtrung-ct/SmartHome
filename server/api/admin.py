@@ -72,12 +72,27 @@ def display(request: Request):
                 state = _json.loads(e["state"] or "{}")
             except ValueError:
                 state = {}
-            ents.append({
+            try:
+                dd = _json.loads(e["driver_data"] or "{}")
+            except ValueError:
+                dd = {}
+            ent = {
                 "id": e["id"], "name": e["name"], "type": e["entity_type"],
                 "driver": e["driver"], "state": state,
                 "controllable": e["entity_type"] in ("light", "switch", "climate")
-                                and "readonly" not in _json.loads(e["driver_data"] or "{}"),
-            })
+                                and "readonly" not in dd,
+            }
+            if e["driver"] == "broadlink":
+                # bảng điều khiển trên màn hình cần biết nút phụ có sẵn
+                if e["entity_type"] == "climate":
+                    ent["defaults"] = {"fan": dd.get("default_fan", ""),
+                                       "temp": dd.get("default_temp")}
+                else:
+                    # on/off/power = Bật/Tắt lớn, không lặp lại trong nút phụ
+                    ent["buttons"] = sorted(
+                        k for k in dd.get("codes", {})
+                        if k not in ("on", "off", "toggle", "power"))
+            ents.append(ent)
         rooms.append({
             "id": room["id"], "name": room["name"], "floor": room["floor"],
             "temperature": temp, "humidity": humidity, "entities": ents,

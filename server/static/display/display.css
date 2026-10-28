@@ -142,8 +142,34 @@ main {
 .ctrl-icon { font-size: 40px; }
 .ctrl-name { font-size: 22px; font-weight: 700; }
 .ctrl-head .btn { margin-left: auto; padding: 10px 14px; }
-.temp-row { display: flex; align-items: center; justify-content: center; gap: 22px; margin-bottom: 14px; }
-.temp-num { font-size: 40px; font-weight: 700; }
+.hidden { display: none; }
+
+/* --- remote-style control: nút tròn, chính to trên, phụ nhỏ dưới --- */
+.rrow { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 8px; }
+.rrow.wrap { flex-wrap: wrap; gap: 10px; }
+.rbtn {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  width: 92px; height: 92px; border-radius: 50%; gap: 5px;
+  background: var(--card2); border: 1px solid var(--border); color: var(--text);
+  font-size: 14px; font-family: inherit; cursor: pointer; user-select: none;
+}
+.rbtn span { font-size: 28px; line-height: 1; }
+.rbtn:hover { border-color: var(--blue); }
+.rbtn.on-btn { background: rgba(79, 140, 255, .18); border-color: rgba(79, 140, 255, .55); color: #bcd3ff; }
+.rbtn.off-btn { background: rgba(239, 90, 111, .12); border-color: rgba(239, 90, 111, .5); color: #ffb3bd; }
+.rbtn.sm { width: 54px; height: 54px; font-size: 24px; }  /* − ＋ */
+.rbtn.xs { width: 74px; height: 74px; font-size: 12px; padding: 4px; }
+.rbtn.xs span { font-size: 22px; }
+.rbtn.active { border-color: var(--green); box-shadow: 0 0 12px rgba(62, 207, 142, .35); }
+.temp-dial { text-align: center; min-width: 120px; }
+.dial-temp { font-size: 30px; font-weight: 700; }
+.dial-lab { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ctrl-lab { font-size: 12.5px; color: var(--muted); margin: 14px 0 4px; text-align: left; }
+.more-toggle {
+  display: block; margin: 14px auto 0; background: none; border: none;
+  color: var(--muted); font-size: 14.5px; cursor: pointer; font-family: inherit;
+}
+.more-toggle:hover { color: var(--text); }
 
 /* --- timers --- */
 .timer { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }

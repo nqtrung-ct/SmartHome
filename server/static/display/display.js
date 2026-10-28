@@ -206,27 +206,62 @@ $("pin-clear").onclick = () => {
 $("pin-close").onclick = () => { pinCb = null; $("pin-overlay").classList.add("hidden"); };
 
 // ---------------------------------------------------------------- control panel
+// Bảng điều khiển kiểu remote: nút tròn, chức năng chính to ở trên,
+// chức năng khác nhỏ hơn và giấu sau nút "⋯ Thêm".
 let ctrlTemp = 26;
+let ctrlFan = "";    // mức quạt đang chọn (điều hòa)
+let ctrlMode = "cool";
 
-function ctrlButtons(e) {
+const BTN_ICON = {
+  swing: ["🔄", "Xoay"], fan_mode: ["🌬", "Tốc độ"],
+  timer_on: ["⏲", "Hẹn giờ bật"], timer_off: ["⏲", "Hẹn giờ tắt"],
+  volume_up: ["🔊", "To hơn"], volume_down: ["🔉", "Nhỏ hơn"], mute: ["🔇", "Tắt tiếng"],
+  ok: ["✔", "OK"], aux: ["📻", "Aux"],
+};
+const FANS = [["quiet", "Yên lặng"], ["low", "Thấp"], ["mid", "Vừa"], ["high", "Cao"], ["auto", "Tự động"]];
+const MODES = [["cool", "Lạnh"], ["dry", "Khô"], ["fan_only", "Gió"], ["heat_cool", "Ổn"]];
+
+const powerRow = (mid) => `
+  <div class="rrow">
+    <button class="rbtn on-btn" data-cmd="on"><span>⏻</span>Bật</button>
+    ${mid}
+    <button class="rbtn off-btn" data-cmd="off"><span>⏹</span>Tắt</button>
+  </div>`;
+
+function ctrlBody(e) {
+  let mid = `<span class="chip-ic">${TYPE_ICON[e.type] || "🔘"}</span>`;
+  let more = "";
   if (e.type === "climate") {
-    ctrlTemp = e.state && e.state.temperature ? e.state.temperature : 26;
-    return `
-      <div class="temp-row">
-        <button class="btn" data-cmd="temp-">−</button>
-        <span id="ctrl-temp" class="temp-num">${ctrlTemp}°C</span>
-        <button class="btn" data-cmd="temp+">＋</button>
-      </div>
-      <div class="row-center">
-        <button class="btn primary" data-cmd="on">Bật</button>
-        <button class="btn danger" data-cmd="off">Tắt</button>
+    ctrlTemp = (e.defaults && e.defaults.temp) || (e.state && e.state.temperature) || 26;
+    ctrlFan = (e.defaults && e.defaults.fan) || "";
+    ctrlMode = "cool";
+    mid = `
+      <div class="temp-dial">
+        <div class="dial-temp">❄ <b id="ctrl-temp">${ctrlTemp}</b>°C</div>
+        <div class="dial-lab">bấm − / ＋ để chỉnh</div>
       </div>`;
+    more = `
+      <div class="ctrl-lab">Nhiệt độ</div>
+      <div class="rrow stepper">
+        <button class="rbtn sm" data-cmd="temp-">−</button>
+        <button class="rbtn sm" data-cmd="temp+">＋</button>
+      </div>
+      <div class="ctrl-lab">Mức quạt</div>
+      <div class="rrow wrap">
+        ${FANS.map(([v, lab]) => `<button class="rbtn xs${v === ctrlFan ? " active" : ""}" data-fan="${v}">${lab}</button>`).join("")}
+      </div>
+      <div class="ctrl-lab">Chế độ</div>
+      <div class="rrow wrap">
+        ${MODES.map(([v, lab]) => `<button class="rbtn xs${v === "cool" ? " active" : ""}" data-mode="${v}">${lab}</button>`).join("")}
+      </div>`;
+  } else if (e.buttons && e.buttons.length) {
+    const extras = e.buttons
+      .filter((b) => BTN_ICON[b])
+      .map((b) => `<button class="rbtn xs" data-btn="${b}"><span>${BTN_ICON[b][0]}</span>${BTN_ICON[b][1]}</button>`)
+      .join("");
+    if (extras) more = `<div class="ctrl-lab">Nút khác</div><div class="rrow wrap">${extras}</div>`;
   }
-  return `
-    <div class="row-center">
-      <button class="btn primary" data-cmd="on">Bật</button>
-      <button class="btn danger" data-cmd="off">Tắt</button>
-    </div>`;
+  return powerRow(mid) + (more ? `<button class="more-toggle" id="ctrl-more-btn">⋯ Thêm</button><div id="ctrl-more" class="hidden">${more}</div>` : "");
 }
 
 function openCtrl(id) {
@@ -236,26 +271,43 @@ function openCtrl(id) {
   $("ctrl-icon").textContent = TYPE_ICON[e.type] || "🔘";
   $("ctrl-name").textContent = e.name;
   $("ctrl-room").textContent = r ? r.name : "";
-  $("ctrl-body").innerHTML = ctrlButtons(e);
-  $("ctrl-body").querySelectorAll("[data-cmd]").forEach((b) =>
-    b.addEventListener("click", () => doCommand(e, b.dataset.cmd)));
+  $("ctrl-body").innerHTML = ctrlBody(e);
+  wireCtrl(e);
   $("ctrl-overlay").classList.remove("hidden");
+}
+
+function wireCtrl(e) {
+  const body = $("ctrl-body");
+  body.querySelectorAll("[data-cmd]").forEach((b) =>
+    b.addEventListener("click", () => doCommand(e, b.dataset.cmd)));
+  body.querySelectorAll("[data-btn]").forEach((b) =>
+    b.addEventListener("click", () => doCommand(e, "btn:" + b.dataset.btn)));
+  body.querySelectorAll("[data-fan]").forEach((b) =>
+    b.addEventListener("click", () => {
+      ctrlFan = b.dataset.fan;
+      body.querySelectorAll("[data-fan]").forEach((x) => x.classList.toggle("active", x === b));
+      sendCommand(e, "set", { mode: ctrlMode, temperature: ctrlTemp, fan: ctrlFan });
+    }));
+  body.querySelectorAll("[data-mode]").forEach((b) =>
+    b.addEventListener("click", () => {
+      ctrlMode = b.dataset.mode;
+      body.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("active", x === b));
+      const params = { mode: ctrlMode, temperature: ctrlTemp };
+      if (ctrlFan) params.fan = ctrlFan;
+      sendCommand(e, "set", params);
+    }));
+  const moreBtn = body.querySelector("#ctrl-more-btn");
+  if (moreBtn) moreBtn.onclick = () => {
+    const box = body.querySelector("#ctrl-more");
+    box.classList.toggle("hidden");
+    moreBtn.textContent = box.classList.contains("hidden") ? "⋯ Thêm" : "⋯ Bớt";
+  };
 }
 
 $("ctrl-close").onclick = () => $("ctrl-overlay").classList.add("hidden");
 
-async function doCommand(e, cmd) {
-  if (!unlocked()) { $("ctrl-overlay").classList.add("hidden"); showPin(() => openCtrl(e.id)); return; }
-  let command = cmd, params = {};
-  if (cmd === "temp-" || cmd === "temp+") {
-    ctrlTemp = Math.min(30, Math.max(16, ctrlTemp + (cmd === "temp+" ? 1 : -1)));
-    $("ctrl-temp").textContent = `${ctrlTemp}°C`;
-    return; // chỉnh số trước, bấm Bật mới gửi
-  }
-  if (cmd === "on" && e.type === "climate") {
-    command = "set";
-    params = { mode: "cool", temperature: ctrlTemp };
-  }
+async function sendCommand(e, command, params) {
+  if (!unlocked()) { $("ctrl-overlay").classList.add("hidden"); showPin(() => openCtrl(e.id), e.name); return; }
   try {
     const resp = await fetch("/api/display/command", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -265,18 +317,37 @@ async function doCommand(e, cmd) {
       unlock = { token: null, until: 0 };
       $("ctrl-overlay").classList.add("hidden");
       showPin(null);
-      return;
+      return false;
     }
     if (!resp.ok) {
       const d = await resp.json().catch(() => ({}));
       alert(d.detail || "Không điều khiển được");
-      return;
+      return false;
     }
+    return true;
   } catch {
     alert("Không kết nối được");
+    return false;
+  }
+}
+
+async function doCommand(e, cmd) {
+  if (cmd === "temp-" || cmd === "temp+") {
+    ctrlTemp = Math.min(30, Math.max(16, ctrlTemp + (cmd === "temp+" ? 1 : -1)));
+    $("ctrl-temp").textContent = ctrlTemp;
+    return; // chỉnh số trước, bấm Bật mới gửi
+  }
+  if (cmd === "on" && e.type === "climate") {
+    const params = { mode: ctrlMode, temperature: ctrlTemp };
+    if (ctrlFan) params.fan = ctrlFan;
+    if (await sendCommand(e, "set", params)) refresh();
     return;
   }
-  refresh();
+  if (cmd.startsWith("btn:")) {  // nút phụ IR (xoay, volume, timer...)
+    if (await sendCommand(e, cmd.slice(4), {})) refresh();
+    return;
+  }
+  if (await sendCommand(e, cmd, {})) refresh();
 }
 
 // ---------------------------------------------------------------- timers
