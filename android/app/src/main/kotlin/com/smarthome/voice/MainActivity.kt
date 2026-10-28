@@ -102,7 +102,7 @@ class MainActivity : Activity() {
 
                 override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
                 override fun onDiscoveryStopped(serviceType: String) {}
-                override fun onStopDiscoveryStopped(serviceType: String) {}
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
             }
             discoveryListener = listener
             nsd.discoverServices("_smarthome._tcp.", NsdManager.PROTOCOL_DNS_SD, listener)

@@ -34,12 +34,9 @@ class AudioRecorder(
             while (running) {
                 val read = audioRecord?.read(buf, 0, buf.size) ?: break
                 if (read > 0) {
-                    val bytes = ByteBuffer.allocate(read * 2)
-                        .order(ByteOrder.LITTLE_ENDIAN)
-                        .asShortBuffer()
-                        .put(buf, 0, read)
-                        .array()
-                    onChunk(bytes)
+                    val byteBuf = ByteBuffer.allocate(read * 2).order(ByteOrder.LITTLE_ENDIAN)
+                    byteBuf.asShortBuffer().put(buf, 0, read)
+                    onChunk(byteBuf.array())
                 }
             }
             try {
