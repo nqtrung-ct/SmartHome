@@ -611,7 +611,7 @@ window.addEntity = async (deviceId) => {
     entity_type: $(`#ent-type-${deviceId}`).value,
     aliases: $(`#ent-alias-${deviceId}`).value.trim(),
   };
-  if (!body.name) return;
+  if (!body.name) { toast("Nhập tên thực thể trước đã"); return; }
   await api(`/devices/${deviceId}/entities`, { method: "POST", body: JSON.stringify(body) }).catch((e) => toast(e.message));
   renderDevices();
 };

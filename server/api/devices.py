@@ -186,6 +186,8 @@ async def entity_command(request: Request, entity_id: int, body: CommandIn, _: N
     entity = db.one("SELECT * FROM entities WHERE id=?", (entity_id,))
     if not entity:
         raise HTTPException(status_code=404, detail="Không có entity")
+    if "readonly" in loads(entity["driver_data"]):
+        raise HTTPException(status_code=400, detail="Thực thể này chỉ xem trạng thái, không điều khiển được")
     device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
     driver = app.state.drivers.get(device["driver"])
     if not driver:
