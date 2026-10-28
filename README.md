@@ -50,10 +50,24 @@ instructions/      tài liệu định hướng dự án
 
 | # | Milestone | Trạng thái |
 |---|---|---|
-| M2 | Server skeleton + admin UI | ✅ xong, smoke test pass |
-| M3 | Discovery + adoption | ✅ code xong (Broadlink/Tuya/mDNS/SSDP/ONVIF/ping + adopt) — cần test với phần cứng thật |
-| M4 | Text commands | ✅ fast path + LLM path + timers + thời tiết — timers đã test tự chạy |
-| M5 | Android push-to-talk | ✅ code xong — cần build & thử trên máy thật + STT model |
+| M2 | Server skeleton + admin UI | ✅ xong, smoke 35/35 |
+| M3 | Discovery + adoption | ✅ xong + đã chạy với phần cứng thật (Broadlink RM4MINI, 2 thiết bị Tuya) |
+| M4 | Text commands | ✅ fast path + LLM path + timers + thời tiết theo ngày |
+| M5 | Android push-to-talk | ✅ đã cài trên điện thoại thật, tự kết nối lại |
+| M6 | Hands-free + wake word | ✅ xong — "Trợ lý ơi … over", server-side wake, đã đo độ trễ |
 | M1 | Models benchmark | ⏳ bạn tự đo theo docs/setup-windows.md §3 |
 
-Chưa làm (theo kế hoạch): hands-free + wake word (M6), nhận diện giọng nói người dùng, camera Frigate, kiểm tra trạng thái AC qua công tắc đo công suất.
+## Tiến độ chi tiết (cập nhật 2026-10-28)
+
+**Đang chạy thật trong nhà:**
+- **Broadlink RM4MINI** (192.168.1.17) — quét ra, chưa học mã IR (nên "mở máy lạnh" vẫn chưa điều khiển được điều hòa thật)
+- **Tuya breaker đo điện** (192.168.1.2, firmware 3.5) — công tắc chung cả nhà, **chỉ xem** (readonly): trạng thái bật/tắt qua LAN mỗi 60 giây; **điện áp / công suất / số điện (kWh)** qua Tuya cloud mỗi 3 phút (firmware giấu các chỉ số đo qua LAN; nhà có điện mặt trời nên công suất chỉ hiển thị, không đọc bằng giọng)
+- **Tuya cảm biến nhiệt độ-độ ẩm** (192.168.1.30) — đọc LAN, cập nhật mỗi 60 giây, hỏi bằng giọng *"nhiệt độ bao nhiêu"* / *"độ ẩm"* (trọng tâm theo câu hỏi); quá 1 tiếng không báo số liệu thì UI hiện "—" và trợ lý nói không lấy được thông tin
+
+**Hoàn thành các hạng mục phụ:**
+- Trợ lý trả lời trọng tâm: hỏi mưa → trả lời theo % khả năng mưa ("rất thấp, chỉ 6%"), "tối nay" dùng dữ liệu 18h–23h theo giờ
+- Dọn dữ liệu tự động: sự kiện giữ 30 ngày (chỉnh được trong Thiết đặt), mã ghép nối cũ/hẹn giờ xong cũng tự dọn
+- Danh sách quét chỉ hiện thiết bị hỗ trợ (ping sweep cả mạng vẫn chạy nền)
+- Readonly là cơ chế chung cho mọi driver: ẩn nút trên UI, chặn cả voice lẫn API
+
+**Chưa làm:** học mã IR Broadlink (chờ làm với điều hòa thật), Zigbee + MQTT (chờ phần cứng), camera/Frigate, tablet treo tường, mạch ESP32 vệ tinh (dự kiến dùng lại phần wake word server-side của hands-free), phân biệt người dùng theo giọng.
