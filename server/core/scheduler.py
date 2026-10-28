@@ -40,6 +40,8 @@ async def _poll_tuya_sensors(app) -> None:
                     ('{"state": "off"}', now_iso(), row["eid"]),
                 )
             continue
+        if not any(v is not None for v in state.values()):
+            continue  # device answered but sent nothing - keep last good values
         db.execute(
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",
             (json.dumps(state, ensure_ascii=False), now_iso(), row["eid"]),

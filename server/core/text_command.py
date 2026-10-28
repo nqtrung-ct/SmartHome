@@ -246,9 +246,8 @@ async def act_sensor(db, drivers, entity, room_id=None, metric=None) -> dict:
         bits.append(f"độ ẩm {state['humidity']:.0f}%")
     if state.get("voltage") is not None and metric in (None, "voltage"):
         bits.append(f"điện áp {state['voltage']:.0f} volt")
-    if state.get("power") is not None and metric in (None, "power"):
-        p = state["power"]
-        bits.append(f"đang tiêu thụ {p / 1000:.1f} kW" if p >= 1000 else f"đang tiêu thụ {p:.0f} oát")
+    # power stays UI-only: solar homes read near-zero from the grid and
+    # answering "0 oát" is more confusing than helpful
     if state.get("energy") is not None and metric in (None, "energy"):
         bits.append(f"tổng dùng {state['energy']:.1f} số điện (kWh)")
     if room:
@@ -293,8 +292,6 @@ def sensor_metric(norm: str) -> str | None:
         return "humidity"
     if re.search(r"\bdien ap\b|\bvol\b", norm):
         return "voltage"
-    if re.search(r"\bcong suat\b|\bkw\b", norm):
-        return "power"
     if re.search(r"\bso dien\b|\bdien nang\b|\bkwh\b", norm):
         return "energy"
     return None
@@ -427,9 +424,17 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         return act_weather(weather, weather_day(norm),
                            rain=rain_question(norm), evening=evening_question(norm))
 
+    # power questions: solar home, grid draw is ~0 W and misleading - the
+    # live number lives on the dashboard's Điện năng card
+    if not (has_on or has_off) and re.search(r"\bcong suat\b|\bkw\b|tieu thu", norm):
+        return {"reply": "Nhà mình dùng điện mặt trời nên công suất lấy từ lưới thường rất thấp, "
+                         "gần 0 oát. Muốn xem con số tức thời thì mở bảng điều khiển, mục Điện năng.",
+                "action": None}
+
     # temperature/metering question without a verb -> sensor
+    # (power intentionally absent - solar homes read ~0 W from the grid)
     if not (has_on or has_off) and re.search(
-        r"nhiet do|do am|dien ap|cong suat|so dien|dien nang|kwh|\bkw\b|tieu thu", norm
+        r"nhiet do|do am|dien ap|so dien|dien nang|kwh", norm
     ):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
@@ -516,7 +521,6 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             metric = ("temperature" if "temp" in metric_arg else
                       "humidity" if "hum" in metric_arg else
                       "voltage" if "volt" in metric_arg else
-                      "power" if "power" in metric_arg or "kw" in metric_arg else
                       "energy" if "energy" in metric_arg or "kwh" in metric_arg else None)
             # English metric names never match Vietnamese aliases - fall back
             entity = resolve_entity(db, metric_arg or "cảm biến", room_id, "sensor") \
