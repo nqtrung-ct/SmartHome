@@ -65,7 +65,8 @@ async def scheduler_loop(app) -> None:
                 pipeline = getattr(app.state, "pipeline", None)
                 if connections:
                     await connections.announce_room(timer["room_id"], message, pipeline)
-            if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 300)):
+            # battery sensors surface briefly (~seconds every 15 min): poll often
+            if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 60)):
                 last_sensor_poll = time.time()
                 await _poll_tuya_sensors(app)
         except asyncio.CancelledError:

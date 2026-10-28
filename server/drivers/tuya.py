@@ -18,8 +18,9 @@ def _sensor_dps_map(dps: dict) -> dict:
     """Guess {metric: dps id} from a status snapshot.
 
     Tuya temp/humidity sensors use ascending dps ids (temperature, humidity,
-    battery); plugs with a sensor probe mix a bool channel in and get both
-    a switch and a sensor entity.
+    battery). Only trusted for devices without a bool (on/off) channel -
+    a metering breaker's current/power readings also fall in the numeric
+    ranges and must not become a bogus "sensor".
     """
     nums = sorted(
         (int(k), v) for k, v in dps.items()
@@ -86,21 +87,22 @@ class TuyaDriver(Driver):
 
         specs: list[dict] = []
         if switch_dps:
+            # breaker / plug: on-off channel; metering dps stay uninterpreted
             specs.append({
                 "name": device["name"],
                 "entity_type": "switch",
                 "aliases": "ổ cắm,công tắc",
                 "driver_data": {"dps": switch_dps[0]},
             })
-        if "temperature" in sensor_map and "humidity" in sensor_map:
+        elif "temperature" in sensor_map and "humidity" in sensor_map:
             specs.append({
-                "name": f"Cảm biến {device['name']}" if specs else device["name"],
+                "name": device["name"],
                 "entity_type": "sensor",
                 "aliases": "cảm biến,nhiệt độ,độ ẩm",
                 "driver_data": {"dps_map": sensor_map},
             })
-        if not specs:
-            # probed fine but nothing recognized - behave like the old switch
+        else:
+            # probed but nothing recognized (or asleep mains device): dumb switch
             specs.append({
                 "name": device["name"],
                 "entity_type": "switch",
