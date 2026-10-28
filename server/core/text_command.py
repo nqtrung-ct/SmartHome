@@ -131,6 +131,16 @@ def _room_from_text(db: Database, norm: str) -> int | None:
     return best[0] if best else None
 
 
+def _room_where(db: Database, room_id, mentioned_room) -> str:
+    """Địa danh đuôi câu trả lời. Mic nằm ở phòng nào thì thiết bị phòng đó là mặc
+    định, chỉ nêu phòng khi người nói nói rõ phòng trong lệnh (tên phòng đã sẵn
+    chữ "Phòng ..." nên không thêm tiền tố nữa)."""
+    if mentioned_room is None or not room_id:
+        return ""
+    name = _room_name(db, room_id)
+    return f" {name.lower()}" if name else ""
+
+
 def _entity_aliases(entity) -> list[str]:
     aliases = [entity["name"], *entity["aliases"].split(",")]
     aliases += TYPE_ALIASES.get(entity["entity_type"], [])
@@ -205,19 +215,18 @@ def _entity_room(db: Database, entity) -> int | None:
     return row["own"] if row["own"] is not None else row["dev"]
 
 
-async def act_switch(db, drivers, entity, on: bool) -> dict:
+async def act_switch(db, drivers, entity, on: bool, mentioned_room=None) -> dict:
     if entity["entity_type"] == "controller" or loads(entity["driver_data"]).get("readonly"):
         return {"reply": "Đây là bộ điều khiển hồng ngoại, không bật/tắt trực tiếp được.",
                 "action": {"tool": "switch", "entity": entity["name"], "ok": False}}
     await _set_state(db, drivers, entity, "on" if on else "off", {})
     verb = "bật" if on else "tắt"
-    room = _entity_room(db, entity)
-    where = f" phòng {_room_name(db, room).lower()}" if room else ""
+    where = _room_where(db, _entity_room(db, entity), mentioned_room)
     return {"reply": f"Đã {verb} {entity['name'].lower()}{where}.",
             "action": {"tool": "switch", "entity": entity["name"], "state": "on" if on else "off", "ok": True}}
 
 
-async def act_climate(db, drivers, entity, mode=None, temperature=None) -> dict:
+async def act_climate(db, drivers, entity, mode=None, temperature=None, mentioned_room=None) -> dict:
     if mode == "off":
         command, params = "off", {}
     elif mode == "on":
@@ -225,8 +234,7 @@ async def act_climate(db, drivers, entity, mode=None, temperature=None) -> dict:
     else:
         command, params = "set", {"mode": mode or "cool", "temperature": int(temperature or 26)}
     state = await _set_state(db, drivers, entity, command, params)
-    room = _entity_room(db, entity)
-    where = f" phòng {_room_name(db, room).lower()}" if room else ""
+    where = _room_where(db, _entity_room(db, entity), mentioned_room)
     if mode == "off":
         reply = f"Đã tắt {entity['name'].lower()}{where}."
     else:
@@ -464,17 +472,19 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     # climate with/without temperature
     if has_on or has_off:
         temp = _temp_from_text(norm)
+        mentioned = _room_from_text(db, norm)
         entity = resolve_entity(db, norm, room_id, "climate")
         if entity:
             if has_off:
-                return await act_climate(db, drivers, entity, mode="off")
-            return await act_climate(db, drivers, entity, mode="cool" if temp else "on", temperature=temp)
+                return await act_climate(db, drivers, entity, mode="off", mentioned_room=mentioned)
+            return await act_climate(db, drivers, entity, mode="cool" if temp else "on",
+                                     temperature=temp, mentioned_room=mentioned)
         entity = resolve_entity(db, norm, room_id, "light")
         if entity:
-            return await act_switch(db, drivers, entity, on=has_on)
+            return await act_switch(db, drivers, entity, on=has_on, mentioned_room=mentioned)
         entity = resolve_entity(db, norm, room_id, "switch")
         if entity:
-            return await act_switch(db, drivers, entity, on=has_on)
+            return await act_switch(db, drivers, entity, on=has_on, mentioned_room=mentioned)
         return None
 
     return None
@@ -523,7 +533,9 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             if not entity:
                 return {"reply": f"Mình không tìm thấy thiết bị '{args.get('entity')}'.",
                         "action": {"tool": name, "ok": False}}
-            return await act_switch(db, drivers, entity, args.get("state") == "on")
+            # LLM nêu phòng (param room hoặc lồng trong entity) = người nói nói rõ phòng
+            mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
+            return await act_switch(db, drivers, entity, args.get("state") == "on", mentioned_room=mentioned)
 
         if name == "set_climate":
             entity = resolve_entity(db, args.get("entity") or "điều hòa", room_id, "climate")
@@ -531,9 +543,10 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
                 entity = resolve_entity(db, args.get("entity") or "điều hòa", room_id)
             if not entity:
                 return {"reply": "Mình không tìm thấy điều hòa nào.", "action": {"tool": name, "ok": False}}
+            mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
             return await act_climate(
                 db, drivers, entity,
-                mode=args.get("mode"), temperature=args.get("temperature"),
+                mode=args.get("mode"), temperature=args.get("temperature"), mentioned_room=mentioned,
             )
 
         if name == "get_sensor":
