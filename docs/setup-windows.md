@@ -31,7 +31,9 @@ Chạy:
 python -m server
 ```
 
-Mở `http://localhost:8124` (từ điện thoại: `http://<IP-máy-tính>:8124`). Đăng nhập bằng `admin_token`.
+Mở `http://localhost:8124/admin` (từ điện thoại: `http://<IP-máy-tính>:8124/admin`). Đăng nhập bằng `admin_token`.
+
+Trang `http://<IP-máy-tính>:8124/` là **màn hiển thị treo tường** (thời tiết, trạng thái phòng, hẹn giờ) — không cần đăng nhập, tự cập nhật mỗi 30 giây, có nút ⛶ toàn màn hình. Dùng cho máy tính bảng đặt quanh nhà: mở trình duyệt, vào địa chỉ trên, thêm vào màn hình chính (PWA/add to home screen) và giữ màn hình luôn bật.
 
 ### Kiểm tra nhanh không cần phần cứng
 

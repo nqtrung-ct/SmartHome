@@ -22,7 +22,7 @@ WMO_VI = {
 class Weather:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self._cache: tuple[float, str] | None = None
+        self._cache: tuple[float, dict] | None = None
 
     def _fetch(self) -> dict:
         url = "https://api.open-meteo.com/v1/forecast"
@@ -37,26 +37,36 @@ class Weather:
         resp.raise_for_status()
         return resp.json()
 
-    def summary(self) -> str:
-        """Short Vietnamese weather summary, cached 10 minutes."""
+    def snapshot(self) -> dict:
+        """Structured current weather, cached 10 minutes. Raises on failure."""
         now = time.time()
         if self._cache and now - self._cache[0] < 600:
             return self._cache[1]
         data = self._fetch()
-        cur = data["current"]
-        day = data["daily"]
+        cur, day = data["current"], data["daily"]
         code = int(cur.get("weather_code", 0))
-        desc = WMO_VI.get(code, "thời tiết bình thường")
-        rain = day.get("precipitation_probability_max", [None])[0]
+        snap = {
+            "temperature": round(cur["temperature_2m"]),
+            "humidity": round(cur["relative_humidity_2m"]),
+            "wind": round(cur["wind_speed_10m"]),
+            "code": code,
+            "condition": WMO_VI.get(code, "thời tiết bình thường"),
+            "temp_max": round(day["temperature_2m_max"][0]),
+            "temp_min": round(day["temperature_2m_min"][0]),
+            "rain_prob": day.get("precipitation_probability_max", [None])[0],
+        }
+        self._cache = (now, snap)
+        return snap
+
+    def summary(self) -> str:
+        """Short Vietnamese weather summary for voice replies."""
+        s = self.snapshot()
         parts = [
-            f"Bây giờ {desc.lower()}, {cur['temperature_2m']:.0f} độ C, "
-            f"độ ẩm {cur['relative_humidity_2m']:.0f}%, gió {cur['wind_speed_10m']:.0f} km/h.",
-            f"Hôm nay cao nhất {day['temperature_2m_max'][0]:.0f} độ, "
-            f"thấp nhất {day['temperature_2m_min'][0]:.0f} độ",
+            f"Bây giờ {s['condition'].lower()}, {s['temperature']} độ C, "
+            f"độ ẩm {s['humidity']}%, gió {s['wind']} km/h.",
+            f"Hôm nay cao nhất {s['temp_max']} độ, thấp nhất {s['temp_min']} độ",
         ]
-        if rain is not None:
-            parts[-1] += f", khả năng mưa {rain:.0f}%"
+        if s["rain_prob"] is not None:
+            parts[-1] += f", khả năng mưa {s['rain_prob']:.0f}%"
         parts[-1] += "."
-        text = " ".join(parts)
-        self._cache = (now, text)
-        return text
+        return " ".join(parts)

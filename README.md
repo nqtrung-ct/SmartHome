@@ -31,7 +31,7 @@ Copy-Item config.example.yaml config.yaml   # đổi admin_token
 python -m server
 ```
 
-Mở `http://localhost:8124` → **Tổng quan** thêm phòng (kèm tầng) → **Quét mạng → ➕ Thêm tay** tạo thiết bị ảo gán vào phòng → thêm thực thể (đèn, quạt...) trong tab **Thiết bị** → tab **Lệnh**: thử `bật đèn`, `điều hòa 26 độ`, `15 phút nữa nhắc tôi tắt bếp`, `thời tiết hôm nay thế nào`.
+Mở `http://localhost:8124` — **màn hiển thị treo tường** (thời tiết, trạng thái phòng, hẹn giờ; tự cập nhật 30 giây/lần, không cần đăng nhập, có nút toàn màn hình). Quản trị ở `http://localhost:8124/admin`: thêm phòng (kèm tầng) → **Quét mạng → ➕ Thêm tay** tạo thiết bị gán vào phòng → thêm thực thể (đèn, quạt...) trong tab **Thiết bị** → tab **Lệnh**: thử `bật đèn`, `điều hòa 26 độ`, `15 phút nữa nhắc tôi tắt bếp`, `thời tiết hôm nay thế nào`.
 
 Chi tiết đầy đủ (mô hình AI, Broadlink/Zigbee/Tuya, app Android, firewall): [`docs/setup-windows.md`](docs/setup-windows.md).
 

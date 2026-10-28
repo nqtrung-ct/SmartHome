@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartHome</title>
+<link rel="stylesheet" href="display.css">
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="greeting">Xin chào</h1>
+    <p id="dateline">&nbsp;</p>
+  </div>
+  <div class="clock">
+    <div id="clock">--:--</div>
+    <button id="fullscreen" title="Toàn màn hình">⛶</button>
+  </div>
+</header>
+
+<main id="grid">
+  <!-- cột trái: thời tiết + tổng quan -->
+  <section class="col-left">
+    <div class="card weather">
+      <div class="weather-top">
+        <span id="w-icon" class="w-icon">⛅</span>
+        <div>
+          <div id="w-temp" class="w-temp">--°</div>
+          <div id="w-cond" class="muted">đang tải…</div>
+        </div>
+      </div>
+      <div class="w-stats">
+        <div><span class="w-num" id="w-wind">–</span><span class="w-lab">gió km/h</span></div>
+        <div><span class="w-num" id="w-hum">–</span><span class="w-lab">độ ẩm %</span></div>
+        <div><span class="w-num" id="w-rain">–</span><span class="w-lab">mưa %</span></div>
+      </div>
+      <div class="w-range muted" id="w-range">cao nhất --° · thấp nhất --°</div>
+    </div>
+
+    <div class="card hero">
+      <div class="hero-title">Tổng quan nhà</div>
+      <div class="hero-nums"><b id="h-on">–</b> thiết bị đang bật</div>
+      <div class="hero-sub muted"><span id="h-rooms">–</span> phòng · <span id="h-timers">–</span> hẹn giờ chờ</div>
+    </div>
+  </section>
+
+  <!-- cột giữa: trạng thái phòng -->
+  <section class="col-mid">
+    <div class="card rooms">
+      <h2>Trạng thái phòng</h2>
+      <div id="room-list" class="room-list"><p class="muted">Đang tải…</p></div>
+    </div>
+  </section>
+
+  <!-- cột phải: thiết bị + hẹn giờ -->
+  <section class="col-right">
+    <div class="card">
+      <h2>Thiết bị</h2>
+      <div class="dev-grid">
+        <div class="dev"><span class="dev-ic ic-yellow">💡</span><b id="d-lights">–</b><span class="muted">đèn bật</span></div>
+        <div class="dev"><span class="dev-ic ic-blue">❄️</span><b id="d-ac">–</b><span class="muted">điều hòa</span></div>
+        <div class="dev"><span class="dev-ic ic-green">🌡️</span><b id="d-sensors">–</b><span class="muted">cảm biến</span></div>
+        <div class="dev"><span class="dev-ic ic-purple">🎥</span><b id="d-cams">–</b><span class="muted">camera</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Hẹn giờ sắp tới</h2>
+      <div id="timer-list"><p class="muted">Không có hẹn giờ.</p></div>
+    </div>
+  </section>
+</main>
+
+<footer><span id="updated">–</span> · <a href="/admin">Quản trị</a></footer>
+<script src="display.js"></script>
+</body>
+</html>

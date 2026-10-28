@@ -20,6 +20,84 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/display")
+def display(request: Request):
+    """Read-only snapshot for wall displays. Public (LAN-only server, no secrets)."""
+    import json as _json
+
+    app = request.app
+    db = app.state.db
+
+    weather = None
+    try:
+        weather = app.state.weather.snapshot()
+    except Exception:
+        weather = None
+
+    rooms = []
+    for room in db.query("SELECT * FROM rooms ORDER BY name"):
+        entities = db.query(
+            """SELECT e.name, e.entity_type, e.state FROM entities e
+               JOIN devices d ON d.id=e.device_id WHERE d.room_id=?""",
+            (room["id"],),
+        )
+        ents = []
+        lights_on = active = 0
+        temp = humidity = None
+        for e in entities:
+            try:
+                state = _json.loads(e["state"] or "{}")
+            except ValueError:
+                state = {}
+            ents.append({"name": e["name"], "type": e["entity_type"], "state": state})
+            if e["entity_type"] in ("light", "switch"):
+                if state.get("state") == "on":
+                    lights_on += 1
+                    active += 1
+            elif e["entity_type"] == "climate" and state.get("state") not in (None, "off"):
+                active += 1
+            elif e["entity_type"] == "sensor":
+                temp = state.get("temperature", temp)
+                humidity = state.get("humidity", humidity)
+        rooms.append({
+            "id": room["id"], "name": room["name"], "floor": room["floor"],
+            "active": active > 0, "lights_on": lights_on,
+            "temperature": temp, "humidity": humidity,
+            "entity_count": len(ents),
+        })
+
+    timers = [
+        {"target_at": t["target_at"], "message": t["message"], "room": t["room_name"]}
+        for t in db.query(
+            """SELECT t.target_at, t.message, r.name AS room_name FROM timers t
+               LEFT JOIN rooms r ON r.id=t.room_id
+               WHERE t.done=0 ORDER BY t.target_at LIMIT 5"""
+        )
+    ]
+
+    counts = {
+        "rooms": len(rooms),
+        "devices": db.one("SELECT COUNT(*) AS n FROM devices")["n"],
+        "on_now": sum(r["active"] for r in rooms),
+        "sensors": db.one(
+            "SELECT COUNT(*) AS n FROM entities WHERE entity_type='sensor'"
+        )["n"],
+        "cameras": db.one(
+            "SELECT COUNT(*) AS n FROM entities WHERE entity_type='camera'"
+        )["n"],
+        "climates": db.one(
+            "SELECT COUNT(*) AS n FROM entities WHERE entity_type='climate'"
+        )["n"],
+    }
+    return {
+        "weather": weather,
+        "rooms": rooms,
+        "timers": timers,
+        "counts": counts,
+        "updated_at": now_iso(),
+    }
+
+
 @router.post("/pair", status_code=201)
 def pair(request: Request, body: dict):
     """Pair an Android phone with a one-time code shown in the admin UI."""

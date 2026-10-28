@@ -1,0 +1,127 @@
+/* Wall display - dark dashboard in the style of the reference mockup. */
+:root {
+  --bg: #0b0e14;
+  --card: #141924;
+  --card2: #1b2130;
+  --border: #242d3f;
+  --text: #eef1f7;
+  --muted: #8b95a7;
+  --green: #3ecf8e;
+  --blue: #4f8cff;
+  --radius: 24px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 80% -10%, #16203a 0%, transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  display: flex; flex-direction: column;
+  padding: 28px 36px;
+}
+
+header { display: flex; justify-content: space-between; align-items: flex-start; }
+h1 { margin: 0; font-size: 34px; font-weight: 700; }
+#dateline { margin: 6px 0 0; color: var(--muted); font-size: 17px; text-transform: capitalize; }
+.clock { display: flex; align-items: center; gap: 14px; }
+#clock { font-size: 56px; font-weight: 300; letter-spacing: 2px; }
+#fullscreen {
+  background: var(--card); color: var(--muted); border: 1px solid var(--border);
+  border-radius: 14px; width: 44px; height: 44px; font-size: 20px; cursor: pointer;
+}
+
+main {
+  flex: 1; display: grid; gap: 22px; margin-top: 26px;
+  grid-template-columns: 340px minmax(420px, 1fr) 380px;
+  grid-auto-rows: min-content;
+  align-content: start;
+}
+.col-left, .col-mid, .col-right { display: flex; flex-direction: column; gap: 22px; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 26px 28px;
+}
+.card h2 { margin: 0 0 18px; font-size: 19px; font-weight: 600; color: var(--muted); }
+.muted { color: var(--muted); }
+
+/* --- weather --- */
+.weather-top { display: flex; align-items: center; gap: 18px; }
+.w-icon { font-size: 74px; line-height: 1; filter: drop-shadow(0 4px 18px rgba(255, 200, 80, .25)); }
+.w-temp { font-size: 58px; font-weight: 700; line-height: 1.05; }
+.w-stats { display: flex; gap: 12px; margin-top: 22px; }
+.w-stats > div {
+  flex: 1; background: var(--card2); border-radius: 16px; padding: 12px 8px; text-align: center;
+}
+.w-num { display: block; font-size: 22px; font-weight: 700; }
+.w-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.w-range { margin-top: 16px; font-size: 15px; text-align: center; }
+
+/* --- hero summary (gradient, like the scene card in the mockup) --- */
+.hero {
+  background: linear-gradient(135deg, #2a5cf6 0%, #7c3aed 55%, #b5179e 100%);
+  border: none; color: #fff;
+}
+.hero-title { font-size: 20px; font-weight: 700; }
+.hero-nums { font-size: 26px; margin-top: 10px; }
+.hero-nums b { font-size: 44px; font-weight: 800; }
+.hero-sub { margin-top: 6px; font-size: 15px; color: rgba(255, 255, 255, .8); }
+
+/* --- rooms --- */
+.room-list { display: flex; flex-direction: column; gap: 12px; }
+.room {
+  display: flex; align-items: center; gap: 16px;
+  background: var(--card2); border-radius: 18px; padding: 18px 22px;
+}
+.dot { width: 12px; height: 12px; border-radius: 50%; background: #4a5468; flex: none; }
+.dot.on { background: var(--green); box-shadow: 0 0 12px rgba(62, 207, 142, .7); }
+.room .r-name { font-size: 21px; font-weight: 600; }
+.room .r-sub { font-size: 14px; color: var(--muted); margin-top: 2px; }
+.room .r-right { margin-left: auto; text-align: right; }
+.room .r-temp { font-size: 26px; font-weight: 700; }
+.room .r-hum { font-size: 13.5px; color: var(--muted); }
+.badge {
+  display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12.5px;
+  background: rgba(79, 140, 255, .15); color: var(--blue); margin-left: 8px; vertical-align: middle;
+}
+
+/* --- devices grid --- */
+.dev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.dev { text-align: center; }
+.dev b { display: block; font-size: 26px; margin-top: 8px; }
+.dev span:last-child { font-size: 13.5px; }
+.dev-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 64px; height: 64px; border-radius: 50%; font-size: 30px;
+}
+.ic-yellow { background: rgba(255, 193, 7, .14); }
+.ic-blue   { background: rgba(79, 140, 255, .16); }
+.ic-green  { background: rgba(62, 207, 142, .14); }
+.ic-purple { background: rgba(167, 97, 238, .16); }
+
+/* --- timers --- */
+.timer { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.timer:last-child { border-bottom: none; }
+.t-time { font-size: 20px; font-weight: 700; color: var(--green); white-space: nowrap; }
+.t-msg { font-size: 16px; }
+.t-room { font-size: 13px; color: var(--muted); }
+
+footer { margin-top: 22px; color: var(--muted); font-size: 13px; }
+footer a { color: var(--muted); }
+
+/* wall displays are often portrait or small - keep it usable */
+@media (max-width: 1200px) {
+  main { grid-template-columns: 1fr 1fr; }
+  .col-mid { order: -1; grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  body { padding: 18px; }
+  main { grid-template-columns: 1fr; }
+  #clock { font-size: 38px; }
+  h1 { font-size: 26px; }
+}

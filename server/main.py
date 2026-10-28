@@ -81,8 +81,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     app.include_router(voice_api.router)
 
     static_dir = Path(__file__).parent / "static"
-    if static_dir.exists():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="admin")
+    admin_dir = static_dir / "admin"
+    display_dir = static_dir / "display"
+    if admin_dir.exists():
+        app.mount("/admin", StaticFiles(directory=str(admin_dir), html=True), name="admin")
+    if display_dir.exists():
+        app.mount("/", StaticFiles(directory=str(display_dir), html=True), name="display")
     return app
 
 

@@ -42,6 +42,11 @@ async def main():
             r = await c.get("/api/health")
             check("health", r.status_code == 200)
 
+            r = await c.get("/api/display")
+            d = r.json() if r.status_code == 200 else {}
+            check("display snapshot (public)", r.status_code == 200 and
+                  all(k in d for k in ("weather", "rooms", "timers", "counts")), r.text)
+
             r = await c.get("/api/rooms", headers={"Authorization": "Bearer nope"})
             check("auth rejects bad token", r.status_code == 401)
 
