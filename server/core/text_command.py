@@ -106,6 +106,21 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "camera_person",
+            "description": "Kiểm tra camera có nhìn thấy người không (qua Frigate). Có thể quay tới góc đã lưu hoặc quét tất cả các góc rồi báo lại",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string", "description": "Tên camera nếu nói rõ"},
+                    "preset": {"type": "string", "description": "Tên góc đã lưu để quay tới trước khi kiểm tra; 'all' = quét tất cả các góc; bỏ trống = kiểm tra tầm nhìn hiện tại"},
+                    "room": {"type": "string", "description": "Phòng nếu khác phòng người nói"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_sensor",
             "description": "Đọc nhiệt độ/độ ẩm từ cảm biến trong phòng",
             "parameters": {
@@ -267,15 +282,32 @@ def resolve_camera(db: Database, text: str, room_id=None):
     return None
 
 
+def _person_question(norm: str) -> bool:
+    """Câu hỏi có người/ai không? ("kiểm tra ... có người không", "có ai ... không")"""
+    return bool(re.search(r"\b(nguoi|ai)\b", norm)
+                and (re.search(r"\bkiem tra\b", norm) or re.search(r"\bco (nguoi|ai)\b", norm)))
+
+
+def camera_multi_intent(norm: str) -> bool:
+    """"Kiểm tra camera và cho tôi biết..." là MỘT việc (làm rồi báo lại) — chỉ
+    phần còn lại của câu mới xét nối từ ghép (và/rồi/sau đó) như bình thường."""
+    stripped = re.sub(r"\bva (cho|bao) (toi|minh|anh|chi|em)?\s*biet\b", " ", norm)
+    return bool(re.search(r"\bva\b|\broi\b|\bsau do\b|\bthem\b|\bngoai ra\b", stripped))
+
+
 def camera_ptz_gate(db: Database, norm: str) -> bool:
-    """Câu này là lệnh PTZ camera không? Phải nhắc camera (từ "camera" hoặc đúng
-    tên camera) kèm động từ quay/xoay hoặc hỏi về các "góc" — bắt chung động từ
-    "xoay" sẽ cuốn theo lệnh quạt."""
+    """Câu này là lệnh camera (PTZ/kiểm tra người) không? Phải nhắc camera (từ
+    "camera" hoặc đúng tên camera) kèm động từ quay/xoay hoặc hỏi về "góc"/người
+    — bắt chung động từ "xoay" sẽ cuốn theo lệnh quạt."""
     rotate = re.search(r"\b(quay|xoay)\b", norm)
     ask_angles = re.search(r"\bgoc\b", norm) and re.search(r"\b(gi|nao|nhung)\b", norm)
-    if not (rotate or ask_angles):
+    ask_person = _person_question(norm)
+    if not (rotate or ask_angles or ask_person):
         return False
     if re.search(r"\bcamera\b", norm):
+        return True
+    # "kiểm tra góc quay bếp có ai không" — chỉ camera mới có góc quay + người
+    if ask_person and re.search(r"\bgoc\b", norm):
         return True
     return any(
         _alias_in(alias, norm)
@@ -422,6 +454,94 @@ async def act_camera_ptz(db: Database, entity, norm: str) -> dict:
                 "action": {"tool": "camera_preset", "ok": False}}
     return {"reply": f"{cam} có các góc đã lưu: {angles}.",
             "action": {"tool": "camera_preset", "ok": False}}
+
+
+async def act_camera_person(db: Database, entity, norm: str) -> dict | None:
+    """Kiểm tra camera có nhìn thấy người không (person detection của Frigate).
+
+    None = câu không phải hỏi về người (để act_camera_ptz xử lý tiếp). Ba dạng:
+    hỏi góc nào đó ("kiểm tra góc bếp có ai không" — quay tới rồi xem), quét tất
+    cả góc ("kiểm tra các góc quay camera..."), hoặc nhìn thẳng vị trí hiện tại
+    ("camera có người không")."""
+    from server.config import Config
+    from server.core import frigate as frg
+    from server.drivers import dahua_ptz as ptz
+
+    if not _person_question(norm):
+        return None
+
+    cam = entity["name"].lower()
+    presets = loads(entity["driver_data"]).get("presets", [])
+    tokens = norm.split()
+    matched = [p for p in presets
+               if normalize(p.get("name", "")).split()
+               and all(w in tokens for w in normalize(p["name"]).split())]
+    sweep = not matched and bool(re.search(r"\bcac goc\b|\btat ca\b|\bgoc\b", norm))
+
+    fname = loads(entity["driver_data"]).get("frigate") or await frg.sole_camera()
+    if not fname:
+        return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
+                "action": {"tool": "camera_person", "ok": False}}
+    device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
+
+    async def _check() -> bool | None:
+        return await frg.person_present(fname)
+
+    def _answer(seen: bool | None) -> str:
+        return "không rõ" if seen is None else ("có người" if seen else "không có ai")
+
+    # quét tất cả các góc: tới từng góc -> chờ motor + detection -> đọc Frigate
+    if sweep and presets and device and device["host"]:
+        try:
+            home = await asyncio.to_thread(ptz.read_position, Config(), device)
+        except ptz.PtzError:
+            home = None
+        results = []
+        for p in presets:
+            try:
+                await asyncio.to_thread(ptz.fast_goto, Config(), device,
+                                        p["pan"], p["tilt"], p.get("zoom", 1))
+            except ptz.PtzError as exc:
+                return {"reply": f"Không quay được camera ({exc}).",
+                        "action": {"tool": "camera_person", "ok": False}}
+            # motor mất 2-3 giây + Frigate cần ~2 giây để xác nhận người mới
+            await asyncio.sleep(4.5)
+            results.append(f"{p['name']} — {_answer(await _check())}")
+        if home:
+            try:
+                await asyncio.to_thread(ptz.fast_goto, Config(), device,
+                                        home["pan"], home["tilt"], home.get("zoom", 1))
+            except ptz.PtzError:
+                pass
+        return {"reply": f"Đã kiểm tra các góc: {'; '.join(results)}. Camera quay về vị trí ban đầu.",
+                "action": {"tool": "camera_person", "entity": entity["name"], "ok": True}}
+
+    # một góc nêu tên: quay tới rồi kiểm tra
+    if matched and device and device["host"]:
+        preset = max(matched, key=lambda p: len(normalize(p["name"])))
+        try:
+            await asyncio.to_thread(ptz.fast_goto, Config(), device,
+                                    preset["pan"], preset["tilt"], preset.get("zoom", 1))
+        except ptz.PtzError as exc:
+            return {"reply": f"Không quay được camera ({exc}).",
+                    "action": {"tool": "camera_person", "ok": False}}
+        await asyncio.sleep(4.5)
+        seen = await _check()
+        if seen is None:
+            return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
+                    "action": {"tool": "camera_person", "ok": False}}
+        return {"reply": f"{'Có người' if seen else 'Không có ai'} ở góc {preset['name']}.",
+                "action": {"tool": "camera_person", "entity": entity["name"],
+                           "preset": preset["name"], "person": seen, "ok": True}}
+
+    # không nêu góc: kiểm tra thẳng tầm nhìn hiện tại
+    seen = await _check()
+    if seen is None:
+        return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
+                "action": {"tool": "camera_person", "ok": False}}
+    return {"reply": f"{'Có người' if seen else 'Không có ai'} trong hình {cam}.",
+            "action": {"tool": "camera_person", "entity": entity["name"],
+                       "person": seen, "ok": True}}
 
 
 async def act_climate(db, drivers, entity, mode=None, temperature=None, mentioned_room=None) -> dict:
@@ -823,12 +943,18 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         if entity:
             return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
 
-    # camera PTZ theo tên góc đã lưu ("quay camera về phía bếp"). Đặt TRƯỚC nhánh
-    # âm lượng/xoay quạt vì "xoay" cũng là từ khóa quạt; câu ghép nhiều việc
-    # ("quay camera và bật đèn") nhường LLM để gọi đủ công cụ.
-    if not multi_intent and camera_ptz_gate(db, norm):
+    # camera PTZ theo tên góc đã lưu ("quay camera về phía bếp") + kiểm tra
+    # người qua Frigate ("camera có người không", "kiểm tra góc bếp có ai không").
+    # Đặt TRƯỚC nhánh âm lượng/xoay quạt vì "xoay" cũng là từ khóa quạt; câu ghép
+    # thật sự ("quay camera và bật đèn") nhường LLM để gọi đủ công cụ.
+    if camera_ptz_gate(db, norm) and not camera_multi_intent(norm):
         cam = resolve_camera(db, norm, room_id)
         if cam:
+            # hỏi người đặt trước PTZ: "quay camera về bếp và cho biết có
+            # người không" chứa động từ quay + preset nhưng ý là kiểm tra
+            person = await act_camera_person(db, cam, norm)
+            if person:
+                return person
             return await act_camera_ptz(db, cam, norm)
         return {"reply": "Mình không tìm thấy camera nào.",
                 "action": {"tool": "camera_preset", "ok": False}}
@@ -904,8 +1030,8 @@ def _llm_context(db: Database, room_id) -> str:
         extra = ""
         if e["entity_type"] == "camera":
             names = [p["name"] for p in loads(e["driver_data"]).get("presets", []) if p.get("name")]
-            if names:
-                extra = f"; góc đã lưu: {', '.join(names)}"
+            extra = f"; góc đã lưu: {', '.join(names)}" if names else ""
+            extra += "; hỏi có người không -> camera_person (preset 'all' = quét mọi góc)"
         lines.append(f"- {e['name']} ({e['entity_type']}, phòng {room}{extra})")
     return "\n".join(lines)
 
@@ -971,6 +1097,25 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             # chỉ khớp tên góc từ tham số preset (không gộp tên camera — camera
             # "camera bếp" sẽ khớp nhầm preset "bếp"); sai tên thì act liệt kê lại
             return await act_camera_ptz(db, cam, normalize(str(args.get("preset", ""))))
+
+        if name == "camera_person":
+            hint = normalize(f"{args.get('entity', '')} {args.get('room') or ''}")
+            cam = resolve_camera(db, hint, room_id)
+            if not cam:
+                return {"reply": "Mình không tìm thấy camera nào.",
+                        "action": {"tool": name, "ok": False}}
+            # dựng lại câu hỏi từ tham số: all = quét mọi góc, tên = góc đó,
+            # bỏ trống = kiểm tra tầm nhìn hiện tại
+            arg = normalize(str(args.get("preset", "") or ""))
+            if arg in ("all", "tat ca"):
+                text = "kiểm tra các góc có người không"
+            elif arg:
+                text = f"kiểm tra góc {arg} có người không"
+            else:
+                text = "camera có người không"
+            outcome = await act_camera_person(db, cam, normalize(text))
+            return outcome or {"reply": "Mình chưa hiểu câu này.",
+                               "action": {"tool": name, "ok": False}}
 
         if name == "list_active":
             room_arg = str(args.get("room") or "").strip()

@@ -32,6 +32,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "broadlink": {"timeout": 5},
     "camera": {"poll_seconds": 60},  # chu kỳ kiểm tra camera online (socket RTSP)
+    "frigate": {"base_url": "http://127.0.0.1:5000"},  # API nội bộ của NVR Docker (map 127.0.0.1)
     "display": {"pin": ""},  # mã 4 số mở khóa điều khiển trên màn hình treo tường
     "retention": {"days": 30},
 }
