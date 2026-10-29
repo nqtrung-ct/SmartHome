@@ -171,9 +171,6 @@ function tick() {
   const buoi = hour < 12 ? "Sáng" : hour < 14 ? "Trưa" : hour < 18 ? "Chiều" : "Tối";
   $("clock").innerHTML =
     `${h12}:${String(now.getMinutes()).padStart(2, "0")} <span class="clock-buoi">${buoi}</span>`;
-  $("greeting").textContent =
-    hour < 11 ? "Chào buổi sáng" : hour < 14 ? "Chào buổi trưa" :
-    hour < 18 ? "Chào buổi chiều" : "Chào buổi tối";
   $("dateline").textContent = now.toLocaleDateString("vi-VN", {
     weekday: "long", day: "numeric", month: "long", year: "numeric",
   });
