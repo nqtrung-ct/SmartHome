@@ -212,8 +212,9 @@ let ctrlTemp = 26;
 let ctrlFan = "";    // mức quạt đang chọn (điều hòa)
 let ctrlMode = "cool";
 
+// icon rỗng = chỉ chữ, không hiện icon
 const BTN_ICON = {
-  swing: ["🔄", "Xoay"], fan_mode: ["🌬", "Tốc độ"],
+  swing: ["", "Xoay"], fan_mode: ["", "Tốc độ"],
   volume_up: ["🔊", "To hơn"], volume_down: ["🔉", "Nhỏ hơn"], mute: ["🔇", "Tắt tiếng"],
 };
 const FANS = [["quiet", "Yên lặng"], ["low", "Thấp"], ["mid", "Vừa"], ["high", "Cao"], ["auto", "Tự động"]];
@@ -229,8 +230,8 @@ function ctrlBody(e) {
     // hàng 1: bật/tắt riêng; hàng 2: − nhiệt độ ＋
     main = `
       <div class="rrow">
-        <button class="rbtn on-btn" data-cmd="on"><span>⏻</span>Bật</button>
-        <button class="rbtn off-btn" data-cmd="off"><span>⏹</span>Tắt</button>
+        <button class="rbtn on-btn" data-cmd="on">Bật</button>
+        <button class="rbtn off-btn" data-cmd="off">Tắt</button>
       </div>
       <div class="rrow">
         <button class="rbtn sm" data-cmd="temp-">−</button>
@@ -249,12 +250,15 @@ function ctrlBody(e) {
   } else {
     main = `
       <div class="rrow">
-        <button class="rbtn on-btn" data-cmd="on"><span>⏻</span>Bật</button>
-        <button class="rbtn off-btn" data-cmd="off"><span>⏹</span>Tắt</button>
+        <button class="rbtn on-btn" data-cmd="on">Bật</button>
+        <button class="rbtn off-btn" data-cmd="off">Tắt</button>
       </div>`;
     const extras = e.buttons
       .filter((b) => BTN_ICON[b])
-      .map((b) => `<button class="rbtn xs" data-btn="${b}"><span>${BTN_ICON[b][0]}</span>${BTN_ICON[b][1]}</button>`)
+      .map((b) => {
+        const [ic, lab] = BTN_ICON[b];
+        return `<button class="rbtn xs" data-btn="${b}">${ic ? `<span>${ic}</span>` : ""}${lab}</button>`;
+      })
       .join("");
     if (extras) more = `<div class="ctrl-lab">Nút khác</div><div class="rrow wrap">${extras}</div>`;
   }
