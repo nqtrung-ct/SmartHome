@@ -42,7 +42,7 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
 
 main {
   flex: 1; display: grid; gap: 22px; margin-top: 26px;
-  grid-template-columns: 340px 1fr 1fr;
+  grid-template-columns: clamp(230px, 30vw, 340px) 1fr 1fr;
   grid-auto-rows: min-content;
   align-content: start;
 }
@@ -182,15 +182,12 @@ main {
 .t-msg { font-size: 16px; }
 .t-room { font-size: 13px; color: var(--muted); }
 
-/* wall displays are often portrait or small - keep it usable */
-@media (max-width: 1200px) {
-  main { grid-template-columns: 1fr 1fr; }
-  .col-rooms { order: -1; grid-column: 1 / -1; }
-}
-@media (max-width: 760px) {
+/* chỉ màn quá hẹp (< 640px) mới xếp dọc: phòng lên trên, thời tiết + hẹn giờ dưới;
+   từ 640px trở lên luôn giữ bố cục 3 cột (cột trái co lại theo màn) */
+@media (max-width: 640px) {
   body { padding: 18px; }
   main { grid-template-columns: 1fr; }
-  .col-rooms { grid-column: auto; }
+  .col-rooms { order: -1; grid-column: auto; }
   #clock { font-size: 38px; }
   h1 { font-size: 26px; }
 }
