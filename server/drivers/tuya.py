@@ -50,7 +50,9 @@ def _sensor_dps_map(dps: dict) -> dict:
 
 
 def decode_phase(data) -> dict:
-    """Metering breaker 'phase_x' raw: 8 bytes = [V*10: 2B][W*0.01: 4B][?: 2B]."""
+    """Metering breaker 'phase_x' raw (bản legacy 8 byte — cùng bố cục parser
+    chính thức của Home Assistant cho Tuya):
+    [V × 0.1: 2B][dòng điện mA: 3B][công suất W: 3B], big-endian."""
     import base64
 
     if not data:
@@ -59,11 +61,12 @@ def decode_phase(data) -> dict:
         raw = base64.b64decode(data)
     except Exception:
         return {}
-    if len(raw) != 8:
+    if len(raw) < 8:
         return {}
     return {
         "voltage": int.from_bytes(raw[0:2], "big") / 10,
-        "power": int.from_bytes(raw[2:6], "big") / 100,
+        "current": round(int.from_bytes(raw[2:5], "big") / 1000, 3),
+        "power": int.from_bytes(raw[5:8], "big"),
     }
 
 

@@ -25,7 +25,7 @@ def sync_meter_with_switch(db: Database, switch_id: int, on: bool) -> None:
             break
         db.execute(
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",
-            (json.dumps({"voltage": 0, "power": 0}), now_iso(), row["id"]),
+            (json.dumps({"voltage": 0, "power": 0, "current": 0}), now_iso(), row["id"]),
         )
 
 
