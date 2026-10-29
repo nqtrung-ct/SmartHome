@@ -27,7 +27,7 @@ from server.util import (
 TYPE_ALIASES = {
     "light": ["đèn", "bóng đèn", "đèn trần", "đèn ngủ"],
     "climate": ["điều hòa", "máy lạnh", "dieu hoa", "ac"],
-    "switch": ["công tắc", "ổ cắm", "ổ cắm thông minh"],
+    "switch": ["công tắc"],  # "cầu dao" là alias riêng của thiết bị đo điện
     # sensor chỉ giữ alias đúng với MỌI sensor; "nhiệt độ/độ ẩm" là alias riêng
     # của từng cảm biến — nếu để type-alias thì công tơ điện cũng trúng "nhiệt độ"
     "sensor": ["cảm biến"],
@@ -38,7 +38,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "switch",
-            "description": "Bật hoặc tắt một thiết bị (đèn, quạt, ổ cắm, công tắc)",
+            "description": "Bật hoặc tắt một thiết bị (đèn, quạt, cầu dao, công tắc)",
             "parameters": {
                 "type": "object",
                 "properties": {

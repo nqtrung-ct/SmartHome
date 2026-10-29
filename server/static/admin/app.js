@@ -145,9 +145,10 @@ async function renderDashboard() {
           // thiết bị IR không phản hồi trạng thái thật — không hiện bật/tắt
           control = `<span class="small muted">📡 IR</span>`;
         } else if (e.entity_type === "switch" || e.entity_type === "light") {
+          // trạng thái + số đo xếp cột bên phải: trạng thái trên, giá trị dưới
           const st = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
           const m = meters.get(e.device_id);
-          control = m ? `${st} <span class="small muted">${meterText(m)}</span>` : st;
+          control = `<div class="stats-col">${st}${m ? `<span class="small muted">${meterText(m)}</span>` : ""}</div>`;
         } else if (e.entity_type === "climate") {
           const on = state.state === "on";
           const temp = on && state.temperature ? ` · ${state.temperature}°C` : "";
