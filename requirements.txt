@@ -6,3 +6,4 @@ broadlink>=0.19
 tinytuya>=1.16
 zeroconf>=0.131
 paho-mqtt>=2.0
+lunarcalendar>=0.0.9
