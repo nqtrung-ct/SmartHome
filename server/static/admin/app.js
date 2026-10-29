@@ -764,7 +764,7 @@ async function refreshDiscovered() {
               ${r.method === "tuya" ? `<input id="adopt-key-${r.id}" placeholder="🔑 Local key" style="width:110px">` : ""}
               <button class="small-btn primary" onclick="adopt(${r.id})">Thêm vào hệ thống</button>
               <button class="small-btn" onclick='openDeviceModal({discoveredId:${r.id}, name:${esc(JSON.stringify(r.name || ""))}, host:${esc(JSON.stringify(r.ip || ""))}, driver:"${guessedDriver}"})'>⚙️ Nhập tay</button>
-            </div>` : `<span class="small muted">Thiết bị #${r.adopted_device_id}</span>`}
+            </div>` : ""}
           </td>
         </tr>`;
       }).join("")}
