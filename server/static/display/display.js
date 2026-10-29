@@ -244,8 +244,9 @@ const VIDEO_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none"
 const TYPE_ICON = { light: "💡", switch: "🔌", climate: SNOW_SVG, fan: FAN_SVG, media: SPEAKER_SVG, camera: VIDEO_SVG };
 
 // thiết bị IR không phản hồi trạng thái thật — chỉ hiện tên, không hiện bật/tắt
+// (camera: trạng thái online do scheduler poll socket RTSP)
 function chipState(e) {
-  if (e.driver === "broadlink" || e.type === "camera") return "";
+  if (e.driver === "broadlink") return "";
   if (e.type === "climate") {
     const on = e.state && e.state.state === "on";
     return on && e.state.temperature != null ? `${e.state.temperature}°` : "đang tắt";
@@ -281,9 +282,12 @@ function renderRooms(rooms) {
       <div class="chip-row">
         ${(r.entities || []).map((e) => {
           const ctl = e.controllable ? " ctl" : "";
+          const on = chipState(e) === "đang bật";
+          // camera đang bật: bấm mở popup xem video
+          const cam = e.type === "camera" && on ? " cam" : "";
           const ir = e.driver === "broadlink" ? `<span class="ir-tag">IR</span>` : "";
           const st = chipState(e);
-          return `<div class="chip${ctl}${st === "đang bật" ? " on" : ""}" data-ent="${e.id}">
+          return `<div class="chip${ctl}${cam}${on ? " on" : ""}" data-ent="${e.id}">
             <span class="chip-ic">${TYPE_ICON[e.type] || "🔘"}</span>
             <span class="chip-body">
               <span class="chip-name">${esc(e.name)}${ir}</span>
@@ -295,6 +299,8 @@ function renderRooms(rooms) {
     </div>`).join("");
   el.querySelectorAll(".chip.ctl").forEach((c) =>
     c.addEventListener("click", () => openCtrl(+c.dataset.ent)));
+  el.querySelectorAll(".chip.cam").forEach((c) =>
+    c.addEventListener("click", () => openCam(+c.dataset.ent)));
   // đo sau khi DOM có thật: card phòng tràn khỏi màn hình thì chuyển 2 cột
   requestAnimationFrame(() => {
     const top = el.getBoundingClientRect().top;
@@ -469,6 +475,31 @@ function wireCtrl(e) {
 }
 
 $("ctrl-close").onclick = () => $("ctrl-overlay").classList.add("hidden");
+
+// --- camera: popup xem video (MJPEG server chuyển mã từ RTSP) ---
+function openCam(id) {
+  const { e, r } = findEntity(id);
+  if (!e) return;
+  $("cam-icon").innerHTML = VIDEO_SVG;
+  $("cam-name").textContent = e.name;
+  $("cam-room").textContent = r ? r.name : "";
+  const img = $("cam-img"), err = $("cam-error");
+  err.classList.add("hidden");
+  img.classList.remove("hidden");
+  img.onerror = () => {  // camera rớt giữa chừng / không chuyển mã được
+    img.classList.add("hidden");
+    img.src = "";
+    err.classList.remove("hidden");
+  };
+  img.src = `/api/display/camera/${id}/stream?ts=${Date.now()}`;
+  $("cam-overlay").classList.remove("hidden");
+}
+
+function closeCam() {
+  $("cam-img").src = "";  // ngắt luồng -> server giết tiến trình ffmpeg
+  $("cam-overlay").classList.add("hidden");
+}
+$("cam-close").onclick = closeCam;
 
 async function sendCommand(e, command, params) {
   if (!unlocked()) { $("ctrl-overlay").classList.add("hidden"); showPin(() => openCtrl(e.id), e.name); return; }

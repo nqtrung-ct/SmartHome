@@ -153,6 +153,9 @@ async function renderDashboard() {
           const on = state.state === "on";
           const temp = on && state.temperature ? ` · ${state.temperature}°C` : "";
           control = `<span class="small ${on ? "ok" : "muted"}">${on ? `❄ Đang bật${temp}` : "○ Đang tắt"}</span>`;
+        } else if (e.entity_type === "camera") {
+          const on = state.state === "on";
+          control = `<span class="small ${on ? "ok" : "muted"}">${on ? "📹 Đang bật" : "○ Đang tắt"}</span>`;
         } else if (e.entity_type === "sensor") {
           // values older than an hour are stale - show a dash, not old numbers
           const stale = e.updated_at && (Date.now() - new Date(e.updated_at).getTime() > 3600000);

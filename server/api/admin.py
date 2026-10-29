@@ -169,6 +169,97 @@ def display(request: Request):
     }
 
 
+@router.get("/display/camera/{entity_id}/stream")
+async def display_camera_stream(request: Request, entity_id: int):
+    """Video camera cho màn hình treo tường: RTSP -> MJPEG qua ffmpeg.
+    Trình duyệt không mở được RTSP nên server chuyển mã và đẩy từng khung
+    JPEG (multipart/x-mixed-replace) — thẻ <img> hiển thị như video.
+    Tài khoản RTSP lấy từ secret 'rtsp.<host>' (JSON {"user","pass"} hoặc
+    chuỗi mật khẩu, user mặc định admin); đè được bằng device.extra
+    rtsp_user/rtsp_port/rtsp_path cho camera khác hãng."""
+    import contextlib
+    import json as _json
+    import shutil as _shutil
+    from urllib.parse import quote
+
+    from fastapi.responses import StreamingResponse
+
+    from server.util import load_secret
+
+    db = request.app.state.db
+    row = db.one(
+        """SELECT e.state, d.host, d.extra FROM entities e
+           JOIN devices d ON d.id=e.device_id
+           WHERE e.id=? AND e.entity_type='camera'""",
+        (entity_id,),
+    )
+    if not row or not row["host"]:
+        raise HTTPException(status_code=404, detail="Không có camera này")
+    try:
+        st = _json.loads(row["state"] or "{}")
+    except ValueError:
+        st = {}
+    if st.get("state") != "on":
+        raise HTTPException(status_code=503, detail="Camera đang tắt hoặc mất kết nối")
+    ffmpeg = _shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(status_code=503, detail="Server chưa cài ffmpeg")
+    try:
+        extra = _json.loads(row["extra"] or "{}")
+    except ValueError:
+        extra = {}
+    cred = {}
+    try:
+        raw = load_secret(request.app.state.cfg, "rtsp", row["host"]) or ""
+    except Exception:
+        raw = ""
+    if raw:
+        try:
+            cred = _json.loads(raw)
+        except ValueError:
+            cred = {"pass": raw}
+    user = quote(str(extra.get("rtsp_user") or cred.get("user") or "admin"))
+    password = quote(str(cred.get("pass") or ""))
+    if not password:
+        raise HTTPException(status_code=503, detail="Camera chưa có mật khẩu RTSP")
+    port = extra.get("rtsp_port") or 554
+    path = extra.get("rtsp_path") or "/cam/realmonitor?channel=1&subtype=1"
+    url = f"rtsp://{user}:{password}@{row['host']}:{port}{path}"
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg, "-loglevel", "error", "-rtsp_transport", "tcp",
+        "-i", url, "-an", "-f", "mjpeg", "-q:v", "5", "pipe:1",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+    )
+
+    async def frames():
+        buf = b""
+        try:
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    break  # camera ngắt luồng (rớt mạng / hết dữ liệu)
+                buf += chunk
+                while True:  # tách khung JPEG hoàn chỉnh (SOI..EOI)
+                    start = buf.find(b"\xff\xd8")
+                    if start < 0:
+                        buf = b""
+                        break
+                    end = buf.find(b"\xff\xd9", start + 2)
+                    if end < 0:
+                        buf = buf[start:]
+                        break
+                    frame, buf = buf[start:end + 2], buf[end + 2:]
+                    if len(frame) > 512:  # bỏ mảnh rác nhỏ
+                        yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                               + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n")
+        finally:
+            # client đóng popup -> generator bị hủy -> giết ffmpeg, không treo tiến trình
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+
+    return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
 # --- wall display: PIN unlock + control ---------------------------------------
 # Màn hình treo tường không có token admin; nhập đúng mã PIN 4 số (đặt trong
 # tab Thiết đặt) sẽ nhận token tạm hiệu lực 5 phút để gửi lệnh điều khiển.

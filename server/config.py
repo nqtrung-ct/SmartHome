@@ -31,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
         "wsdiscovery": True,
     },
     "broadlink": {"timeout": 5},
+    "camera": {"poll_seconds": 60},  # chu kỳ kiểm tra camera online (socket RTSP)
     "display": {"pin": ""},  # mã 4 số mở khóa điều khiển trên màn hình treo tường
     "retention": {"days": 30},
 }

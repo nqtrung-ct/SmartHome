@@ -26,9 +26,10 @@ body {
 
 header { display: flex; justify-content: space-between; align-items: flex-start; }
 h1 { margin: 0; font-size: 34px; font-weight: 700; }
-#dateline { margin: 6px 0 0; color: var(--muted); font-size: 17px; font-weight: 700; text-transform: capitalize; }
+.head-left { display: flex; align-items: center; gap: 18px; }
+.head-right { display: flex; align-items: center; gap: 14px; }
+#dateline { margin: 0; color: var(--muted); font-size: 17px; font-weight: 700; text-transform: capitalize; }
 #dateline-lunar { margin: 3px 0 0; color: var(--muted); font-size: 15px; opacity: .8; }
-.clock { display: flex; align-items: center; gap: 14px; }
 #clock { font-size: 56px; font-weight: 300; letter-spacing: 2px; }
 #clock .clock-buoi { font-size: 0.5em; font-weight: 400; }
 #fullscreen {
@@ -111,6 +112,8 @@ main {
 }
 .chip.ctl { cursor: pointer; }
 .chip.ctl:hover { border-color: var(--blue); }
+.chip.cam { cursor: pointer; }
+.chip.cam:hover { border-color: var(--blue); }
 .chip.on { border-color: rgba(62, 207, 142, .45); }
 .chip-ic { font-size: 24px; }
 .chip-ic svg, .ctrl-icon svg, .room-hum svg, .dial-temp svg { vertical-align: -0.15em; }
@@ -163,6 +166,11 @@ main {
 .ctrl-icon { font-size: 40px; }
 .ctrl-name { font-size: 22px; font-weight: 700; }
 .ctrl-head .btn { margin-left: auto; padding: 10px 14px; }
+
+/* khung xem video camera: MJPEG trong thẻ <img> (khung 640x352) */
+.cam-box { width: min(720px, 92vw); text-align: center; }
+.cam-img { display: block; width: 100%; aspect-ratio: 640 / 352; background: #000; border-radius: 12px; object-fit: contain; }
+.cam-error { padding: 26px 10px; color: var(--muted); }
 .hidden { display: none; }
 
 /* --- remote-style control: nút tròn, chính to trên, phụ nhỏ dưới --- */
@@ -206,5 +214,8 @@ main {
   main { grid-template-columns: 1fr; }
   .col-rooms { order: -1; grid-column: auto; }
   #clock { font-size: 38px; }
+  .head-left { gap: 10px; }
+  #dateline { font-size: 14px; }
+  #dateline-lunar { font-size: 12.5px; }
   h1 { font-size: 26px; }
 }

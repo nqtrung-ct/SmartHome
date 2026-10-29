@@ -8,17 +8,19 @@
 </head>
 <body>
 <header>
-  <div>
-    <p id="dateline">&nbsp;</p>
-    <p id="dateline-lunar">&nbsp;</p>
+  <div class="head-left">
+    <div id="clock">--:--</div>
+    <div>
+      <p id="dateline">&nbsp;</p>
+      <p id="dateline-lunar">&nbsp;</p>
+    </div>
   </div>
-  <div class="clock">
+  <div class="head-right">
     <span id="grid-warn" class="grid-warn hidden" title="Trạng thái điện lưới">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
       <b id="grid-warn-text"></b>
     </span>
     <span id="lock-ind" class="lock-ind" title="Trạng thái (chỉ hiển thị) — bấm thiết bị để điều khiển"></span>
-    <div id="clock">--:--</div>
     <button id="fullscreen" title="Toàn màn hình">⛶</button>
   </div>
 </header>
@@ -81,6 +83,22 @@
       <button id="ctrl-close" class="btn ghost">✕</button>
     </div>
     <div id="ctrl-body"></div>
+  </div>
+</div>
+
+<!-- khung xem video camera -->
+<div id="cam-overlay" class="overlay hidden">
+  <div class="cam-box card">
+    <div class="ctrl-head">
+      <span id="cam-icon" class="ctrl-icon"></span>
+      <div>
+        <div id="cam-name" class="ctrl-name">Camera</div>
+        <div id="cam-room" class="muted small"></div>
+      </div>
+      <button id="cam-close" class="btn ghost">✕</button>
+    </div>
+    <img id="cam-img" class="cam-img" alt="video camera">
+    <p id="cam-error" class="cam-error hidden">Không lấy được video — camera đang tắt hoặc mất kết nối.</p>
   </div>
 </div>
 

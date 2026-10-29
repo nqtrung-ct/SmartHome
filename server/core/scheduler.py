@@ -127,6 +127,35 @@ async def _poll_tuya_cloud(app) -> None:
             )
 
 
+async def _poll_cameras(app) -> None:
+    """Camera ONVIF: online = mở được socket RTSP (:554, dự phòng :80).
+    Trạng thái này cho UI (chip 'đang bật/tắt', quyền mở popup video)."""
+    import socket
+
+    db: Database = app.state.db
+    rows = db.query(
+        """SELECT e.id AS eid, d.host FROM entities e
+           JOIN devices d ON d.id=e.device_id
+           WHERE d.driver='onvif' AND e.entity_type='camera'"""
+    )
+    for row in rows:
+
+        def probe(host: str) -> bool:
+            for port in (554, 80):
+                try:
+                    with socket.create_connection((host, port), timeout=2):
+                        return True
+                except OSError:
+                    continue
+            return False
+
+        on = await asyncio.to_thread(probe, row["host"])
+        db.execute(
+            "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+            ('{"state": "on"}' if on else '{"state": "off"}', now_iso(), row["eid"]),
+        )
+
+
 async def scheduler_loop(app) -> None:
     db: Database = app.state.db
     from server.db import cleanup_old_rows
@@ -134,6 +163,7 @@ async def scheduler_loop(app) -> None:
     last_cleanup_day = None
     last_sensor_poll = 0.0
     last_cloud_poll = 0.0
+    last_camera_poll = 0.0
     while True:
         try:
             today = now_iso()[:10]
@@ -163,6 +193,9 @@ async def scheduler_loop(app) -> None:
             if time.time() - last_cloud_poll >= int(app.state.cfg.get("tuya.cloud_seconds", 180)):
                 last_cloud_poll = time.time()
                 await _poll_tuya_cloud(app)
+            if time.time() - last_camera_poll >= int(app.state.cfg.get("camera.poll_seconds", 60)):
+                last_camera_poll = time.time()
+                await _poll_cameras(app)
         except asyncio.CancelledError:
             return
         except Exception as exc:
