@@ -435,16 +435,16 @@ function renderPtzList(presets) {
     catch { presets = []; }
   }
   const el = $("#ptz-list");
-  el.innerHTML = presets.length ? presets.map((p) => `
+  el.innerHTML = presets.length ? presets.map((p, i) => `
     <div class="entity">
       <div style="flex:1"><div class="name">🎯 ${esc(p.name)}</div>
-        <div class="sub">vị trí số ${p.index}</div></div>
+        <div class="sub">ngang ${Math.round(p.pan / 10)}° · dọc ${Math.round(p.tilt / 10)}°</div></div>
       <div class="row">
-        <button class="small-btn" onclick="ptzAction('goto', ${p.index})" title="Quay camera về góc này">Quay tới</button>
-        <button class="small-btn danger" onclick="ptzAction('del', ${p.index})">🗑</button>
+        <button class="small-btn" onclick="ptzAction('goto', ${i})" title="Quay camera về góc này">Quay tới</button>
+        <button class="small-btn danger" onclick="ptzAction('del', ${i})">🗑</button>
       </div>
     </div>`).join("")
-    : `<p class="muted small">Chưa có góc nào. Xoay camera tới vị trí mong muốn (app Imou hoặc nút trên màn hình treo tường) rồi bấm "Lưu góc hiện tại".</p>`;
+    : `<p class="muted small">Chưa có góc nào. Xoay camera tới vị trí mong muốn (app Imou) rồi bấm "Lưu góc hiện tại".</p>`;
 }
 
 async function renderDevices() {

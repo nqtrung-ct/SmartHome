@@ -19,8 +19,9 @@ from server.util import load_secret, norm_mac
 
 # NET_PTZ_ControlType (bản cơ bản của CLIENT_DHPTZControlEx2)
 UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3
-SET_PRESET, DEL_PRESET, GOTO_PRESET = 11, 12, 10
 DIRS = {"up": UP, "down": DOWN, "left": LEFT, "right": RIGHT}
+FASTGOTO = 0x33            # quay tới tọa độ tuyệt đối (thang 0-3600, wrap 3600)
+NET_DEVSTATE_PTZ_LOCATION = 0x36  # đọc tọa độ hiện tại
 
 _sdk = None
 _sdk_lock = threading.Lock()   # NetSDK không đảm bảo thread-safe: gọi tuần tự như IR
@@ -35,6 +36,22 @@ class _DeviceInfo(C.Structure):
         ("byLimitLoginTime", C.c_ubyte), ("byLeftLogTimes", C.c_ubyte),
         ("bReserved", C.c_ubyte * 2), ("byLockLeftTime", C.c_int),
         ("Reserved", C.c_ubyte * 24),
+    ]
+
+
+class _PtzLocation(C.Structure):
+    """NET_PTZ_LOCATION_INFO — chỉ cần phần đầu, phần reserved đủ chỗ cho an toàn."""
+    _fields_ = [
+        ("nChannelID", C.c_int), ("nPTZPan", C.c_int), ("nPTZTilt", C.c_int),
+        ("nPTZZoom", C.c_int),
+        ("bState", C.c_ubyte), ("bAction", C.c_ubyte), ("bFocusState", C.c_ubyte),
+        ("bEffectiveInTimeSection", C.c_ubyte),
+        ("nPtzActionID", C.c_int), ("dwPresetID", C.c_int),
+        ("fFocusPosition", C.c_float),
+        ("bZoomState", C.c_ubyte), ("bReserved", C.c_ubyte * 3),
+        ("dwSequence", C.c_int), ("dwUTC", C.c_int),
+        ("emPresetStatus", C.c_int), ("nZoomValue", C.c_int),
+        ("reserved", C.c_int * 244),
     ]
 
 
@@ -62,6 +79,9 @@ def _load():
     sdk.CLIENT_DHPTZControlEx2.argtypes = [C.c_longlong, C.c_int, C.c_int, C.c_int,
                                            C.c_int, C.c_int, C.c_int, C.c_void_p]
     sdk.CLIENT_DHPTZControlEx2.restype = C.c_bool
+    sdk.CLIENT_QueryDevState.argtypes = [C.c_longlong, C.c_int, C.c_void_p, C.c_int,
+                                         C.POINTER(C.c_int), C.c_int]
+    sdk.CLIENT_QueryDevState.restype = C.c_bool
     sdk.CLIENT_Cleanup.argtypes = []
     sdk.CLIENT_Init(None, None)
     _sdk = sdk
@@ -120,14 +140,14 @@ def _drop(host: str, port: int) -> None:
             pass
 
 
-def _control(cfg, device, cmd: int, p1: int, stop: int = 0) -> bool:
+def _control(cfg, device, cmd: int, p1: int, p2: int = 0, p3: int = 0, stop: int = 0) -> bool:
     """Gửi 1 lệnh PTZ; phiên hỏng thì login lại đúng 1 lần rồi thử lại."""
     sdk = _load()
     host, port, mac = _parts(device)
     with _sdk_lock:
         for attempt in (0, 1):
             h = _login(cfg, host, port, mac)
-            if sdk.CLIENT_DHPTZControlEx2(h, 0, cmd, p1, 0, 0, stop, None):
+            if sdk.CLIENT_DHPTZControlEx2(h, 0, cmd, p1, p2, p3, stop, None):
                 return True
             _drop(host, port)
             if attempt:
@@ -135,18 +155,25 @@ def _control(cfg, device, cmd: int, p1: int, stop: int = 0) -> bool:
     return False
 
 
-def goto_preset(cfg, device, index: int) -> None:
-    if not _control(cfg, device, GOTO_PRESET, int(index)):
-        raise PtzError("Camera không nhận lệnh quay về góc đã lưu")
+def read_position(cfg, device) -> dict:
+    """Tọa độ hiện tại {pan, tilt, zoom} — thang 0-3600 / -1800..1800 / 1-128."""
+    sdk = _load()
+    host, port, mac = _parts(device)
+    with _sdk_lock:
+        h = _login(cfg, host, port, mac)
+        loc = _PtzLocation()
+        ret = C.c_int(0)
+        if not sdk.CLIENT_QueryDevState(h, NET_DEVSTATE_PTZ_LOCATION,
+                                        C.byref(loc), C.sizeof(loc), C.byref(ret), 5000):
+            _drop(host, port)
+            raise PtzError("Không đọc được tọa độ camera")
+    return {"pan": loc.nPTZPan, "tilt": loc.nPTZTilt, "zoom": loc.nPTZZoom}
 
 
-def save_preset(cfg, device, index: int) -> None:
-    if not _control(cfg, device, SET_PRESET, int(index)):
-        raise PtzError("Camera không lưu được góc này")
-
-
-def delete_preset(cfg, device, index: int) -> None:
-    _control(cfg, device, DEL_PRESET, int(index))
+def fast_goto(cfg, device, pan: int, tilt: int, zoom: int) -> None:
+    """Quay tới tọa độ tuyệt đối — Imou bỏ qua GOTO preset nhưng chạy lệnh này."""
+    if not _control(cfg, device, FASTGOTO, int(pan), p2=int(tilt), p3=int(zoom)):
+        raise PtzError("Camera không nhận lệnh quay tới góc")
 
 
 def move(cfg, device, direction: str, speed: int = 4, stop: bool = False) -> None:

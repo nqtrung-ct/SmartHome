@@ -369,21 +369,28 @@ async def run_camera_ptz(app, entity_id: int, body: PtzIn) -> dict:
     cfg = app.state.cfg
     try:
         if body.action == "goto":
-            await asyncio.to_thread(ptz.goto_preset, cfg, device, body.index)
-        elif body.action == "save":
             try:
                 dd = _json.loads(row["driver_data"] or "{}")
             except ValueError:
                 dd = {}
             presets = dd.get("presets", [])
-            index = body.index or (max((p["index"] for p in presets), default=0) + 1)
-            await asyncio.to_thread(ptz.save_preset, cfg, device, index)
-            presets = [p for p in presets if p["index"] != index]
-            presets.append({"index": index, "name": body.name.strip() or f"Góc {index}"})
-            dd["presets"] = sorted(presets, key=lambda p: p["index"])
+            if not (0 <= body.index < len(presets)):
+                raise HTTPException(status_code=404, detail="Không có góc này")
+            p = presets[body.index]
+            await asyncio.to_thread(ptz.fast_goto, cfg, device,
+                                    p["pan"], p["tilt"], p.get("zoom", 1))
+        elif body.action == "save":
+            # preset = tọa độ hiện tại của camera (Imou bỏ qua preset slot trên máy)
+            pos = await asyncio.to_thread(ptz.read_position, cfg, device)
+            try:
+                dd = _json.loads(row["driver_data"] or "{}")
+            except ValueError:
+                dd = {}
+            presets = dd.setdefault("presets", [])
+            presets.append({"name": body.name.strip() or f"Góc {len(presets) + 1}", **pos})
             db.execute("UPDATE entities SET driver_data=? WHERE id=?",
                        (_json.dumps(dd, ensure_ascii=False), entity_id))
-            return {"ok": True, "presets": dd["presets"]}
+            return {"ok": True, "presets": presets}
         elif body.action == "move":
             await asyncio.to_thread(ptz.move, cfg, device, body.direction)
         elif body.action == "stop":
@@ -394,8 +401,9 @@ async def run_camera_ptz(app, entity_id: int, body: PtzIn) -> dict:
                 dd = _json.loads(row["driver_data"] or "{}")
             except ValueError:
                 dd = {}
-            presets = [p for p in dd.get("presets", []) if p["index"] != body.index]
-            await asyncio.to_thread(ptz.delete_preset, cfg, device, body.index)
+            presets = dd.get("presets", [])
+            if 0 <= body.index < len(presets):
+                presets.pop(body.index)
             dd["presets"] = presets
             db.execute("UPDATE entities SET driver_data=? WHERE id=?",
                        (_json.dumps(dd, ensure_ascii=False), entity_id))

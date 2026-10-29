@@ -502,8 +502,8 @@ function openCam(id) {
 
 function renderCamPresets() {
   const el = $("cam-presets");
-  el.innerHTML = (camEntity && camEntity.presets || []).map((p) =>
-    `<button class="cam-preset" data-goto="${p.index}">🎯 ${esc(p.name)}</button>`
+  el.innerHTML = (camEntity && camEntity.presets || []).map((p, i) =>
+    `<button class="cam-preset" data-goto="${i}">🎯 ${esc(p.name)}</button>`
   ).join("") || `<span class="muted small">chưa có góc nào (quản lý ở tab admin)</span>`;
   el.querySelectorAll("[data-goto]").forEach((b) =>
     b.addEventListener("click", () => sendPtz({ action: "goto", index: +b.dataset.goto })));
