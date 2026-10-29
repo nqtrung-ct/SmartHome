@@ -490,18 +490,25 @@ function startWebrtc(video, streamName) {
   return new Promise((resolve, reject) => {
     const pc = new RTCPeerConnection();
     camPc = pc;
+    let settled = false;
+    const done = (ok, why) => {
+      if (settled) return;
+      settled = true;
+      ok ? resolve() : reject(new Error(why));
+    };
     pc.ontrack = (ev) => {
       video.srcObject = ev.streams[0];
-      // autoplay CÂM luôn được Chrome cho phép; tiếng bật qua nút 🔊
+      // autoplay CÂM luôn được trình duyệt cho phép; tiếng bật qua nút 🔊
       video.muted = true;
       video.play().catch(() => {});
       $("cam-mute").classList.remove("hidden");
       $("cam-mute").textContent = "🔇";
-      resolve();
     };
+    // chỉ tính thành công khi có khung hình thật (loadeddata), không phải lúc có track
+    video.addEventListener("loadeddata", () => done(true), { once: true });
     pc.onconnectionstatechange = () => {
-      if (["failed", "disconnected"].includes(pc.connectionState)) {
-        reject(new Error("kết nối sụp"));
+      if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+        done(false, "kết nối sụp");
       }
     };
     (async () => {
@@ -526,7 +533,8 @@ function startWebrtc(video, streamName) {
         if (!resp.ok) throw new Error("webrtc " + resp.status);
         const answer = await resp.json();
         await pc.setRemoteDescription(answer);
-        setTimeout(() => { if (video.readyState < 2) reject(new Error("chưa có hình")); }, 6000);
+        // không có khung hình nào sau 8s (ICE tắc, media không chảy) -> fallback
+        setTimeout(() => { if (video.readyState < 2) done(false, "chưa có hình"); }, 8000);
       } catch (err) { reject(err); }
     })();
   });
