@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from server.config import Config
+from server.core.lunar import can_chi_year, solar_to_lunar
 from server.db import Database
 from server.drivers.base import DriverError, loads
 from server.util import (
@@ -89,6 +90,22 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "camera_preset",
+            "description": "Quay camera quay được (PTZ) về một góc đã lưu theo tên, ví dụ: quay camera về 'bếp'",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string", "description": "Tên camera nếu nói rõ"},
+                    "preset": {"type": "string", "description": "Tên góc đã lưu, ví dụ: bàn ăn, bếp"},
+                    "room": {"type": "string", "description": "Phòng nếu khác phòng người nói"},
+                },
+                "required": ["preset"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_sensor",
             "description": "Đọc nhiệt độ/độ ẩm từ cảm biến trong phòng",
             "parameters": {
@@ -116,6 +133,19 @@ TOOLS = [
             "name": "get_weather",
             "description": "Lấy thời tiết hiện tại, hoặc dự báo ngày mai/ngày mốt",
             "parameters": {"type": "object", "properties": {
+                "day": {"type": "string", "enum": ["today", "tomorrow", "day_after"],
+                        "description": "today=hôm nay, tomorrow=ngày mai, day_after=ngày mốt"},
+            }},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_datetime",
+            "description": "Xem giờ hiện tại, thứ/ngày dương lịch, hoặc ngày âm lịch kèm can chi",
+            "parameters": {"type": "object", "properties": {
+                "part": {"type": "string", "enum": ["time", "date", "lunar"],
+                         "description": "time=giờ, date=thứ/ngày/tháng, lunar=ngày âm lịch"},
                 "day": {"type": "string", "enum": ["today", "tomorrow", "day_after"],
                         "description": "today=hôm nay, tomorrow=ngày mai, day_after=ngày mốt"},
             }},
@@ -211,6 +241,49 @@ def resolve_entity(db: Database, text: str, room_id=None, entity_type=None):
     return ranked[0][1]
 
 
+def resolve_camera(db: Database, text: str, room_id=None):
+    """Chọn camera: đúng tên trong câu > camera trong phòng người nói > camera duy nhất.
+    Camera bị resolve_entity bỏ qua để không cuốn vào lệnh bật/tắt nên cần hàm riêng."""
+    norm = normalize(text)
+    cams = db.query("SELECT * FROM entities WHERE entity_type='camera'")
+    if not cams:
+        return None
+    scope = _room_from_text(db, norm) or room_id
+    ranked: list[tuple[int, dict]] = []
+    for entity in cams:
+        in_scope = scope and _entity_room(db, entity) == scope
+        for alias in _entity_aliases(entity):
+            if _alias_in(alias, norm):
+                ranked.append((len(alias) + (100 if in_scope else 0), dict(entity)))
+                break
+    if ranked:
+        ranked.sort(key=lambda pair: pair[0], reverse=True)
+        return ranked[0][1]
+    in_room = [e for e in cams if _entity_room(db, e) == scope]
+    if len(in_room) == 1:
+        return dict(in_room[0])
+    if len(cams) == 1:
+        return dict(cams[0])
+    return None
+
+
+def camera_ptz_gate(db: Database, norm: str) -> bool:
+    """Câu này là lệnh PTZ camera không? Phải nhắc camera (từ "camera" hoặc đúng
+    tên camera) kèm động từ quay/xoay hoặc hỏi về các "góc" — bắt chung động từ
+    "xoay" sẽ cuốn theo lệnh quạt."""
+    rotate = re.search(r"\b(quay|xoay)\b", norm)
+    ask_angles = re.search(r"\bgoc\b", norm) and re.search(r"\b(gi|nao|nhung)\b", norm)
+    if not (rotate or ask_angles):
+        return False
+    if re.search(r"\bcamera\b", norm):
+        return True
+    return any(
+        _alias_in(alias, norm)
+        for entity in db.query("SELECT * FROM entities WHERE entity_type='camera'")
+        for alias in _entity_aliases(entity)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Action execution (shared by fast path, LLM tools and the admin UI)
 
@@ -288,6 +361,67 @@ async def act_button(db, drivers, entity, button: str, mentioned_room=None) -> d
     phrase = BUTTON_PHRASES.get(button)
     reply = f"{phrase} {entity['name'].lower()}{where}." if phrase else f"Đã bấm {button} {entity['name'].lower()}{where}."
     return {"reply": reply, "action": {"tool": "press_button", "entity": entity["name"], "button": button, "ok": True}}
+
+
+async def act_camera_ptz(db: Database, entity, norm: str) -> dict:
+    """Quay camera PTZ về góc đã lưu theo tên ("quay camera về phía bếp").
+
+    Giọng nói giống wall display: chỉ được quay về góc đã lưu, không xoay tự do.
+    Preset là tọa độ tự lưu trong driver_data (Imou bỏ qua preset trên máy).
+    """
+    from server.config import Config
+    from server.drivers import dahua_ptz as ptz
+
+    cam = entity["name"].lower()
+    presets = loads(entity["driver_data"]).get("presets", [])
+    tokens = norm.split()
+    matched = [p for p in presets
+               if normalize(p.get("name", "")).split()
+               and all(w in tokens for w in normalize(p["name"]).split())]
+    # hỏi danh sách góc ("camera có góc nào") thắng khớp tên: camera tên
+    # "camera bếp" và preset "bếp" cùng chứa từ "bếp" trong câu hỏi
+    asking_list = (re.search(r"\bgoc\b", norm) and re.search(r"\b(gi|nao|nhung)\b", norm)
+                   and not re.search(r"\b(quay|xoay)\b", norm))
+
+    if matched and not asking_list:
+        device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
+        if not device or not device["host"]:
+            return {"reply": f"Không tìm thấy kết nối của {cam}.",
+                    "action": {"tool": "camera_preset", "ok": False}}
+        # tên dài nhất thắng: preset "bếp" và "bếp cửa sau" cùng khớp thì chọn cụ thể hơn
+        preset = max(matched, key=lambda p: len(normalize(p["name"])))
+        try:
+            await asyncio.to_thread(ptz.fast_goto, Config(), device,
+                                    preset["pan"], preset["tilt"], preset.get("zoom", 1))
+        except ptz.PtzError as exc:
+            return {"reply": f"Không quay được camera ({exc}).",
+                    "action": {"tool": "camera_preset", "ok": False}}
+        return {"reply": f"Đã quay {cam} về góc {preset['name']}.",
+                "action": {"tool": "camera_preset", "entity": entity["name"],
+                           "preset": preset["name"], "ok": True}}
+
+    angles = ", ".join(p["name"] for p in presets) or "chưa có góc nào"
+    # "camera đang ở góc nào" — trả lời bằng góc đã lưu gần vị trí hiện tại
+    if "dang" in tokens:
+        device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
+        if device and device["host"] and presets:
+            try:
+                pos = await asyncio.to_thread(ptz.read_position, Config(), device)
+            except ptz.PtzError as exc:
+                return {"reply": f"Không đọc được vị trí camera ({exc}).",
+                        "action": {"tool": "camera_preset", "ok": False}}
+
+            def _dist(p) -> int:
+                pan = min((pos["pan"] - p["pan"]) % 3600, (p["pan"] - pos["pan"]) % 3600)
+                return pan + abs(pos["tilt"] - p.get("tilt", 0))
+
+            near = min(presets, key=_dist)
+            return {"reply": f"{cam} đang ở gần góc {near['name']} nhất.",
+                    "action": {"tool": "camera_preset", "entity": entity["name"], "ok": True}}
+        return {"reply": f"{cam} chưa lưu góc nào nên mình không biết đang quay về đâu.",
+                "action": {"tool": "camera_preset", "ok": False}}
+    return {"reply": f"{cam} có các góc đã lưu: {angles}.",
+            "action": {"tool": "camera_preset", "ok": False}}
 
 
 async def act_climate(db, drivers, entity, mode=None, temperature=None, mentioned_room=None) -> dict:
@@ -377,6 +511,23 @@ def weather_day(norm: str) -> int:
     return 0
 
 
+def datetime_question(norm: str) -> tuple[bool, bool, bool]:
+    """Câu hỏi về giờ / ngày tháng / âm lịch? Trả về (giờ, ngày, âm lịch).
+    "Bao giờ" (= khi nào) không tính — câu đó để LLM trả lời tự do."""
+    lunar = bool(re.search(r"\bam lich\b|\blich am\b|\bmung may\b", norm))
+    ask_time = bool(re.search(r"\bmay gio\b|\bgio hien tai\b", norm))
+    ask_date = lunar or bool(re.search(
+        r"\bthu may\b|\bngay (may|bao nhieu|gi)\b|\bngay thang\b", norm))
+    return ask_time, ask_date, lunar
+
+
+def _timer_intent(norm: str) -> bool:
+    """Câu mang ý định hẹn giờ? Bắt 'nhắc/hẹn' và 'báo' — nhưng 'bao nhiêu',
+    'bao giờ' là từ hỏi nên không tính."""
+    return bool(re.search(r"\b(nhac|hen)\b", norm)
+                or re.search(r"\bbao\b(?!\s*(nhieu|gio))", norm))
+
+
 def rain_question(norm: str) -> bool:
     """Asking specifically about rain ("có mưa không", "mưa nhiều không"...)."""
     return bool(re.search(r"co mua|kha nang mua|mua (khong|hay khong|roi|nhieu)", norm))
@@ -423,6 +574,44 @@ def act_weather(weather, day: int = 0, rain: bool = False, evening: bool = False
     except Exception as exc:
         return {"reply": f"Mình không lấy được thời tiết: {exc}",
                 "action": {"tool": "get_weather", "ok": False, "day": day}}
+
+
+WEEKDAYS_VI = ("Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật")
+DAY_LABELS = {0: "Hôm nay", 1: "Ngày mai", 2: "Ngày mốt"}
+
+
+def _vi_clock(hour: int, minute: int) -> str:
+    return f"{hour} giờ đúng" if minute == 0 else f"{hour} giờ {minute} phút"
+
+
+def act_datetime(ask_time=False, ask_date=False, ask_lunar=False, day=0,
+                 delta_minutes=None) -> dict:
+    """Hỏi giờ / ngày tháng / âm lịch — trả lời ngay, không cần thiết bị."""
+    now = datetime.now()
+    label = DAY_LABELS.get(day, "Hôm nay")
+    parts = []
+    if ask_time:
+        if delta_minutes:
+            target = now + timedelta(minutes=delta_minutes)
+            span = (f"{delta_minutes // 60:g} tiếng" if delta_minutes % 60 == 0
+                    else f"{delta_minutes:g} phút")
+            parts.append(f"sau {span} nữa là {_vi_clock(target.hour, target.minute)}")
+        else:
+            parts.append(f"bây giờ là {_vi_clock(now.hour, now.minute)}")
+    if ask_date:
+        when = now + timedelta(days=day)
+        if ask_lunar:
+            # hỏi âm thì chỉ đọc âm — ngày dương nghe thêm thành thừa
+            ld, lm, ly, leap = solar_to_lunar(when.day, when.month, when.year)
+            day_word = f"mùng {ld}" if ld <= 10 else str(ld)
+            parts.append(f"âm lịch {label.lower()} là ngày {day_word} tháng {lm}"
+                         f"{' nhuận' if leap else ''} năm {can_chi_year(ly)}")
+        else:
+            parts.append(f"{label.lower()} là {WEEKDAYS_VI[when.weekday()]}, "
+                         f"ngày {when.day} tháng {when.month} năm {when.year}")
+    text = ", ".join(parts)
+    return {"reply": text[0].upper() + text[1:] + ".",
+            "action": {"tool": "get_datetime", "ok": True, "day": day}}
 
 
 def act_timer(db, room_id, message: str, minutes=None, time_str=None) -> dict:
@@ -495,6 +684,19 @@ def _parse_timer(norm: str, raw: str):
             message = re.split(r"(?:nhắc|hẹn|báo)\s*(?:tôi|em|mình|tui)?", raw, flags=re.I)
             return minutes, None, message[-1].strip() if len(message) > 1 else "hẹn giờ"
     return None, None, None
+
+
+def _duration_minutes(norm: str):
+    """Số phút trong cụm 'X phút/giờ nữa' của câu hỏi giờ ('2 tiếng nữa là mấy giờ')."""
+    if not re.search(r"\bnua\b", norm):
+        return None
+    tokens = norm.split()
+    for i, tok in enumerate(tokens):
+        if tok in ("phut", "gio", "tieng"):
+            got = trailing_number(tokens[:i])
+            if got:
+                return got[0] if tok == "phut" else got[0] * 60
+    return None
 
 
 def volume_button(norm: str) -> str | None:
@@ -577,6 +779,22 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         r"\d+\s*(phut|gio|tieng)|\d{1,2}:\d{2}", norm
     )
     multi_intent = re.search(r"\broi\b|\bsau do\b|\bva\b|\bva ca\b|\bthem\b|\bngoai ra\b", norm)
+
+    # hỏi giờ / ngày tháng / âm lịch — phải đứng TRƯỚC nhánh hẹn giờ vì câu hỏi
+    # "mấy giờ" cũng chứa từ "giờ". Câu có ý định hẹn (nhắc/hẹn/báo), động từ
+    # bật/tắt, hay ghép nhiều việc thì nhường LLM. ("Rồi" trong "mấy giờ rồi"
+    # là trợ từ chứ không phải từ nối — xem multi-part ở trên nên không dùng
+    # multi_intent ở đây.)
+    if not (has_on or has_off) and not _timer_intent(norm) \
+            and not re.search(r"\bsau do\b|\bva\b|\bva ca\b|\bthem\b|\bngoai ra\b", norm):
+        ask_time, ask_date, ask_lunar = datetime_question(norm)
+        if ask_time or ask_date:
+            return act_datetime(
+                ask_time=ask_time, ask_date=ask_date, ask_lunar=ask_lunar,
+                day=weather_day(norm) if ask_date else 0,
+                delta_minutes=_duration_minutes(norm) if ask_time else None,
+            )
+
     if timerish and not multi_intent:
         minutes, time_str, message = _parse_timer(norm, text)
         if minutes or time_str:
@@ -604,6 +822,16 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
             return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
+
+    # camera PTZ theo tên góc đã lưu ("quay camera về phía bếp"). Đặt TRƯỚC nhánh
+    # âm lượng/xoay quạt vì "xoay" cũng là từ khóa quạt; câu ghép nhiều việc
+    # ("quay camera và bật đèn") nhường LLM để gọi đủ công cụ.
+    if not multi_intent and camera_ptz_gate(db, norm):
+        cam = resolve_camera(db, norm, room_id)
+        if cam:
+            return await act_camera_ptz(db, cam, norm)
+        return {"reply": "Mình không tìm thấy camera nào.",
+                "action": {"tool": "camera_preset", "ok": False}}
 
     # "cái gì đang bật?" — câu hỏi liệt kê, đặt TRƯỚC nhánh on/off vì chứa từ "bật";
     # thiết bị IR không có trạng thái thật nên act_list_active tự loại khỏi danh sách
@@ -673,7 +901,12 @@ def _llm_context(db: Database, room_id) -> str:
         lines.append(f"Người nói đang ở: {rooms[room_id]}")
     for e in db.query("SELECT * FROM entities"):
         room = rooms.get(_entity_room(db, e), "chưa gán phòng")
-        lines.append(f"- {e['name']} ({e['entity_type']}, phòng {room})")
+        extra = ""
+        if e["entity_type"] == "camera":
+            names = [p["name"] for p in loads(e["driver_data"]).get("presets", []) if p.get("name")]
+            if names:
+                extra = f"; góc đã lưu: {', '.join(names)}"
+        lines.append(f"- {e['name']} ({e['entity_type']}, phòng {room}{extra})")
     return "\n".join(lines)
 
 
@@ -729,6 +962,16 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
                 mode=args.get("mode"), temperature=args.get("temperature"), mentioned_room=mentioned,
             )
 
+        if name == "camera_preset":
+            hint = normalize(f"{args.get('entity', '')} {args.get('room') or ''}")
+            cam = resolve_camera(db, hint, room_id)
+            if not cam:
+                return {"reply": "Mình không tìm thấy camera nào.",
+                        "action": {"tool": name, "ok": False}}
+            # chỉ khớp tên góc từ tham số preset (không gộp tên camera — camera
+            # "camera bếp" sẽ khớp nhầm preset "bếp"); sai tên thì act liệt kê lại
+            return await act_camera_ptz(db, cam, normalize(str(args.get("preset", ""))))
+
         if name == "list_active":
             room_arg = str(args.get("room") or "").strip()
             scope = _room_from_text(db, normalize(room_arg)) if room_arg else room_id
@@ -752,6 +995,13 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             day = day_hint or {"tomorrow": 1, "day_after": 2}.get(str(args.get("day", "")), 0)
             return act_weather(weather, day)
 
+        if name == "get_datetime":
+            part = str(args.get("part", "date"))
+            day = day_hint or {"tomorrow": 1, "day_after": 2}.get(str(args.get("day", "")), 0)
+            if part == "time":
+                return act_datetime(ask_time=True)
+            return act_datetime(ask_date=True, ask_lunar=part == "lunar", day=day)
+
         if name == "set_timer":
             return act_timer(
                 db, room_id, args.get("message", "hẹn giờ"),
@@ -772,6 +1022,7 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         f"{_llm_context(db, room_id)}\n"
         "Ưu tiên gọi công cụ để điều khiển thiết bị. Chỉ trả lời văn bản khi không có công cụ phù hợp. "
         "Khi hỏi thời tiết ngày mai/mốt, gọi get_weather với day tương ứng. "
+        "Khi hỏi giờ, ngày/thứ/âm lịch, gọi get_datetime với part và day tương ứng. "
         "Nếu câu có nhiều việc, hãy gọi TẤT CẢ các công cụ cần thiết trong cùng một lượt trả lời. "
         "Trả lời ngắn gọn, thân thiện."
     )
@@ -845,6 +1096,14 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
             extra = await act_sensor(db, drivers, sensor, room_id, sensor_metric(norm))
             replies.append(extra["reply"])
             actions.append(extra.get("action", {"tool": "get_sensor"}))
+
+    ask_time, ask_date, ask_lunar = datetime_question(norm)
+    if (ask_time or ask_date) and "get_datetime" not in executed \
+            and not _timer_intent(norm) and not re.search(r"\b(bat|mo|tat)\b", norm):
+        extra = act_datetime(ask_time=ask_time, ask_date=ask_date, ask_lunar=ask_lunar,
+                             day=weather_day(norm) if ask_date else 0)
+        replies.append(extra["reply"])
+        actions.append(extra["action"])
 
     if replies:
         return {"reply": " ".join(replies), "actions": actions, "engine": "llm"}

@@ -14,6 +14,7 @@ import ctypes as C
 import json
 import os
 import threading
+import time
 
 from server.util import load_secret, norm_mac
 
@@ -24,7 +25,8 @@ FASTGOTO = 0x33            # quay tới tọa độ tuyệt đối (thang 0-3600
 NET_DEVSTATE_PTZ_LOCATION = 0x36  # đọc tọa độ hiện tại
 
 _sdk = None
-_sdk_lock = threading.Lock()   # NetSDK không đảm bảo thread-safe: gọi tuần tự như IR
+_sdk_lock = threading.RLock()  # NetSDK không đảm bảo thread-safe: gọi tuần tự như IR.
+# RLock để fast_goto giữ khóa xuyên suốt cả thời gian chờ đợi giữa 2 lệnh goto
 _sessions: dict[str, int] = {}  # "host:port" -> handle login còn hạn
 
 
@@ -156,10 +158,19 @@ def _control(cfg, device, cmd: int, p1: int, p2: int = 0, p3: int = 0, stop: int
 
 
 def read_position(cfg, device) -> dict:
-    """Tọa độ hiện tại {pan, tilt, zoom} — thang 0-3600 / -1800..1800 / 1-128."""
+    """Tọa độ hiện tại {pan, tilt, zoom} — thang 0-3600 / -1800..1800 / 1-128.
+
+    Có lệnh goto gửi cách đây chưa đủ _goto_gap giây thì chờ motor chạy tới
+    góc rồi mới đọc — tránh trả về vị trí nửa đường."""
     sdk = _load()
     host, port, mac = _parts(device)
+    key = f"{host}:{port}"
     with _sdk_lock:
+        last = _last_goto.get(key)
+        if last:
+            wait = _goto_gap - (time.monotonic() - last[0])
+            if wait > 0:
+                time.sleep(wait)
         h = _login(cfg, host, port, mac)
         loc = _PtzLocation()
         ret = C.c_int(0)
@@ -170,9 +181,31 @@ def read_position(cfg, device) -> dict:
     return {"pan": loc.nPTZPan, "tilt": loc.nPTZTilt, "zoom": loc.nPTZZoom}
 
 
+_goto_gap = 3.0                 # motor mất 2-3 giây để tới góc (đo thực tế)
+_last_goto: dict[str, tuple[float, tuple[int, int, int]]] = {}
+
+
 def fast_goto(cfg, device, pan: int, tilt: int, zoom: int) -> None:
-    """Quay tới tọa độ tuyệt đối — Imou bỏ qua GOTO preset nhưng chạy lệnh này."""
-    if not _control(cfg, device, FASTGOTO, int(pan), p2=int(tilt), p3=int(zoom)):
+    """Quay tới tọa độ tuyệt đối — Imou bỏ qua GOTO preset nhưng chạy lệnh này.
+
+    Các lệnh goto cách nhau ít nhất _goto_gap giây: dồn 2 lệnh khi motor đang
+    chạy, camera có thể bỏ qua lệnh sau. Lệnh lặp đúng tọa độ vừa gửi thì bỏ
+    (bấm chip nhiều lần trên UI không quay lại từ đầu)."""
+    host, port, mac = _parts(device)
+    key = f"{host}:{port}"
+    target = (int(pan), int(tilt), int(zoom))
+    with _sdk_lock:
+        last = _last_goto.get(key)
+        if last and time.monotonic() - last[0] < _goto_gap and last[1] == target:
+            return  # vừa gửi đúng góc này rồi
+        if last:
+            wait = _goto_gap - (time.monotonic() - last[0])
+            if wait > 0:
+                time.sleep(wait)
+        ok = _control(cfg, device, FASTGOTO, target[0], p2=target[1], p3=target[2])
+        if ok:
+            _last_goto[key] = (time.monotonic(), target)
+    if not ok:
         raise PtzError("Camera không nhận lệnh quay tới góc")
 
 
