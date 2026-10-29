@@ -42,11 +42,13 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
 
 main {
   flex: 1; display: grid; gap: 22px; margin-top: 26px;
-  grid-template-columns: 340px minmax(420px, 1fr);
+  grid-template-columns: 340px 1fr 1fr;
   grid-auto-rows: min-content;
   align-content: start;
 }
-.col-left, .col-mid { display: flex; flex-direction: column; gap: 22px; }
+/* cột trái cố định (thời tiết + hẹn giờ); phòng chiếm trọn 2 cột còn lại */
+.col-left { display: flex; flex-direction: column; gap: 22px; }
+.col-rooms { grid-column: 2 / -1; min-width: 0; }
 
 .card {
   background: var(--card);
@@ -70,8 +72,10 @@ main {
 .w-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .w-range { margin-top: 16px; font-size: 15px; text-align: center; }
 
-/* --- room cards --- */
-.room-grid { display: flex; flex-direction: column; gap: 16px; }
+/* --- room cards: ít phòng thì 1 cột rộng, không đủ chỗ dọc mới tách 2 cột --- */
+.room-grid { display: grid; gap: 16px; align-content: start; }
+.room-grid.one { grid-template-columns: 1fr; }
+.room-grid.two { grid-template-columns: 1fr 1fr; }
 .room-card { padding: 20px 24px; }
 .room-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
 .room-name { font-size: 22px; font-weight: 700; }
@@ -181,11 +185,12 @@ main {
 /* wall displays are often portrait or small - keep it usable */
 @media (max-width: 1200px) {
   main { grid-template-columns: 1fr 1fr; }
-  .col-mid { order: -1; grid-column: 1 / -1; }
+  .col-rooms { order: -1; grid-column: 1 / -1; }
 }
 @media (max-width: 760px) {
   body { padding: 18px; }
   main { grid-template-columns: 1fr; }
+  .col-rooms { grid-column: auto; }
   #clock { font-size: 38px; }
   h1 { font-size: 26px; }
 }

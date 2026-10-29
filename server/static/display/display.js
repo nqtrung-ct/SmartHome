@@ -111,6 +111,9 @@ function renderRooms(rooms) {
     el.innerHTML = `<p class="muted">Chưa có phòng nào có cảm biến nhiệt độ.</p>`;
     return;
   }
+  // mặc định 1 cột rộng (span cả vùng phải); chỉ khi không đủ chỗ dọc mới tách 2 cột
+  el.classList.remove("two");
+  el.classList.add("one");
   el.innerHTML = rooms.map((r) => `
     <div class="room-card card">
       <div class="room-head">
@@ -140,6 +143,13 @@ function renderRooms(rooms) {
     </div>`).join("");
   el.querySelectorAll(".chip.ctl").forEach((c) =>
     c.addEventListener("click", () => openCtrl(+c.dataset.ent)));
+  // đo sau khi DOM có thật: card phòng tràn khỏi màn hình thì chuyển 2 cột
+  requestAnimationFrame(() => {
+    const top = el.getBoundingClientRect().top;
+    if (top > 0 && el.scrollHeight > window.innerHeight - top - 24) {
+      el.classList.replace("one", "two");
+    }
+  });
 }
 
 function findEntity(id) {
