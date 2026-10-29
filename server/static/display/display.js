@@ -270,7 +270,11 @@ function renderRooms(rooms) {
         </div>
         <div class="room-env">
           ${r.temperature != null ? `<span class="room-temp">${r.temperature}°</span>` : ""}
-          ${r.humidity != null ? `<span class="room-hum">${DROPLET_SVG} <b>${r.humidity}%</b></span>` : ""}
+          ${r.humidity != null ? (() => {
+            // 40–70% là thoải mái; ngoài khoảng (khô quá/ẩm quá) là xấu -> đỏ
+            const bad = r.humidity < 40 || r.humidity > 70;
+            return `<span class="room-hum">${DROPLET_SVG} <b${bad ? ' class="bad"' : ''}>${r.humidity}%</b></span>`;
+          })() : ""}
         </div>
       </div>
       <div class="chip-row">
