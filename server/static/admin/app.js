@@ -411,6 +411,42 @@ window.testTts = async () => {
 
 // ---------------------------------------------------------------- devices
 
+// --- quản lý góc quay camera (PTZ NetSDK) ---
+let ptzEntityId = null;
+
+function openPtzModal(id) {
+  ptzEntityId = id;
+  renderPtzList();
+  $("#ptz-modal").classList.remove("hidden");
+}
+
+async function ptzAction(action, index = 0, name = "") {
+  const d = await api(`/entities/${ptzEntityId}/ptz`, {
+    method: "POST", body: JSON.stringify({ action, index, name }),
+  }).catch((e) => { alert(e.message || "Lỗi"); return null; });
+  if (!d) return;
+  if (d.presets) renderPtzList(d.presets);
+}
+
+function renderPtzList(presets) {
+  if (!presets) {
+    const dev = (devicesCache || []).flatMap((d) => d.entities).find((e) => e.id === ptzEntityId);
+    try { presets = JSON.parse((dev && dev.driver_data) || "{}").presets || []; }
+    catch { presets = []; }
+  }
+  const el = $("#ptz-list");
+  el.innerHTML = presets.length ? presets.map((p) => `
+    <div class="entity">
+      <div style="flex:1"><div class="name">🎯 ${esc(p.name)}</div>
+        <div class="sub">vị trí số ${p.index}</div></div>
+      <div class="row">
+        <button class="small-btn" onclick="ptzAction('goto', ${p.index})" title="Quay camera về góc này">Quay tới</button>
+        <button class="small-btn danger" onclick="ptzAction('del', ${p.index})">🗑</button>
+      </div>
+    </div>`).join("")
+    : `<p class="muted small">Chưa có góc nào. Xoay camera tới vị trí mong muốn (app Imou hoặc nút trên màn hình treo tường) rồi bấm "Lưu góc hiện tại".</p>`;
+}
+
 async function renderDevices() {
   const el = $("#tab-devices");
   const [devices, rooms] = await Promise.all([api("/devices"), api("/rooms"), loadFloors()]);
@@ -450,12 +486,15 @@ async function renderDevices() {
     const meter = meterByDev.get(d.id);
     const meterLine = meter && (e.entity_type === "switch" || e.entity_type === "light")
       ? ` · <b>${meter}</b>` : "";
+    const ptzBtn = e.entity_type === "camera"
+      ? `<button class="small-btn" onclick="openPtzModal(${e.id})" title="Góc quay camera">🎯</button>` : "";
     return `<div class="entity">
         <div style="flex:1;min-width:0">
           <div class="name">${esc(e.name)} <span class="badge">${typeVi(e.entity_type)}</span></div>
           <div class="sub">${esc(d.name)}${d.host ? " · " + esc(d.host) : ""}${meterLine}${e.aliases ? " · bí danh: " + esc(e.aliases) : ""}</div>
         </div>
         <div class="row">
+          ${ptzBtn}
           <button class="small-btn" onclick="openEditModal(${e.id})" title="Sửa tên, phòng, thiết bị con">✏️</button>
           <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
         </div>
@@ -651,6 +690,14 @@ $("#e-add-child").onclick = () => {
   $("#e-children").insertAdjacentHTML("beforeend", childRow(null));
 };
 $("#e-cancel").onclick = () => $("#edit-modal").classList.add("hidden");
+
+$("#ptz-close").onclick = () => { $("#ptz-modal").classList.add("hidden"); renderDevices(); };
+$("#ptz-add").onclick = async () => {
+  const name = $("#ptz-new-name").value.trim();
+  if (!name) { $("#ptz-new-name").focus(); return; }
+  await ptzAction("save", 0, name);
+  $("#ptz-new-name").value = "";
+};
 
 $("#e-save").onclick = async () => {
   const { e, d, removed, roomInit } = editCtx;

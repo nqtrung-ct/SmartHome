@@ -94,6 +94,10 @@ def display(request: Request):
                 ent["buttons"] = sorted(
                     k for k in dd.get("codes", {})
                     if k not in ("on", "off", "toggle", "power"))
+            if e["entity_type"] == "camera":
+                # góc quay đã lưu (NetSDK PTZ) cho popup màn hình treo tường
+                ent["presets"] = dd.get("presets", [])
+                ent["ptz"] = True
             ents.append(ent)
         rooms.append({
             "id": room["id"], "name": room["name"], "floor": room["floor"],
@@ -334,6 +338,95 @@ async def display_command(request: Request, body: DisplayCommandIn):
     from server.api.devices import run_entity_command
     state = await run_entity_command(request.app, body.entity, body.command, body.params)
     return {"state": state}
+
+
+# --- wall display: PTZ camera (NetSDK 37777) ---------------------------------
+
+
+class PtzIn(BaseModel):
+    action: str            # goto | save | del | move | stop
+    index: int = 0         # số preset (goto/save/del)
+    direction: str = ""    # up/down/left/right (move/stop)
+    name: str = ""         # tên preset khi lưu
+
+
+async def run_camera_ptz(app, entity_id: int, body: PtzIn) -> dict:
+    """Thực thi lệnh PTZ lên camera Imou/Dahua — dùng chung display + admin."""
+    import json as _json
+
+    import server.drivers.dahua_ptz as ptz
+
+    db = app.state.db
+    row = db.one(
+        """SELECT e.driver_data, d.host, d.mac, d.extra FROM entities e
+           JOIN devices d ON d.id=e.device_id
+           WHERE e.id=? AND e.entity_type='camera'""",
+        (entity_id,),
+    )
+    if not row or not row["host"]:
+        raise HTTPException(status_code=404, detail="Không có camera này")
+    device = {"host": row["host"], "mac": row["mac"], "extra": row["extra"]}
+    cfg = app.state.cfg
+    try:
+        if body.action == "goto":
+            await asyncio.to_thread(ptz.goto_preset, cfg, device, body.index)
+        elif body.action == "save":
+            try:
+                dd = _json.loads(row["driver_data"] or "{}")
+            except ValueError:
+                dd = {}
+            presets = dd.get("presets", [])
+            index = body.index or (max((p["index"] for p in presets), default=0) + 1)
+            await asyncio.to_thread(ptz.save_preset, cfg, device, index)
+            presets = [p for p in presets if p["index"] != index]
+            presets.append({"index": index, "name": body.name.strip() or f"Góc {index}"})
+            dd["presets"] = sorted(presets, key=lambda p: p["index"])
+            db.execute("UPDATE entities SET driver_data=? WHERE id=?",
+                       (_json.dumps(dd, ensure_ascii=False), entity_id))
+            return {"ok": True, "presets": dd["presets"]}
+        elif body.action == "move":
+            await asyncio.to_thread(ptz.move, cfg, device, body.direction)
+        elif body.action == "stop":
+            await asyncio.to_thread(
+                ptz.move, cfg, device, body.direction or "right", stop=True)
+        elif body.action == "del":
+            try:
+                dd = _json.loads(row["driver_data"] or "{}")
+            except ValueError:
+                dd = {}
+            presets = [p for p in dd.get("presets", []) if p["index"] != body.index]
+            await asyncio.to_thread(ptz.delete_preset, cfg, device, body.index)
+            dd["presets"] = presets
+            db.execute("UPDATE entities SET driver_data=? WHERE id=?",
+                       (_json.dumps(dd, ensure_ascii=False), entity_id))
+            return {"ok": True, "presets": presets}
+        else:
+            raise HTTPException(status_code=400, detail="action không hợp lệ")
+    except ptz.PtzError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+class DisplayPtzIn(PtzIn):
+    token: str
+    entity: int
+
+
+@router.post("/display/ptz")
+async def display_ptz(request: Request, body: DisplayPtzIn):
+    tokens = _display_tokens(request.app)
+    expiry = tokens.get(str(body.token or ""))
+    if not expiry or expiry < datetime.now():
+        raise HTTPException(status_code=401, detail="Phiên mở khóa hết hạn, nhập lại mã PIN")
+    if body.action != "goto":
+        # màn hình treo tường chỉ được gọi góc đã lưu — xoay/lưu/xóa làm ở admin
+        raise HTTPException(status_code=400, detail="Màn hình chỉ được quay về góc đã lưu")
+    return await run_camera_ptz(request.app, body.entity, body)
+
+
+@router.post("/entities/{entity_id}/ptz")
+async def entity_ptz(request: Request, entity_id: int, body: PtzIn, _: None = Depends(require_admin)):
+    return await run_camera_ptz(request.app, entity_id, body)
 
 
 @router.post("/pair", status_code=201)

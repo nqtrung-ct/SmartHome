@@ -171,6 +171,16 @@ main {
 .cam-box { width: min(720px, 92vw); text-align: center; }
 .cam-img { display: block; width: 100%; aspect-ratio: 640 / 352; background: #000; border-radius: 12px; object-fit: contain; }
 .cam-error { padding: 26px 10px; color: var(--muted); }
+
+/* điều khiển PTZ: góc đã lưu — bấm quay về góc đó (sau PIN, không xoay tự do) */
+.cam-ctrl { margin-top: 14px; }
+.cam-presets { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.cam-preset {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  padding: 9px 16px; border-radius: 999px; font-size: 15.5px; font-weight: 600;
+  background: var(--card); border: 1px solid var(--border); color: var(--text);
+}
+.cam-preset:hover { border-color: var(--blue); }
 .hidden { display: none; }
 
 /* --- remote-style control: nút tròn, chính to trên, phụ nhỏ dưới --- */

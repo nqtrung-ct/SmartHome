@@ -476,13 +476,18 @@ function wireCtrl(e) {
 
 $("ctrl-close").onclick = () => $("ctrl-overlay").classList.add("hidden");
 
-// --- camera: popup xem video (MJPEG server chuyển mã từ RTSP) ---
+// --- camera: popup xem video (MJPEG server chuyển mã từ RTSP) + PTZ ---
+let camEntity = null;
+
 function openCam(id) {
   const { e, r } = findEntity(id);
   if (!e) return;
+  camEntity = e;
   $("cam-icon").innerHTML = VIDEO_SVG;
   $("cam-name").textContent = e.name;
   $("cam-room").textContent = r ? r.name : "";
+  renderCamPresets();
+  $("cam-ctrl").classList.toggle("hidden", !e.ptz);
   const img = $("cam-img"), err = $("cam-error");
   err.classList.add("hidden");
   img.classList.remove("hidden");
@@ -493,6 +498,37 @@ function openCam(id) {
   };
   img.src = `/api/display/camera/${id}/stream?ts=${Date.now()}`;
   $("cam-overlay").classList.remove("hidden");
+}
+
+function renderCamPresets() {
+  const el = $("cam-presets");
+  el.innerHTML = (camEntity && camEntity.presets || []).map((p) =>
+    `<button class="cam-preset" data-goto="${p.index}">🎯 ${esc(p.name)}</button>`
+  ).join("") || `<span class="muted small">chưa có góc nào (quản lý ở tab admin)</span>`;
+  el.querySelectorAll("[data-goto]").forEach((b) =>
+    b.addEventListener("click", () => sendPtz({ action: "goto", index: +b.dataset.goto })));
+}
+
+async function sendPtz(body) {
+  if (!unlocked()) { showPin(() => sendPtz(body), camEntity ? camEntity.name : ""); return false; }
+  if (!camEntity) return false;
+  try {
+    const resp = await fetch("/api/display/ptz", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: unlock.token, entity: camEntity.id, ...body }),
+    });
+    if (resp.status === 401) {
+      unlock = { token: null, until: 0 };
+      showPin(() => sendPtz(body));
+      return false;
+    }
+    const d = await resp.json().catch(() => ({}));
+    if (!resp.ok) { alert(d.detail || "Không điều khiển được camera"); return false; }
+    return true;
+  } catch {
+    alert("Không kết nối được");
+    return false;
+  }
 }
 
 function closeCam() {

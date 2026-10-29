@@ -70,6 +70,21 @@
   </div>
 </div>
 
+<div id="ptz-modal" class="overlay hidden">
+  <div class="card modal-card">
+    <h2>🎯 Góc quay camera</h2>
+    <div id="ptz-list"></div>
+    <div class="row" style="margin-top:14px;gap:8px">
+      <input id="ptz-new-name" placeholder="Tên góc mới (VD: Cửa chính)" style="flex:1">
+      <button class="primary" id="ptz-add">💾 Lưu góc hiện tại</button>
+    </div>
+    <p class="small muted" style="margin-top:10px">"Lưu góc hiện tại" ghi lại vị trí camera đang chỉ — xoay camera tới góc muốn lưu trước bằng app Imou hoặc nút xoay trên màn hình treo tường.</p>
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button id="ptz-close">Đóng</button>
+    </div>
+  </div>
+</div>
+
 <div id="edit-modal" class="overlay hidden">
   <div class="card modal-card">
     <h2 id="e-title">✏️ Sửa thiết bị</h2>
