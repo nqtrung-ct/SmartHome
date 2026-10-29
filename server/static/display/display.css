@@ -33,12 +33,13 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
   background: var(--card); color: var(--muted); border: 1px solid var(--border);
   border-radius: 14px; width: 44px; height: 44px; font-size: 20px; cursor: pointer;
 }
+/* chỉ báo trạng thái: trắng, mờ nhẹ, không viền/nền */
 .lock-ind {
   min-width: 72px; text-align: center; padding: 6px 10px;
-  background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-  font-size: 17px; color: var(--muted); cursor: default; user-select: none;
+  color: #fff; opacity: .55;
+  font-size: 17px; cursor: default; user-select: none;
 }
-.lock-ind.on { color: var(--green); border-color: rgba(62, 207, 142, .4); }
+.lock-ind.on { opacity: .85; }
 
 main {
   flex: 1; display: grid; gap: 22px; margin-top: 26px;
