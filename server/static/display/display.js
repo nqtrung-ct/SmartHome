@@ -165,10 +165,12 @@ function lunarText(now) {
 
 function tick() {
   const now = new Date();
-  $("clock").textContent = now.toLocaleTimeString("vi-VN", {
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  });
+  // giờ kiểu 12h kèm buổi: 5–11 Sáng, 12–13 Trưa, 14–17 Chiều, còn lại Tối
   const hour = now.getHours();
+  const h12 = hour % 12 || 12;
+  const buoi = hour < 12 ? "Sáng" : hour < 14 ? "Trưa" : hour < 18 ? "Chiều" : "Tối";
+  $("clock").textContent =
+    `${h12}:${String(now.getMinutes()).padStart(2, "0")} ${buoi}`;
   $("greeting").textContent =
     hour < 11 ? "Chào buổi sáng" : hour < 14 ? "Chào buổi trưa" :
     hour < 18 ? "Chào buổi chiều" : "Chào buổi tối";
