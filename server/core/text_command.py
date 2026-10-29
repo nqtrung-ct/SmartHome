@@ -28,6 +28,8 @@ TYPE_ALIASES = {
     "light": ["đèn", "bóng đèn", "đèn trần", "đèn ngủ"],
     "climate": ["điều hòa", "máy lạnh", "dieu hoa", "ac"],
     "switch": ["công tắc"],  # "cầu dao" là alias riêng của thiết bị đo điện
+    "fan": ["quạt"],
+    "media": ["loa"],
     # sensor chỉ giữ alias đúng với MỌI sensor; "nhiệt độ/độ ẩm" là alias riêng
     # của từng cảm biến — nếu để type-alias thì công tơ điện cũng trúng "nhiệt độ"
     "sensor": ["cảm biến"],
@@ -510,7 +512,8 @@ def act_list_active(db: Database, room_id=None, mentioned_room=None) -> dict:
     rows = db.query(
         """SELECT e.name, e.room_id, e.state, d.room_id AS device_room
            FROM entities e JOIN devices d ON d.id=e.device_id
-           WHERE e.entity_type IN ('light','switch','climate') AND d.driver!='broadlink'"""
+           WHERE e.entity_type IN ('light','switch','climate','fan','media')
+             AND d.driver!='broadlink'"""
     )
     on = []
     for e in rows:
@@ -632,12 +635,10 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
                 return await act_climate(db, drivers, entity, mode="off", mentioned_room=mentioned)
             return await act_climate(db, drivers, entity, mode="cool" if temp else "on",
                                      temperature=temp, mentioned_room=mentioned)
-        entity = resolve_entity(db, norm, room_id, "light")
-        if entity:
-            return await act_switch(db, drivers, entity, on=has_on, mentioned_room=mentioned)
-        entity = resolve_entity(db, norm, room_id, "switch")
-        if entity:
-            return await act_switch(db, drivers, entity, on=has_on, mentioned_room=mentioned)
+        for etype in ("light", "switch", "fan", "media"):
+            entity = resolve_entity(db, norm, room_id, etype)
+            if entity:
+                return await act_switch(db, drivers, entity, on=has_on, mentioned_room=mentioned)
         return None
 
     return None

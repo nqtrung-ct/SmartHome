@@ -82,7 +82,7 @@ def display(request: Request):
                 # màn hình treo tường chỉ điều khiển thiết bị IR (remote);
                 # Tuya/zigbee hiện trạng thái thôi, bấm không có gì xảy ra
                 "controllable": e["driver"] == "broadlink"
-                                and e["entity_type"] in ("light", "switch", "climate")
+                                and e["entity_type"] in ("light", "switch", "climate", "fan", "media")
                                 and "readonly" not in dd,
             }
             if e["driver"] == "broadlink":
@@ -517,10 +517,15 @@ def update_settings(request: Request, body: SettingsIn, _: None = Depends(requir
         apply("discovery", "network_scan", body.discovery_network_scan)
     if body.discovery_subnet is not None:
         apply("discovery", "subnet", body.discovery_subnet.strip() or "auto")
+    weather_moved = False
     if body.weather_latitude is not None:
         apply("weather", "latitude", float(body.weather_latitude))
+        weather_moved = True
     if body.weather_longitude is not None:
         apply("weather", "longitude", float(body.weather_longitude))
+        weather_moved = True
+    if weather_moved and getattr(app.state, "weather", None):
+        app.state.weather._cache = None  # đổi vị trí -> bỏ cache 10 phút, lấy số mới ngay
     if body.advertise_mdns is not None:
         apply("server", "advertise_mdns", body.advertise_mdns)
     if body.retention_days is not None:

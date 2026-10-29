@@ -26,7 +26,7 @@ body {
 
 header { display: flex; justify-content: space-between; align-items: flex-start; }
 h1 { margin: 0; font-size: 34px; font-weight: 700; }
-#dateline { margin: 6px 0 0; color: var(--muted); font-size: 17px; text-transform: capitalize; }
+#dateline { margin: 6px 0 0; color: var(--muted); font-size: 17px; font-weight: 700; text-transform: capitalize; }
 #dateline-lunar { margin: 3px 0 0; color: var(--muted); font-size: 15px; opacity: .8; }
 .clock { display: flex; align-items: center; gap: 14px; }
 #clock { font-size: 56px; font-weight: 300; letter-spacing: 2px; }
@@ -82,7 +82,7 @@ main {
 }
 .w-num { display: block; font-size: 22px; font-weight: 700; }
 .w-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
-.w-range { margin-top: 16px; font-size: 15px; text-align: center; }
+.w-range { margin-top: 16px; font-size: 24px; font-weight: 700; text-align: center; }
 
 /* --- room cards: ít phòng thì 1 cột rộng, không đủ chỗ dọc mới tách 2 cột --- */
 .room-grid { display: grid; gap: 16px; align-content: start; }

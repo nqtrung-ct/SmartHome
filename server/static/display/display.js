@@ -214,7 +214,7 @@ async function refresh() {
     $("w-wind").textContent = w.wind;
     $("w-hum").textContent = w.humidity;
     $("w-rain").textContent = w.rain_prob ?? "–";
-    $("w-range").textContent = `cao nhất ${w.temp_max}° · thấp nhất ${w.temp_min}°`;
+    $("w-range").textContent = `${w.temp_min}° - ${w.temp_max}°`;
   } else {
     $("w-cond").textContent = "không lấy được thời tiết";
   }
@@ -236,7 +236,7 @@ async function refresh() {
 }
 
 // ---------------------------------------------------------------- room cards
-const TYPE_ICON = { light: "💡", switch: "🔌", climate: "❄️" };
+const TYPE_ICON = { light: "💡", switch: "🔌", climate: "❄️", fan: "🌀", media: "🔊" };
 
 // thiết bị IR không phản hồi trạng thái thật — chỉ hiện tên, không hiện bật/tắt
 function chipState(e) {

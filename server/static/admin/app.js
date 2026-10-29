@@ -144,7 +144,7 @@ async function renderDashboard() {
         if (e.driver === "broadlink") {
           // thiết bị IR không phản hồi trạng thái thật — không hiện bật/tắt
           control = `<span class="small muted">📡 IR</span>`;
-        } else if (e.entity_type === "switch" || e.entity_type === "light") {
+        } else if (["switch", "light", "fan", "media"].includes(e.entity_type)) {
           // trạng thái + số đo xếp cột bên phải: trạng thái trên, giá trị dưới
           const st = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
           const m = meters.get(e.device_id);
@@ -180,6 +180,7 @@ function safeJson(s) { try { return JSON.parse(s || "{}"); } catch { return {}; 
 function typeVi(t) {
   return {
     switch: "công tắc", light: "đèn", climate: "điều hòa",
+    fan: "quạt", media: "loa",
     sensor: "cảm biến", camera: "camera", controller: "điều khiển",
   }[t] || t;
 }
@@ -602,7 +603,7 @@ function childRow(c) {
   const opt = (v, label) => `<option value="${v}" ${type === v ? "selected" : ""}>${label}</option>`;
   return `<div class="row ec-row" data-id="${c ? c.id : ""}" style="margin-bottom:6px">
     <input class="ec-name" placeholder="Tên (VD: Điều hòa)" style="width:150px" value="${esc(c ? c.name : "")}">
-    <select class="ec-type">${opt("switch", "công tắc")}${opt("light", "đèn")}${opt("climate", "điều hòa")}${opt("sensor", "cảm biến")}</select>
+    <select class="ec-type">${opt("switch", "công tắc")}${opt("light", "đèn")}${opt("climate", "điều hòa")}${opt("fan", "quạt")}${opt("media", "loa")}${opt("sensor", "cảm biến")}</select>
     <input class="ec-alias" placeholder="Bí danh (máy lạnh...)" style="width:150px" value="${esc(c ? c.aliases : "")}">
     <button class="small-btn danger" onclick="removeChildRow(this)" title="Xóa thiết bị con">✕</button>
   </div>`;

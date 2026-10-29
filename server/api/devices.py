@@ -139,7 +139,7 @@ def create_entity(request: Request, device_id: int, body: EntityIn, _: None = De
     db = request.app.state.db
     if not db.one("SELECT id FROM devices WHERE id=?", (device_id,)):
         raise HTTPException(status_code=404, detail="Không có thiết bị")
-    if body.entity_type not in ("switch", "light", "climate", "sensor", "camera"):
+    if body.entity_type not in ("switch", "light", "climate", "fan", "media", "sensor", "camera"):
         raise HTTPException(status_code=400, detail="entity_type không hợp lệ")
     entity_id = db.execute(
         "INSERT INTO entities(device_id, name, entity_type, aliases, driver_data) VALUES (?,?,?,?,?)",
@@ -171,7 +171,7 @@ def patch_entity(request: Request, entity_id: int, body: EntityPatch, _: None = 
             raise HTTPException(status_code=404, detail="Không có phòng này")
         db.execute("UPDATE entities SET room_id=? WHERE id=?", (body.room_id, entity_id))
     if body.entity_type is not None:
-        if body.entity_type not in ("switch", "light", "climate", "sensor", "camera"):
+        if body.entity_type not in ("switch", "light", "climate", "fan", "media", "sensor", "camera"):
             raise HTTPException(status_code=400, detail="entity_type không hợp lệ")
         db.execute("UPDATE entities SET entity_type=? WHERE id=?", (body.entity_type, entity_id))
     return {"ok": True}
