@@ -110,6 +110,43 @@ def display(request: Request):
         )
     ]
 
+    # điện lưới: công tắc Tuya (đầu vào) + số Volt từ cảm biến cloud_meter.
+    # Số Volt là "thật" nhất: Vol >= 100 = còn điện kể cả khi trạng thái công
+    # tắc đang off (poll LAN fail thì scheduler ghi off dù lưới còn).
+    # Mất điện = Vol < 100 hoặc công tắc tắt mà không có số Volt. Sụt áp = < 200.
+    grid = None
+    sw = db.one(
+        """SELECT e.state FROM entities e JOIN devices d ON d.id=e.device_id
+           WHERE d.driver='tuya' AND e.entity_type='switch' ORDER BY e.id LIMIT 1"""
+    )
+    if sw:
+        try:
+            sw_state = _json.loads(sw["state"] or "{}")
+        except ValueError:
+            sw_state = {}
+        voltage = None
+        for m in db.query(
+            """SELECT e.state, e.driver_data FROM entities e
+               JOIN devices d ON d.id=e.device_id
+               WHERE d.driver='tuya' AND e.entity_type='sensor' ORDER BY e.id"""
+        ):
+            if not _json.loads(m["driver_data"] or "{}").get("cloud_meter"):
+                continue
+            try:
+                mv = _json.loads(m["state"] or "{}").get("voltage")
+            except ValueError:
+                mv = None
+            if mv is not None:
+                voltage = mv
+                break
+        lost = (voltage is not None and voltage < 100) or (
+            sw_state.get("state") != "on" and voltage is None)
+        grid = {
+            "on": not lost,
+            "voltage": voltage,
+            "low_voltage": not lost and voltage is not None and voltage < 200,
+        }
+
     # chỉ để tương thích client cũ — màn hình mới không dùng các số này nữa
     counts = {
         "rooms": len(rooms),
@@ -129,6 +166,7 @@ def display(request: Request):
         "rooms": rooms,
         "timers": timers,
         "counts": counts,
+        "grid": grid,
         "updated_at": now_iso(),
     }
 

@@ -11,9 +11,14 @@
   <div>
     <h1 id="greeting">Xin chào</h1>
     <p id="dateline">&nbsp;</p>
+    <p id="dateline-lunar">&nbsp;</p>
   </div>
   <div class="clock">
-    <span id="lock-ind" class="lock-ind" title="Trạng thái (chỉ hiển thị) — bấm thiết bị để điều khiển">🔒</span>
+    <span id="grid-warn" class="grid-warn hidden" title="Trạng thái điện lưới">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+      <b id="grid-warn-text"></b>
+    </span>
+    <span id="lock-ind" class="lock-ind" title="Trạng thái (chỉ hiển thị) — bấm thiết bị để điều khiển"></span>
     <div id="clock">--:--</div>
     <button id="fullscreen" title="Toàn màn hình">⛶</button>
   </div>

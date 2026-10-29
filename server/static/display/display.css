@@ -27,6 +27,7 @@ body {
 header { display: flex; justify-content: space-between; align-items: flex-start; }
 h1 { margin: 0; font-size: 34px; font-weight: 700; }
 #dateline { margin: 6px 0 0; color: var(--muted); font-size: 17px; text-transform: capitalize; }
+#dateline-lunar { margin: 3px 0 0; color: var(--muted); font-size: 15px; opacity: .8; }
 .clock { display: flex; align-items: center; gap: 14px; }
 #clock { font-size: 56px; font-weight: 300; letter-spacing: 2px; }
 #fullscreen {
@@ -41,6 +42,15 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
 }
 .lock-ind svg { vertical-align: -3px; }
 .lock-ind.on { opacity: .85; }
+
+/* cảnh báo điện lưới: đỏ = mất điện, vàng = sụt áp (< 200V) */
+.grid-warn {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 12px; border-radius: 14px; font-size: 14.5px;
+}
+.grid-warn svg { flex: none; }
+.grid-warn.red { color: var(--red); background: rgba(239, 90, 111, .13); border: 1px solid rgba(239, 90, 111, .5); }
+.grid-warn.yellow { color: #ffd166; background: rgba(255, 209, 102, .12); border: 1px solid rgba(255, 209, 102, .45); }
 
 main {
   flex: 1; display: grid; gap: 22px; margin-top: 26px;
