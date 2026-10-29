@@ -99,6 +99,7 @@ main {
 .room-env { margin-left: auto; display: flex; align-items: baseline; gap: 14px; }
 .room-temp { font-size: 28px; font-weight: 700; }
 .room-hum { font-size: 14px; color: var(--muted); }
+.room-hum b { color: var(--text); font-weight: 700; }
 
 .chip-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .chip {

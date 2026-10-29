@@ -270,7 +270,7 @@ function renderRooms(rooms) {
         </div>
         <div class="room-env">
           ${r.temperature != null ? `<span class="room-temp">${r.temperature}°</span>` : ""}
-          ${r.humidity != null ? `<span class="room-hum">${DROPLET_SVG} ${r.humidity}%</span>` : ""}
+          ${r.humidity != null ? `<span class="room-hum">${DROPLET_SVG} <b>${r.humidity}%</b></span>` : ""}
         </div>
       </div>
       <div class="chip-row">
