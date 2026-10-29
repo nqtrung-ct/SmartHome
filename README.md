@@ -67,7 +67,7 @@ instructions/      tài liệu định hướng dự án
 | 1 | Server + thiết bị mỗi phòng + Broadlink, lệnh cố định | ✅ fast path ("tắt điều hòa" không cần LLM) |
 | 2 | LLM câu tự nhiên + TTS + hẹn giờ | ✅ Ollama tool-calls + piper vi + timers (đọc lại giờ khi hẹn) |
 | 3 | Nhiều phòng, ngữ cảnh phòng | ✅ máy thoại đăng ký theo phòng → "bật điều hòa" hiểu đúng chỗ |
-| 4 | Frigate cho camera + hỏi sự kiện ("chiều qua phòng khách có gì?") | 🔶 một phần: đã có ONVIF/RTSP, xem video trực tiếp, trạng thái online; chưa có ghi event + hỏi lại |
+| 4 | Frigate cho camera + hỏi sự kiện ("chiều qua phòng khách có gì?") | 🔶 một phần: **Frigate đang chạy** (Docker, chỉ ghi sự kiện có người — alerts 30 ngày), xem video trực tiếp, trạng thái online; chưa tích hợp hỏi lại bằng giọng |
 | 5 | Nhận diện người nói + quyền giới hạn trẻ em | ⏳ chưa — hiện dùng PIN 4 số trên wall display làm lớp chặn đơn giản |
 
 Công nghệ đang chạy so với gợi ý trong kế hoạch: STT **Zipformer** (phương án nhỏ 75 MB trong kế hoạch — nhanh; PhoWhisper-medium là hướng nâng cấp khi cần chính xác hơn), TTS **piper vi_VN-vais1000** (kế hoạch gợi ý VieNeu-TTS để clone giọng), LLM **qwen2.5:3b** chạy CPU (kế hoạch gợi ý 7–14B khi có GPU). Kế hoạch cũng xác nhận hai điểm đã sống với thật: **không đọc được trạng thái thật của điều hòa qua IR** (nên hệ thống nhớ lần gửi cuối) và **Imou = thương hiệu tiêu dùng của Dahua** (ONVIF + RTSP :554, phải bật trong app).
@@ -94,4 +94,4 @@ Công nghệ đang chạy so với gợi ý trong kế hoạch: STT **Zipformer*
 
 **Admin** (tiêu đề "Nhà Thông Minh"): dashboard theo tầng, hàng/cột; gộp cầu dao (công tắc + số đo V/W) thành một dòng; sửa tên/bí danh/phòng qua modal ✏️; hub Broadlink thêm/sửa/xóa thiết bị con và học mã IR ngay trong modal; tab Thiết đặt đổi lat/lng, PIN, retention...
 
-**Chưa làm:** Frigate ghi event camera + hỏi lại sự kiện (bước 4 kế hoạch, cần ổ cứng riêng cho clip), đảo cánh gió điều hòa (chờ remote vật lý để học mã), Zigbee + MQTT (chờ phần cứng), mạch ESP32 vệ tinh (kế hoạch gợi ý ESP32-S3-BOX-3 / ReSpeaker Lite; dự kiến dùng lại phần wake word server-side của hands-free; kèm chống trùng lệnh khi 2 phòng cùng nghe), phân biệt người dùng theo giọng + quyền trẻ em (bước 5 — kế hoạch xếp cuối cùng), xem camera trong admin (hiện chỉ có trên màn hình treo tường).
+**Chưa làm:** hỏi lại sự kiện camera bằng giọng ("chiều qua phòng khách có gì?") + cảnh báo người qua loa (Frigate đã ghi sẵn, chỉ còn phần tích hợp), đảo cánh gió điều hòa (chờ remote vật lý để học mã), Zigbee + MQTT (chờ phần cứng), mạch ESP32 vệ tinh (kế hoạch gợi ý ESP32-S3-BOX-3 / ReSpeaker Lite; dự kiến dùng lại phần wake word server-side của hands-free; kèm chống trùng lệnh khi 2 phòng cùng nghe), phân biệt người dùng theo giọng + quyền trẻ em (bước 5 — kế hoạch xếp cuối cùng), xem camera trong admin (hiện chỉ có trên màn hình treo tường), xoay camera/preset (Imou khóa mọi đường local, kể cả preset tạo trong app — chỉ dùng được trong app Imou Life).
