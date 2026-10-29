@@ -135,7 +135,9 @@ async function renderDashboard() {
           meters.set(s.device_id, st);
         }
       }
-      const entities = room.entities.filter((e) => !meters.has(e.device_id)).map((e) => {
+      const entities = room.entities.filter(
+        (e) => !(e.entity_type === "sensor" && meters.has(e.device_id))
+      ).map((e) => {
         const state = safeJson(e.state);
         // tổng quan chỉ xem trạng thái — điều khiển ở tab Thiết bị hoặc bằng giọng nói
         let control = "";
