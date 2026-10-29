@@ -6,6 +6,7 @@ small map of learned states, e.g. {"off": hex, "cool_25": hex, "cool_26": hex}.
 from __future__ import annotations
 
 import re
+import threading
 import time
 
 import broadlink
@@ -17,9 +18,15 @@ from server.drivers.base import Driver, DriverError, Row, loads
 class BroadlinkDriver(Driver):
     name = "broadlink"
 
+    # hub chỉ phát được 1 mã IR mỗi lúc; gửi dồn (test/API liên hồi) thì mã sau
+    # bị rơi -> mọi lần gửi xếp hàng toàn cục, cách nhau ít nhất ir_gap giây
+    _ir_lock = threading.Lock()
+    _last_send = 0.0
+
     def __init__(self, cfg):
         self.timeout = int(cfg.get("broadlink.timeout", 5))
         self.local_ip = cfg.get("broadlink.local_ip") or None
+        self.ir_gap = float(cfg.get("broadlink.ir_gap", 1.0))
 
     # -- connection ---------------------------------------------------------
 
@@ -93,13 +100,19 @@ class BroadlinkDriver(Driver):
         return None
 
     def send_ir(self, device: Row, code_hex: str) -> None:
-        try:
-            dev = self._connect(device)
-            dev.send_data(bytes.fromhex(code_hex))
-        except DriverError:
-            raise
-        except Exception as exc:  # network/auth failures
-            raise DriverError(f"Gửi IR lỗi: {exc}") from exc
+        with BroadlinkDriver._ir_lock:
+            wait = BroadlinkDriver._last_send + self.ir_gap - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                dev = self._connect(device)
+                dev.send_data(bytes.fromhex(code_hex))
+            except DriverError:
+                raise
+            except Exception as exc:  # network/auth failures
+                raise DriverError(f"Gửi IR lỗi: {exc}") from exc
+            finally:
+                BroadlinkDriver._last_send = time.time()
 
     # -- state --------------------------------------------------------------
 
