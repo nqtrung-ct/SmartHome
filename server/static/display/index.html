@@ -97,7 +97,10 @@
       </div>
       <button id="cam-close" class="btn ghost">✕</button>
     </div>
-    <video id="cam-video" class="cam-img" autoplay playsinline></video>
+    <div class="cam-video-wrap">
+      <video id="cam-video" class="cam-img hidden" autoplay playsinline muted></video>
+      <button id="cam-mute" class="cam-mute hidden" title="Bật tiếng">🔇</button>
+    </div>
     <img id="cam-img" class="cam-img hidden" alt="video camera">
     <p id="cam-error" class="cam-error hidden">Không lấy được video — camera đang tắt hoặc mất kết nối.</p>
     <div id="cam-ctrl" class="cam-ctrl hidden">

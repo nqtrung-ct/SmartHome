@@ -492,8 +492,17 @@ function startWebrtc(video, streamName) {
     camPc = pc;
     pc.ontrack = (ev) => {
       video.srcObject = ev.streams[0];
+      // autoplay CÂM luôn được Chrome cho phép; tiếng bật qua nút 🔊
+      video.muted = true;
       video.play().catch(() => {});
+      $("cam-mute").classList.remove("hidden");
+      $("cam-mute").textContent = "🔇";
       resolve();
+    };
+    pc.onconnectionstatechange = () => {
+      if (["failed", "disconnected"].includes(pc.connectionState)) {
+        reject(new Error("kết nối sụp"));
+      }
     };
     (async () => {
       try {
@@ -538,7 +547,9 @@ function openCam(id) {
   err.classList.add("hidden");
   $("cam-overlay").classList.remove("hidden");
   const fallbackMjpeg = () => {  // không WebRTC được -> MJPEG HD (không tiếng)
+    stopWebrtc();
     video.classList.add("hidden");
+    $("cam-mute").classList.add("hidden");
     img.classList.remove("hidden");
     img.onerror = () => {
       img.classList.add("hidden");
@@ -590,10 +601,17 @@ async function sendPtz(body) {
 
 function closeCam() {
   stopWebrtc();                       // ngắt phiên WebRTC
+  $("cam-mute").classList.add("hidden");
   $("cam-img").src = "";              // ngắt MJPEG -> server giết ffmpeg
   $("cam-overlay").classList.add("hidden");
 }
 $("cam-close").onclick = closeCam;
+$("cam-mute").onclick = () => {  // một chạm = ngữ cảnh thao tác thật -> Chrome cho phát tiếng
+  const v = $("cam-video");
+  v.muted = !v.muted;
+  if (!v.muted) v.play().catch(() => {});
+  $("cam-mute").textContent = v.muted ? "🔇" : "🔊";
+};
 
 async function sendCommand(e, command, params) {
   if (!unlocked()) { $("ctrl-overlay").classList.add("hidden"); showPin(() => openCtrl(e.id), e.name); return; }

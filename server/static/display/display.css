@@ -169,7 +169,14 @@ main {
 
 /* khung xem video camera: WebRTC (A/V) trong <video>, dự phòng MJPEG <img> (16:9) */
 .cam-box { width: min(920px, 94vw); text-align: center; }
+.cam-video-wrap { position: relative; }
 .cam-img { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; object-fit: contain; }
+/* Chrome chặn autoplay có tiếng: video chạy câm, nút này bật tiếng (1 chạm) */
+.cam-mute {
+  position: absolute; right: 12px; top: 12px; width: 46px; height: 46px;
+  border-radius: 50%; border: 1px solid var(--border); background: rgba(0, 0, 0, .55);
+  color: #fff; font-size: 20px; cursor: pointer;
+}
 .cam-error { padding: 26px 10px; color: var(--muted); }
 
 /* điều khiển PTZ: góc đã lưu — bấm quay về góc đó (sau PIN, không xoay tự do) */
