@@ -42,7 +42,7 @@ def display(request: Request):
         entities = db.query(
             """SELECT e.id, e.name, e.entity_type, e.state, e.driver_data, d.driver
                FROM entities e JOIN devices d ON d.id=e.device_id
-               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type NOT IN ('controller','sensor')""",
+               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type NOT IN ('controller','sensor','camera')""",
             (room["id"],),
         )
         temp = humidity = None

@@ -93,6 +93,13 @@ async def create_device(request: Request, body: DeviceIn, _: None = Depends(requ
                 ))
         except Exception as exc:
             log_event(db, "admin", f"Không tạo được thực thể mặc định: {exc}", level="warn")
+    if body.driver == "onvif":
+        # camera không có driver điều khiển — vẫn phải có thực thể "camera",
+        # không thì UI (liệt kê theo thực thể) không thấy thiết bị ở đâu cả
+        entities.append(db.execute(
+            "INSERT INTO entities(device_id, name, entity_type, driver_data) VALUES (?,?,?,?)",
+            (device_id, "Camera", "camera", json.dumps({"readonly": True})),
+        ))
     return {"id": device_id, "entities": entities}
 
 
