@@ -140,10 +140,12 @@ def display(request: Request):
                 voltage = mv
                 break
         on = sw_state.get("state") == "on"
+        # Vol = 0 khi công tắc bật: khả năng cao vừa có điện lại, số cloud chưa
+        # kịp về — không cảnh báo vàng; chỉ cảnh báo khi thật sự sụt áp (0 < Vol < 200)
         grid = {
             "on": on,
             "voltage": voltage,
-            "low_voltage": on and voltage is not None and voltage < 200,
+            "low_voltage": on and voltage is not None and 0 < voltage < 200,
         }
 
     # chỉ để tương thích client cũ — màn hình mới không dùng các số này nữa
