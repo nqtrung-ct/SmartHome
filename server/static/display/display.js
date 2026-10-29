@@ -9,15 +9,19 @@ let unlock = { token: null, until: 0 };
 
 const unlocked = () => unlock.token && Date.now() < unlock.until;
 
+// emoji khóa là emoji màu (vàng) — dùng SVG trắng cho hợp nền tối
+const LOCK_SVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7a4 4 0 1 1 8 0v3.5"/></svg>`;
+const UNLOCK_SVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 7.6-1.7"/></svg>`;
+
 function tickUnlock() {
   const ind = $("lock-ind");
   if (unlocked()) {
     const left = Math.max(0, Math.floor((unlock.until - Date.now()) / 1000));
-    ind.textContent = `🔓 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    ind.innerHTML = `${UNLOCK_SVG} ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
     ind.classList.add("on");
   } else {
     if (unlock.token) { unlock = { token: null, until: 0 }; }
-    ind.textContent = "🔒";
+    ind.innerHTML = LOCK_SVG;
     ind.classList.remove("on");
   }
 }

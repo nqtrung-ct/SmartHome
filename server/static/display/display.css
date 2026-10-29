@@ -33,12 +33,13 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
   background: var(--card); color: var(--muted); border: 1px solid var(--border);
   border-radius: 14px; width: 44px; height: 44px; font-size: 20px; cursor: pointer;
 }
-/* chỉ báo trạng thái: trắng, mờ nhẹ, không viền/nền */
+/* chỉ báo trạng thái: trắng (SVG), mờ nhẹ, không viền/nền */
 .lock-ind {
   min-width: 72px; text-align: center; padding: 6px 10px;
   color: #fff; opacity: .55;
-  font-size: 17px; cursor: default; user-select: none;
+  font-size: 15px; cursor: default; user-select: none;
 }
+.lock-ind svg { vertical-align: -3px; }
 .lock-ind.on { opacity: .85; }
 
 main {
