@@ -240,11 +240,12 @@ const FAN_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" s
 const SPEAKER_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="1.5"/><circle cx="12" cy="8" r="3"/><circle cx="12" cy="16" r="1.6"/></svg>`;
 const SNOW_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/></svg>`;
 const DROPLET_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>`;
-const TYPE_ICON = { light: "💡", switch: "🔌", climate: SNOW_SVG, fan: FAN_SVG, media: SPEAKER_SVG };
+const VIDEO_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>`;
+const TYPE_ICON = { light: "💡", switch: "🔌", climate: SNOW_SVG, fan: FAN_SVG, media: SPEAKER_SVG, camera: VIDEO_SVG };
 
 // thiết bị IR không phản hồi trạng thái thật — chỉ hiện tên, không hiện bật/tắt
 function chipState(e) {
-  if (e.driver === "broadlink") return "";
+  if (e.driver === "broadlink" || e.type === "camera") return "";
   if (e.type === "climate") {
     const on = e.state && e.state.state === "on";
     return on && e.state.temperature != null ? `${e.state.temperature}°` : "đang tắt";
@@ -255,7 +256,7 @@ function chipState(e) {
 function renderRooms(rooms) {
   const el = $("room-grid");
   if (!rooms.length) {
-    el.innerHTML = `<p class="muted">Chưa có phòng nào có cảm biến nhiệt độ.</p>`;
+    el.innerHTML = `<p class="muted">Chưa có phòng nào có thiết bị.</p>`;
     return;
   }
   // mặc định 1 cột rộng (span cả vùng phải); chỉ khi không đủ chỗ dọc mới tách 2 cột

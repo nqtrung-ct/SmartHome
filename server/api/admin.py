@@ -42,7 +42,7 @@ def display(request: Request):
         entities = db.query(
             """SELECT e.id, e.name, e.entity_type, e.state, e.driver_data, d.driver
                FROM entities e JOIN devices d ON d.id=e.device_id
-               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type NOT IN ('controller','sensor','camera')""",
+               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type NOT IN ('controller','sensor')""",
             (room["id"],),
         )
         temp = humidity = None
@@ -63,8 +63,10 @@ def display(request: Request):
                 humidity = st["humidity"]
             if temp is not None and humidity is not None:
                 break
-        if temp is None and humidity is None:
-            continue  # phòng không có cảm biến nhiệt độ thì không lên màn hình
+        # cảm biến nhiệt/ẩm là phần cộng thêm — phòng không có vẫn lên màn hình
+        # nếu có thiết bị; chỉ ẩn phòng trống hoàn toàn
+        if not entities and temp is None and humidity is None:
+            continue
 
         ents = []
         for e in entities:
