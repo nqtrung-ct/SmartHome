@@ -235,7 +235,10 @@ async function refresh() {
 }
 
 // ---------------------------------------------------------------- room cards
-const TYPE_ICON = { light: "💡", switch: "🔌", climate: "❄️", fan: "🌀", media: "🔊" };
+// icon SVG (1em: co theo font-size như emoji) — quạt 3 cánh, loa bookshelf
+const FAN_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/></svg>`;
+const SPEAKER_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="1.5"/><circle cx="12" cy="8" r="3"/><circle cx="12" cy="16" r="1.6"/></svg>`;
+const TYPE_ICON = { light: "💡", switch: "🔌", climate: "❄️", fan: FAN_SVG, media: SPEAKER_SVG };
 
 // thiết bị IR không phản hồi trạng thái thật — chỉ hiện tên, không hiện bật/tắt
 function chipState(e) {
@@ -421,7 +424,7 @@ function openCtrl(id) {
   const { e, r } = findEntity(id);
   if (!e) return;
   if (!unlocked()) { showPin(() => openCtrl(id), e.name); return; }
-  $("ctrl-icon").textContent = TYPE_ICON[e.type] || "🔘";
+  $("ctrl-icon").innerHTML = TYPE_ICON[e.type] || "🔘";
   $("ctrl-name").textContent = e.name;
   $("ctrl-room").textContent = r ? r.name : "";
   $("ctrl-body").innerHTML = ctrlBody(e);

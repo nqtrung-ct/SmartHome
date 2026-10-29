@@ -110,6 +110,7 @@ main {
 .chip.ctl:hover { border-color: var(--blue); }
 .chip.on { border-color: rgba(62, 207, 142, .45); }
 .chip-ic { font-size: 24px; }
+.chip-ic svg, .ctrl-icon svg { vertical-align: -0.15em; }
 .chip-body { display: flex; flex-direction: column; }
 .chip-name { font-size: 15.5px; font-weight: 600; }
 .chip-st { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
