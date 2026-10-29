@@ -367,8 +367,11 @@ async function doCommand(e, cmd) {
 
 // ---------------------------------------------------------------- timers
 function renderTimers(timers) {
-  $("timer-list").innerHTML = timers.length
-    ? timers.map((t) => {
+  // không có hẹn giờ thì ẩn cả card, khỏi hiện chỗ trống
+  const card = $("timers-card");
+  card.classList.toggle("hidden", !timers.length);
+  if (!timers.length) return;
+  $("timer-list").innerHTML = timers.map((t) => {
         const at = new Date(t.target_at);
         const hhmm = at.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", hour12: false });
         const day = at.toLocaleDateString("vi-VN", { day: "numeric", month: "numeric" });
@@ -377,8 +380,7 @@ function renderTimers(timers) {
           <div><div class="t-msg">${esc(t.message)}</div>
           ${t.room ? `<div class="t-room">${esc(t.room)}</div>` : ""}</div>
         </div>`;
-      }).join("")
-    : `<p class="muted">Không có hẹn giờ.</p>`;
+      }).join("");
 }
 
 refresh();
