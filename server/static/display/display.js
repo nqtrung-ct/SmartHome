@@ -243,7 +243,7 @@ function chipState(e) {
   if (e.driver === "broadlink") return "";
   if (e.type === "climate") {
     const on = e.state && e.state.state === "on";
-    return on && e.state.temperature != null ? `${e.state.temperature}°C` : "đang tắt";
+    return on && e.state.temperature != null ? `${e.state.temperature}°` : "đang tắt";
   }
   return e.state && e.state.state === "on" ? "đang bật" : "đang tắt";
 }
@@ -265,7 +265,7 @@ function renderRooms(rooms) {
           ${r.floor ? `<span class="badge">${esc(r.floor)}</span>` : ""}
         </div>
         <div class="room-env">
-          ${r.temperature != null ? `<span class="room-temp">${r.temperature}°C</span>` : ""}
+          ${r.temperature != null ? `<span class="room-temp">${r.temperature}°</span>` : ""}
           ${r.humidity != null ? `<span class="room-hum">💧 ${r.humidity}%</span>` : ""}
         </div>
       </div>
@@ -388,7 +388,7 @@ function ctrlBody(e) {
       </div>
       <div class="rrow">
         <button class="rbtn sm" data-cmd="temp-">−</button>
-        <div class="temp-dial"><div class="dial-temp">❄ <b id="ctrl-temp">${ctrlTemp}</b>°C</div></div>
+        <div class="temp-dial"><div class="dial-temp">❄ <b id="ctrl-temp">${ctrlTemp}</b>°</div></div>
         <button class="rbtn sm" data-cmd="temp+">＋</button>
       </div>`;
     more = `
