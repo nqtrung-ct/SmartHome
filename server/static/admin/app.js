@@ -627,14 +627,6 @@ window.openEditModal = (entityId) => {
     : entityRoomOptions(roomsCache, effRoom);
   editCtx.roomInit = +$("#e-room").value || null;
   $("#e-children-wrap").classList.toggle("hidden", !isHub);
-  // thiết bị climate (điều hòa): cấu hình nhiệt độ/quạt mặc định khi bật
-  const isClimate = e.entity_type === "climate";
-  $("#e-climate-wrap").classList.toggle("hidden", !isClimate);
-  if (isClimate) {
-    const dd = safeJson(e.driver_data);
-    $("#e-deftemp").value = dd.default_temp || "";
-    $("#e-deffan").value = dd.default_fan || "";
-  }
   if (isHub) {
     const children = d.entities.filter((x) => x.id !== e.id);
     $("#e-children").innerHTML = children.map(childRow).join("")
@@ -667,14 +659,6 @@ $("#e-save").onclick = async () => {
   if (!name) { toast("Nhập tên thiết bị"); return; }
   try {
     const patch = { name, aliases };
-    if (e.entity_type === "climate") {
-      const dd = safeJson(e.driver_data);
-      const dt = parseInt($("#e-deftemp").value, 10);
-      const df = $("#e-deffan").value;
-      if (dt >= 16 && dt <= 30) dd.default_temp = dt; else delete dd.default_temp;
-      if (df) dd.default_fan = df; else delete dd.default_fan;
-      patch.driver_data = dd;
-    }
     await api(`/entities/${e.id}`, { method: "PATCH", body: JSON.stringify(patch) });
     if (isHub) {
       if (roomChanged) {

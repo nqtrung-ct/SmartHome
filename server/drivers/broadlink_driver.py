@@ -122,10 +122,11 @@ class BroadlinkDriver(Driver):
             raise DriverError(f"'{entity['name']}' chưa học mã IR nào")
 
         if entity["entity_type"] == "climate":
-            # lệnh không nói mức quạt -> dùng mức mặc định trong driver_data
-            default_fan = loads(entity["driver_data"]).get("default_fan", "")
-            if default_fan and not params.get("fan"):
-                params = {**params, "fan": default_fan}
+            # lệnh không nói mức quạt -> dùng lại mức quạt lần trước
+            if not params.get("fan"):
+                prev_fan = loads(entity["state"]).get("fan")
+                if prev_fan:
+                    params = {**params, "fan": prev_fan}
             key = self._climate_key(codes, command, params)
         else:
             key = command if command in codes else ("toggle" if "toggle" in codes else command)
@@ -134,7 +135,18 @@ class BroadlinkDriver(Driver):
             options = ", ".join(sorted(codes))
             raise DriverError(f"Chưa học mã '{key}' cho {entity['name']} (đã có: {options})")
         self.send_ir(device, codes[key])
-        return {"state": command, **params}
+        if entity["entity_type"] != "climate":
+            return {"state": command, **params}
+        # climate: state on/off rõ ràng cho UI; tắt vẫn giữ mode/nhiệt/quạt
+        # lần trước để lệnh "bật" lần sau dùng lại y như cũ (IR một chiều,
+        # không đọc được trạng thái thật từ máy)
+        state = {"state": "off" if command == "off" else "on", **params}
+        if command == "off":
+            prev = loads(entity["state"])
+            for k in ("mode", "temperature", "fan"):
+                if prev.get(k) is not None:
+                    state.setdefault(k, prev[k])
+        return state
 
     @staticmethod
     def _climate_key(codes: dict, command: str, params: dict) -> str:

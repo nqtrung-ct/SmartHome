@@ -385,9 +385,10 @@ function ctrlBody(e) {
   let main = "";
   let more = "";
   if (e.type === "climate") {
-    ctrlTemp = (e.defaults && e.defaults.temp) || (e.state && e.state.temperature) || 26;
-    ctrlFan = (e.defaults && e.defaults.fan) || "";
-    ctrlMode = "cool";
+    // nhiệt/quạt hiển thị theo lần chỉnh cuối (state) — không còn mặc định riêng
+    ctrlTemp = (e.state && e.state.temperature) || 26;
+    ctrlFan = (e.state && e.state.fan) || "";
+    ctrlMode = (e.state && e.state.mode) || "cool";
     // hàng 1: bật/tắt riêng; hàng 2: − nhiệt độ ＋
     main = `
       <div class="rrow">

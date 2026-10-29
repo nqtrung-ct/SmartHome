@@ -85,16 +85,11 @@ def display(request: Request):
                                 and e["entity_type"] in ("light", "switch", "climate", "fan", "media")
                                 and "readonly" not in dd,
             }
-            if e["driver"] == "broadlink":
-                # bảng điều khiển trên màn hình cần biết nút phụ có sẵn
-                if e["entity_type"] == "climate":
-                    ent["defaults"] = {"fan": dd.get("default_fan", ""),
-                                       "temp": dd.get("default_temp")}
-                else:
-                    # on/off/power = Bật/Tắt lớn, không lặp lại trong nút phụ
-                    ent["buttons"] = sorted(
-                        k for k in dd.get("codes", {})
-                        if k not in ("on", "off", "toggle", "power"))
+            if e["driver"] == "broadlink" and e["entity_type"] != "climate":
+                # on/off/power = Bật/Tắt lớn, không lặp lại trong nút phụ
+                ent["buttons"] = sorted(
+                    k for k in dd.get("codes", {})
+                    if k not in ("on", "off", "toggle", "power"))
             ents.append(ent)
         rooms.append({
             "id": room["id"], "name": room["name"], "floor": room["floor"],

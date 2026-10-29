@@ -292,12 +292,12 @@ async def act_climate(db, drivers, entity, mode=None, temperature=None, mentione
     if mode == "off":
         command, params = "off", {}
     elif mode == "on":
-        # "bật" không kèm nhiệt độ: lệnh không nói -> nhiệt mặc định (driver_data)
-        # -> lần gần nhất -> 26. Nói rõ nhiệt độ trong lệnh thì luôn thắng.
-        dd = loads(entity["driver_data"])
-        last = loads(entity["state"]).get("temperature")
-        command, params = "set", {"mode": "cool",
-                                  "temperature": int(temperature or dd.get("default_temp") or last or 26)}
+        # "bật" không kèm thông tin: dùng lại đúng như lần trước (IR một chiều
+        # nên không đọc được từ máy — state trong DB là lần gửi cuối). Mức quạt
+        # lần trước do driver tự inject. Lệnh nói rõ nhiệt độ thì thắng.
+        last = loads(entity["state"]) if entity["state"] else {}
+        command, params = "set", {"mode": last.get("mode") or "cool",
+                                  "temperature": int(temperature or last.get("temperature") or 26)}
     else:
         command, params = "set", {"mode": mode or "cool", "temperature": int(temperature or 26)}
     state = await _set_state(db, drivers, entity, command, params)
@@ -624,6 +624,15 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         if entity:
             return await act_button(db, drivers, entity, sw,
                                     mentioned_room=_room_from_text(db, norm))
+
+    # "chỉnh máy lạnh 25 độ" — set nhiệt độ không cần động từ bật/tắt
+    if not (has_on or has_off):
+        temp = _temp_from_text(norm)
+        if temp:
+            entity = resolve_entity(db, norm, room_id, "climate")
+            if entity:
+                return await act_climate(db, drivers, entity, mode="cool", temperature=temp,
+                                         mentioned_room=_room_from_text(db, norm))
 
     # climate with/without temperature
     if has_on or has_off:
