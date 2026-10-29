@@ -526,6 +526,8 @@ function startWebrtc(video, streamName) {
 function openCam(id) {
   const { e, r } = findEntity(id);
   if (!e) return;
+  // popup chứa nút preset (điều khiển) nên mở cũng phải qua PIN như thiết bị khác
+  if (!unlocked()) { showPin(() => openCam(id), e.name); return; }
   camEntity = e;
   $("cam-icon").innerHTML = VIDEO_SVG;
   $("cam-name").textContent = e.name;
