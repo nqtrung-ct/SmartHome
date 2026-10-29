@@ -30,6 +30,7 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; }
 #dateline-lunar { margin: 3px 0 0; color: var(--muted); font-size: 15px; opacity: .8; }
 .clock { display: flex; align-items: center; gap: 14px; }
 #clock { font-size: 56px; font-weight: 300; letter-spacing: 2px; }
+#clock .clock-buoi { font-size: 0.5em; font-weight: 400; }
 #fullscreen {
   background: var(--card); color: var(--muted); border: 1px solid var(--border);
   border-radius: 14px; width: 44px; height: 44px; font-size: 20px; cursor: pointer;

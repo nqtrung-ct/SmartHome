@@ -169,8 +169,8 @@ function tick() {
   const hour = now.getHours();
   const h12 = hour % 12 || 12;
   const buoi = hour < 12 ? "Sáng" : hour < 14 ? "Trưa" : hour < 18 ? "Chiều" : "Tối";
-  $("clock").textContent =
-    `${h12}:${String(now.getMinutes()).padStart(2, "0")} ${buoi}`;
+  $("clock").innerHTML =
+    `${h12}:${String(now.getMinutes()).padStart(2, "0")} <span class="clock-buoi">${buoi}</span>`;
   $("greeting").textContent =
     hour < 11 ? "Chào buổi sáng" : hour < 14 ? "Chào buổi trưa" :
     hour < 18 ? "Chào buổi chiều" : "Chào buổi tối";
