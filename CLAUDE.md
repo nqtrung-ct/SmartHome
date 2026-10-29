@@ -53,6 +53,7 @@ Ghi chú làm việc trong repo này (cho Claude Code và lập trình viên). C
 - Thiết bị Tuya chạy pin ngủ sâu giữa hai lần báo — chỉ broadcast khi thức; poll thất bại giữ số liệu cũ.
 - Cầu dao Tuya (category `dlq`): `phase_a` là blob 8 byte `[V×0.1: 2B][dòng mA: 3B][công suất W: 3B]` big-endian (không phải V+P 4 byte — gộp sai ra 3.9 kW ảo). Kiểm chứng bằng `total_forward_energy`: công suất thật = delta kWh theo giờ. Thiết bị sau cầu dao có thể chỉ là inverter (điều hòa/đèn không nằm trên meter này).
 - PCM16 trước `np.frombuffer` phải chẵn byte (`keep &= ~1`).
+- Camera Imou: RTSP dùng user `admin` + **mật khẩu thiết bị riêng** (mã bảo mật trên tem, khác mật khẩu tài khoản app Imou Life) — lưu trong `data/secrets.json` nhóm `rtsp.<ip>` dạng JSON `{"user","pass"}`. Sub stream: `/cam/realmonitor?channel=1&subtype=1` (H264 640×352); trình duyệt không mở RTSP → server chuyển MJPEG qua ffmpeg (`/api/display/camera/{id}/stream`).
 
 ## Android build
 
