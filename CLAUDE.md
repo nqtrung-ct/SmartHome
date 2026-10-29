@@ -51,6 +51,7 @@ Ghi chú làm việc trong repo này (cho Claude Code và lập trình viên). C
 - `server.db.Database()` nhận `pathlib.Path`, không nhận `str`.
 - Tuya: cloud region `sg`; phải subscribe gói miễn phí **IoT Core** (lỗi `28841001` = chưa); map dp_id↔code bằng `cloud.getdps()`, đừng đoán; firmware 3.5 **giấu các dps đo điện qua LAN** (điện áp/công suất/kWh phải qua cloud); `tinytuya.deviceScan` nhận tham số `maxretry` (chính là số giây nghe), viết `maxRetry` sẽ TypeError im lặng.
 - Thiết bị Tuya chạy pin ngủ sâu giữa hai lần báo — chỉ broadcast khi thức; poll thất bại giữ số liệu cũ.
+- Cầu dao Tuya (category `dlq`): `phase_a` là blob 8 byte `[V×0.1: 2B][dòng mA: 3B][công suất W: 3B]` big-endian (không phải V+P 4 byte — gộp sai ra 3.9 kW ảo). Kiểm chứng bằng `total_forward_energy`: công suất thật = delta kWh theo giờ. Thiết bị sau cầu dao có thể chỉ là inverter (điều hòa/đèn không nằm trên meter này).
 - PCM16 trước `np.frombuffer` phải chẵn byte (`keep &= ~1`).
 
 ## Android build
