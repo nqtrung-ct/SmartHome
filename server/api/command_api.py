@@ -31,6 +31,7 @@ def overview(request: Request, _: None = Depends(require_admin)):
             "entities": [
                 {
                     "id": e["id"], "name": e["name"], "entity_type": e["entity_type"],
+                    "device_id": e["device_id"],
                     "state": e["state"], "device_name": e["device_name"], "driver": e["driver"],
                     "updated_at": e["updated_at"],
                     "readonly": "readonly" in loads(e["driver_data"]),

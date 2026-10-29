@@ -9,6 +9,26 @@ from server.db import Database, log_event
 from server.util import now_iso, parse_iso
 
 
+def sync_meter_with_switch(db: Database, switch_id: int, on: bool) -> None:
+    """Cầu dao tắt -> Điện năng cùng thiết bị ghi đè ngay 0V/0W, không giữ số cũ
+    gây hiểu lầm còn điện. Bật lại thì cloud poll (tối đa 3 phút) sẽ ghi số thật."""
+    dev = db.one("SELECT device_id FROM entities WHERE id=?", (switch_id,))
+    if not dev:
+        return
+    for row in db.query(
+        "SELECT id, driver_data FROM entities WHERE device_id=? AND entity_type='sensor'",
+        (dev["device_id"],),
+    ):
+        if not json.loads(row["driver_data"] or "{}").get("cloud_meter"):
+            continue
+        if on:
+            break
+        db.execute(
+            "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+            (json.dumps({"voltage": 0, "power": 0}), now_iso(), row["id"]),
+        )
+
+
 async def _poll_tuya_sensors(app) -> None:
     """Refresh tuya sensor/switch states for the dashboard.
 
@@ -39,6 +59,7 @@ async def _poll_tuya_sensors(app) -> None:
                     "UPDATE entities SET state=?, updated_at=? WHERE id=?",
                     ('{"state": "off"}', now_iso(), row["eid"]),
                 )
+                sync_meter_with_switch(db, row["eid"], on=False)
             continue
         if not any(v is not None for v in state.values()):
             continue  # device answered but sent nothing - keep last good values
@@ -46,6 +67,8 @@ async def _poll_tuya_sensors(app) -> None:
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",
             (json.dumps(state, ensure_ascii=False), now_iso(), row["eid"]),
         )
+        if row["etype"] == "switch":
+            sync_meter_with_switch(db, row["eid"], on=state.get("state") == "on")
 
 
 async def _poll_tuya_cloud(app) -> None:
@@ -65,11 +88,22 @@ async def _poll_tuya_cloud(app) -> None:
     if not driver:
         return
     targets: dict[int, str] = {}
+    # thiết bị có cầu dao đang tắt: bỏ qua — cloud có thể trả số Vol cũ, ghi đè
+    # lên 0V/0W sẽ gây hiểu lầm là còn điện
+    switch_off_devs = {
+        row["did"] for row in db.query(
+            """SELECT d.id AS did, e.state FROM entities e
+               JOIN devices d ON d.id = e.device_id
+               WHERE d.driver='tuya' AND e.entity_type='switch'"""
+        ) if json.loads(row["state"] or "{}").get("state") != "on"
+    }
     for row in db.query(
-        """SELECT e.id, e.driver_data, d.extra FROM entities e
+        """SELECT e.id, e.driver_data, d.id AS dev, d.extra FROM entities e
            JOIN devices d ON d.id = e.device_id WHERE d.driver='tuya'"""
     ):
         if not json.loads(row["driver_data"] or "{}").get("cloud_meter"):
+            continue
+        if row["dev"] in switch_off_devs:
             continue
         dev_id = json.loads(row["extra"] or "{}").get("id")
         if dev_id:

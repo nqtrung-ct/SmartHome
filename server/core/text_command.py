@@ -233,6 +233,10 @@ async def _set_state(db, drivers, entity, command, params) -> dict:
         "UPDATE entities SET state=?, updated_at=? WHERE id=?",
         (json.dumps(state, ensure_ascii=False), now_iso(), entity["id"]),
     )
+    if entity["entity_type"] == "switch":
+        # cầu dao tắt -> xóa ngay số đo cũ của Điện năng cùng thiết bị
+        from server.core.scheduler import sync_meter_with_switch
+        sync_meter_with_switch(db, entity["id"], on=state.get("state") == "on")
     return state
 
 

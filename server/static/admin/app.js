@@ -122,7 +122,20 @@ async function renderDashboard() {
 
   const columns = order.map((floor) => {
     const cards = groups.get(floor).map((room) => {
-      const entities = room.entities.map((e) => {
+      // cầu dao đo điện = 1 phần cứng 2 thực thể (công tắc + cảm biến V/kW):
+      // gộp số đo vào dòng công tắc, không hiện dòng cảm biến riêng
+      const hasSwitchDev = new Set(room.entities
+        .filter((x) => x.entity_type === "switch" || x.entity_type === "light")
+        .map((x) => x.device_id));
+      const meters = new Map();
+      for (const s of room.entities) {
+        const st = safeJson(s.state);
+        if (s.entity_type === "sensor" && hasSwitchDev.has(s.device_id)
+            && (st.voltage != null || st.power != null)) {
+          meters.set(s.device_id, st);
+        }
+      }
+      const entities = room.entities.filter((e) => !meters.has(e.device_id)).map((e) => {
         const state = safeJson(e.state);
         // tổng quan chỉ xem trạng thái — điều khiển ở tab Thiết bị hoặc bằng giọng nói
         let control = "";
@@ -130,7 +143,9 @@ async function renderDashboard() {
           // thiết bị IR không phản hồi trạng thái thật — không hiện bật/tắt
           control = `<span class="small muted">📡 IR</span>`;
         } else if (e.entity_type === "switch" || e.entity_type === "light") {
-          control = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
+          const st = `<span class="small ${state.state === "on" ? "ok" : "muted"}">${state.state === "on" ? "● Đang bật" : "○ Đang tắt"}</span>`;
+          const m = meters.get(e.device_id);
+          control = m ? `${st} <span class="small muted">${meterText(m)}</span>` : st;
         } else if (e.entity_type === "climate") {
           const on = state.state === "on";
           const temp = on && state.temperature ? ` · ${state.temperature}°C` : "";
@@ -164,6 +179,13 @@ function typeVi(t) {
     switch: "công tắc", light: "đèn", climate: "điều hòa",
     sensor: "cảm biến", camera: "camera", controller: "điều khiển",
   }[t] || t;
+}
+function meterText(state) {
+  // số đo của cầu dao đo điện (V/kW) — hiển thị cùng dòng công tắc
+  const bits = [];
+  if (state.voltage != null) bits.push(state.voltage.toFixed(0) + "V");
+  if (state.power != null) bits.push(state.power >= 1000 ? (state.power / 1000).toFixed(1) + " kW" : state.power.toFixed(0) + " W");
+  return bits.join(" · ");
 }
 function sensorText(state) {
   const bits = [];
@@ -394,10 +416,22 @@ async function renderDevices() {
     return;
   }
 
+  // cầu dao đo điện = 1 phần cứng 2 thực thể (công tắc + cảm biến V/kW):
+  // gộp số đo vào dòng công tắc, bỏ dòng cảm biến riêng
+  const meterByDev = new Map();
+  for (const d of devices) {
+    if (!d.entities.some((e) => e.entity_type === "switch" || e.entity_type === "light")) continue;
+    for (const e of d.entities) {
+      if (e.entity_type === "sensor") meterByDev.set(d.id, meterText(safeJson(e.state)));
+    }
+  }
   // one row per entity ("thiết bị" người dùng thấy), grouped theo phòng hiệu dụng
   // (phòng của thực thể nếu có, không thì theo thiết bị gốc)
   const items = [];
-  for (const d of devices) for (const e of d.entities) items.push([e, d]);
+  for (const d of devices) for (const e of d.entities) {
+    if (e.entity_type === "sensor" && meterByDev.has(d.id)) continue;
+    items.push([e, d]);
+  }
   const byRoom = new Map();
   for (const it of items) {
     const rid = it[0].room_id ?? it[1].room_id ?? null;
@@ -406,10 +440,13 @@ async function renderDevices() {
   }
 
   const entityRow = ([e, d]) => {
+    const meter = meterByDev.get(d.id);
+    const meterLine = meter && (e.entity_type === "switch" || e.entity_type === "light")
+      ? ` · <b>${meter}</b>` : "";
     return `<div class="entity">
         <div style="flex:1;min-width:0">
           <div class="name">${esc(e.name)} <span class="badge">${typeVi(e.entity_type)}</span></div>
-          <div class="sub">${esc(d.name)}${d.host ? " · " + esc(d.host) : ""}${e.aliases ? " · bí danh: " + esc(e.aliases) : ""}</div>
+          <div class="sub">${esc(d.name)}${d.host ? " · " + esc(d.host) : ""}${meterLine}${e.aliases ? " · bí danh: " + esc(e.aliases) : ""}</div>
         </div>
         <div class="row">
           <button class="small-btn" onclick="openEditModal(${e.id})" title="Sửa tên, phòng, thiết bị con">✏️</button>
