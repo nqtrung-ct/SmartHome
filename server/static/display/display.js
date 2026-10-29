@@ -238,7 +238,9 @@ async function refresh() {
 // icon SVG (1em: co theo font-size như emoji) — quạt 3 cánh, loa bookshelf
 const FAN_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/></svg>`;
 const SPEAKER_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="1.5"/><circle cx="12" cy="8" r="3"/><circle cx="12" cy="16" r="1.6"/></svg>`;
-const TYPE_ICON = { light: "💡", switch: "🔌", climate: "❄️", fan: FAN_SVG, media: SPEAKER_SVG };
+const SNOW_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/></svg>`;
+const DROPLET_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>`;
+const TYPE_ICON = { light: "💡", switch: "🔌", climate: SNOW_SVG, fan: FAN_SVG, media: SPEAKER_SVG };
 
 // thiết bị IR không phản hồi trạng thái thật — chỉ hiện tên, không hiện bật/tắt
 function chipState(e) {
@@ -268,7 +270,7 @@ function renderRooms(rooms) {
         </div>
         <div class="room-env">
           ${r.temperature != null ? `<span class="room-temp">${r.temperature}°</span>` : ""}
-          ${r.humidity != null ? `<span class="room-hum">💧 ${r.humidity}%</span>` : ""}
+          ${r.humidity != null ? `<span class="room-hum">${DROPLET_SVG} ${r.humidity}%</span>` : ""}
         </div>
       </div>
       <div class="chip-row">
@@ -390,7 +392,7 @@ function ctrlBody(e) {
       </div>
       <div class="rrow">
         <button class="rbtn sm" data-cmd="temp-">−</button>
-        <div class="temp-dial"><div class="dial-temp">❄ <b id="ctrl-temp">${ctrlTemp}</b>°</div></div>
+        <div class="temp-dial"><div class="dial-temp">${SNOW_SVG} <b id="ctrl-temp">${ctrlTemp}</b>°</div></div>
         <button class="rbtn sm" data-cmd="temp+">＋</button>
       </div>`;
     more = `
