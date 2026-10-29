@@ -64,6 +64,12 @@ def load_secret(cfg, group: str, key: str) -> str | None:
         return None
 
 
+def norm_mac(mac: str) -> str:
+    """Chuẩn hóa MAC về hex 12 ký tự (bỏ ':' '-'), để so khớp giữa các nguồn:
+    ARP '30-24-50-CC-09-09', Broadlink '302450cc0909', UUID ONVIF '...302450cc0909'."""
+    return (mac or "").replace(":", "").replace("-", "").strip().upper()
+
+
 def set_yaml_value(path, section: str, key: str, value) -> None:
     """Set section.key in a YAML file, preserving comments and other lines."""
     import json

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from server.api.deps import require_admin
 from server.db import log_event
 from server.drivers.base import DriverError, loads
-from server.util import now_iso, store_secret
+from server.util import now_iso, norm_mac, store_secret
 
 router = APIRouter()
 
@@ -61,7 +61,10 @@ async def create_device(request: Request, body: DeviceIn, _: None = Depends(requ
 
     rtsp_password = extra.pop("rtsp_password", None)
     if rtsp_password and body.host:
+        # khóa theo IP lẫn MAC — IP đổi (router cấp lại) thì khóa MAC vẫn khớp
         store_secret(app.state.cfg, "rtsp", body.host.strip(), rtsp_password)
+        if body.mac.strip():
+            store_secret(app.state.cfg, "rtsp", norm_mac(body.mac.strip()), rtsp_password)
 
     if body.driver == "broadlink" and body.host and not extra.get("mac"):
         # try to fill mac/devtype from the LAN automatically

@@ -350,8 +350,30 @@ def scan_wsdiscovery(db: Database, cfg: Config) -> None:
     for endpoint, info in results.items():
         scopes = info["scopes"]
         brand = _brand_from_name(scopes) or ("Imou/ONVIF" if "imou" in scopes.lower() else "ONVIF camera")
-        name = "Camera ONVIF " + info["ip"]
-        upsert(db, "wsdiscovery", endpoint, ip=info["ip"], name=name, brand=brand, supported=1, raw=info)
+        # tên thật từ scopes (VD: hardware/IPC-A32P-PRO_serial -> "Camera A32P-PRO");
+        # không ghép IP vào tên — router cấp lại IP là tên lỗi thời ngay
+        hw_m = re.search(r"onvif://www\.onvif\.org/hardware/([^\s]+)", scopes)
+        name_m = re.search(r"onvif://www\.onvif\.org/name/([^\s]+)", scopes)
+        if hw_m:
+            model = hw_m.group(1).split("_")[0].removeprefix("IPC-")
+            if "imou" in brand.lower():
+                vendor = "Imou"
+            elif brand and brand != "ONVIF camera":
+                vendor = brand.split("/")[0]
+            else:
+                vendor = ""
+            name = f"Camera {vendor} {model}".strip()
+        elif name_m:
+            name = f"Camera {name_m.group(1)}"
+        else:
+            name = f"Camera ONVIF {info['ip']}"
+        # đuôi UUID WS-Discovery của camera thường là MAC thật (uuid:…-302450cc0909)
+        mac = ""
+        tail = re.search(r"([0-9A-Fa-f]{12})$", info["address"] or "")
+        if tail:
+            h = tail.group(1)
+            mac = ":".join(h[i:i + 2] for i in range(0, 12, 2)).upper()
+        upsert(db, "wsdiscovery", endpoint, ip=info["ip"], mac=mac, name=name, brand=brand, supported=1, raw=info)
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +478,8 @@ def _cleanup_network_rows(db: Database) -> None:
     Drop generic 'network' rows for IPs a specific scanner already identified,
     and lend MAC addresses from the sweep to the specific rows.
     """
+    from server.util import norm_mac
+
     db.execute(
         """DELETE FROM discovered
            WHERE method='network' AND adopted_device_id IS NULL AND ip != ''
@@ -468,3 +492,43 @@ def _cleanup_network_rows(db: Database) -> None:
                    WHERE n.method='network' AND n.mac != '' AND n.ip = discovered.ip LIMIT 1), mac)
                WHERE mac = '' AND method != 'network'"""
         )
+        # thiết bị đã thêm mà DB chưa lưu MAC: mượn từ dòng quét đã adopt
+        # (để các lần quét sau khớp MAC được)
+        c.execute(
+            """UPDATE devices SET mac = COALESCE((
+                   SELECT x.mac FROM discovered x
+                   WHERE x.adopted_device_id = devices.id AND x.mac != '' LIMIT 1), mac)
+               WHERE mac IS NULL OR mac = ''"""
+        )
+        # router cấp lại IP (camera là nạn nhân điển hình): dòng quét mới mang MAC
+        # khớp thiết bị đã thêm -> chuyển thiết bị sang IP mới, gắn dòng mới, bỏ dòng cũ.
+        # Áp dụng cho MỌI thiết bị (Broadlink/Tuya/camera...), không riêng camera.
+        devices_by_mac = {
+            norm_mac(d["mac"]): d
+            for d in c.execute(
+                "SELECT id, host, name, mac FROM devices WHERE mac IS NOT NULL AND mac != ''"
+            ).fetchall()
+        }
+        fixed: set[tuple] = set()
+        for row in c.execute(
+            """SELECT id, ip, mac, adopted_device_id FROM discovered
+               WHERE mac != '' AND ip != ''"""
+        ).fetchall():
+            dev = devices_by_mac.get(norm_mac(row["mac"]))
+            if not dev:
+                continue
+            if row["adopted_device_id"] != dev["id"]:
+                c.execute(
+                    "UPDATE discovered SET adopted_device_id=? WHERE id=?", (dev["id"], row["id"])
+                )
+            if dev["host"] and dev["host"] != row["ip"]:
+                c.execute("UPDATE devices SET host=? WHERE id=?", (row["ip"], dev["id"]))
+                fixed.add((dev["name"], dev["host"], row["ip"]))
+                dev = {**dev, "host": row["ip"]}
+            # dòng quét cũ của thiết bị này (IP đã đổi) không còn ý nghĩa
+            c.execute(
+                "DELETE FROM discovered WHERE adopted_device_id=? AND ip != ?",
+                (dev["id"], row["ip"]),
+            )
+    for name, old_ip, new_ip in sorted(fixed):
+        log_event(db, "discovery", f"'{name}' đổi IP {old_ip} → {new_ip} — đã tự cập nhật (khớp MAC)")

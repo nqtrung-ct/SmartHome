@@ -25,7 +25,8 @@ def health() -> dict:
 def display(request: Request):
     """Snapshot cho màn hình treo tường. Public (server LAN-only, không có secret).
     Chỉ trả các phòng có cảm biến nhiệt độ; kèm thiết bị điều khiển của phòng
-    (sensor/breaker không hiện — chỉ dùng để lọc phòng và lấy nhiệt độ)."""
+    (sensor/công tắc không hiện — chỉ dùng để lọc phòng và lấy nhiệt độ;
+    số điện lưới của cầu dao vẫn có ở widget `grid` riêng)."""
     import json as _json
 
     app = request.app
@@ -42,7 +43,8 @@ def display(request: Request):
         entities = db.query(
             """SELECT e.id, e.name, e.entity_type, e.state, e.driver_data, d.driver
                FROM entities e JOIN devices d ON d.id=e.device_id
-               WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type NOT IN ('controller','sensor')""",
+               WHERE COALESCE(e.room_id, d.room_id)=?
+                 AND e.entity_type NOT IN ('controller','sensor','switch')""",
             (room["id"],),
         )
         temp = humidity = None
@@ -184,11 +186,11 @@ async def display_camera_stream(request: Request, entity_id: int):
 
     from fastapi.responses import StreamingResponse
 
-    from server.util import load_secret
+    from server.util import load_secret, norm_mac
 
     db = request.app.state.db
     row = db.one(
-        """SELECT e.state, d.host, d.extra FROM entities e
+        """SELECT e.state, d.host, d.extra, d.mac FROM entities e
            JOIN devices d ON d.id=e.device_id
            WHERE e.id=? AND e.entity_type='camera'""",
         (entity_id,),
@@ -209,10 +211,29 @@ async def display_camera_stream(request: Request, entity_id: int):
     except ValueError:
         extra = {}
     cred = {}
-    try:
-        raw = load_secret(request.app.state.cfg, "rtsp", row["host"]) or ""
-    except Exception:
-        raw = ""
+    raw = ""
+    # IP đổi (tự chữa qua MAC lúc quét) thì secret theo host cũ trượt:
+    # thử theo host -> theo MAC -> nếu nhóm rtsp chỉ có 1 entry thì dùng nó
+    for key in (row["host"], norm_mac(row["mac"] or "")):
+        if not key:
+            continue
+        try:
+            raw = load_secret(request.app.state.cfg, "rtsp", key) or ""
+        except Exception:
+            raw = ""
+        if raw:
+            break
+    if not raw:
+        try:
+            group = _json.loads(
+                request.app.state.cfg.data_path("secrets.json").read_text(encoding="utf-8")
+            ).get("rtsp", {})
+            # bỏ key của IP test (192.0.2.x smoke test) khi đếm entry duy nhất
+            real = [v for k, v in group.items() if not k.startswith("192.0.2.")]
+            if len(real) == 1:
+                raw = real[0]
+        except Exception:
+            raw = ""
     if raw:
         try:
             cred = _json.loads(raw)

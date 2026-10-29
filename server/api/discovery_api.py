@@ -11,7 +11,7 @@ from server.api.deps import require_admin
 from server.core.discovery import run_scan
 from server.db import log_event
 from server.drivers.base import loads
-from server.util import now_iso, store_secret
+from server.util import now_iso, norm_mac, store_secret
 
 router = APIRouter()
 
@@ -130,9 +130,12 @@ async def adopt(request: Request, discovered_id: int, body: AdoptIn, _: None = D
          body.room_id, now_iso()),
     )
 
-    # cameras: keep the RTSP password in data/secrets.json, not in the DB/git
+    # cameras: keep the RTSP password in data/secrets.json, not in the DB/git.
+    # Khóa theo IP lẫn MAC — IP đổi (router cấp lại) thì khóa MAC vẫn khớp
     if driver_name == "onvif" and body.rtsp_password and row["ip"]:
         store_secret(app.cfg, "rtsp", row["ip"], body.rtsp_password)
+        if row["mac"]:
+            store_secret(app.cfg, "rtsp", norm_mac(row["mac"]), body.rtsp_password)
 
     driver = app.state.drivers.get(driver_name, app.state.drivers.get("generic"))
     entities = []
