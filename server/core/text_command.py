@@ -35,6 +35,8 @@ TYPE_ALIASES = {
     "sensor": ["cảm biến"],
 }
 
+FAN_VI = {"quiet": "yên lặng", "low": "thấp", "mid": "vừa", "high": "cao", "auto": "tự động"}
+
 TOOLS = [
     {
         "type": "function",
@@ -304,6 +306,13 @@ async def act_climate(db, drivers, entity, mode=None, temperature=None, mentione
     where = _room_where(db, _entity_room(db, entity), mentioned_room)
     if mode == "off":
         reply = f"Đã tắt {entity['name'].lower()}{where}."
+    elif mode == "on":
+        # "bật" không kèm thông tin: đọc lại trạng thái đang dùng để người nghe
+        # biết có cần tăng/giảm tiếp hay không
+        temp = state.get("temperature", params.get("temperature"))
+        fan_vi = FAN_VI.get(state.get("fan"), str(state.get("fan") or ""))
+        fan_txt = f", quạt mức {fan_vi}" if fan_vi else ""
+        reply = f"Đã bật {entity['name'].lower()}{where}, nhiệt độ {temp} độ{fan_txt}."
     else:
         temp = state.get("temperature", params.get("temperature"))
         mode_vi = {"cool": "lạnh", "dry": "khô", "fan": "gió", "heat": "ấm", "auto": "tự động"}.get(
