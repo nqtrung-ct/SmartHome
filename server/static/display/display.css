@@ -163,7 +163,6 @@ main {
 .rbtn.active { border-color: var(--green); box-shadow: 0 0 12px rgba(62, 207, 142, .35); }
 .temp-dial { text-align: center; min-width: 120px; }
 .dial-temp { font-size: 30px; font-weight: 700; }
-.dial-lab { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .ctrl-lab { font-size: 12.5px; color: var(--muted); margin: 14px 0 4px; text-align: left; }
 .more-toggle {
   display: block; margin: 14px auto 0; background: none; border: none;

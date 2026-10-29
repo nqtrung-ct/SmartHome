@@ -79,7 +79,10 @@ def display(request: Request):
             ent = {
                 "id": e["id"], "name": e["name"], "type": e["entity_type"],
                 "driver": e["driver"], "state": state,
-                "controllable": e["entity_type"] in ("light", "switch", "climate")
+                # màn hình treo tường chỉ điều khiển thiết bị IR (remote);
+                # Tuya/zigbee hiện trạng thái thôi, bấm không có gì xảy ra
+                "controllable": e["driver"] == "broadlink"
+                                and e["entity_type"] in ("light", "switch", "climate")
                                 and "readonly" not in dd,
             }
             if e["driver"] == "broadlink":

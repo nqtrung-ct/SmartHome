@@ -214,38 +214,30 @@ let ctrlMode = "cool";
 
 const BTN_ICON = {
   swing: ["🔄", "Xoay"], fan_mode: ["🌬", "Tốc độ"],
-  timer_on: ["⏲", "Hẹn giờ bật"], timer_off: ["⏲", "Hẹn giờ tắt"],
   volume_up: ["🔊", "To hơn"], volume_down: ["🔉", "Nhỏ hơn"], mute: ["🔇", "Tắt tiếng"],
-  ok: ["✔", "OK"], aux: ["📻", "Aux"],
 };
 const FANS = [["quiet", "Yên lặng"], ["low", "Thấp"], ["mid", "Vừa"], ["high", "Cao"], ["auto", "Tự động"]];
 const MODES = [["cool", "Lạnh"], ["dry", "Khô"], ["fan_only", "Gió"], ["heat_cool", "Ổn"]];
 
-const powerRow = (mid) => `
-  <div class="rrow">
-    <button class="rbtn on-btn" data-cmd="on"><span>⏻</span>Bật</button>
-    ${mid}
-    <button class="rbtn off-btn" data-cmd="off"><span>⏹</span>Tắt</button>
-  </div>`;
-
 function ctrlBody(e) {
-  let mid = `<span class="chip-ic">${TYPE_ICON[e.type] || "🔘"}</span>`;
+  let main = "";
   let more = "";
   if (e.type === "climate") {
     ctrlTemp = (e.defaults && e.defaults.temp) || (e.state && e.state.temperature) || 26;
     ctrlFan = (e.defaults && e.defaults.fan) || "";
     ctrlMode = "cool";
-    mid = `
-      <div class="temp-dial">
-        <div class="dial-temp">❄ <b id="ctrl-temp">${ctrlTemp}</b>°C</div>
-        <div class="dial-lab">bấm − / ＋ để chỉnh</div>
+    // hàng 1: bật/tắt riêng; hàng 2: − nhiệt độ ＋
+    main = `
+      <div class="rrow">
+        <button class="rbtn on-btn" data-cmd="on"><span>⏻</span>Bật</button>
+        <button class="rbtn off-btn" data-cmd="off"><span>⏹</span>Tắt</button>
+      </div>
+      <div class="rrow">
+        <button class="rbtn sm" data-cmd="temp-">−</button>
+        <div class="temp-dial"><div class="dial-temp">❄ <b id="ctrl-temp">${ctrlTemp}</b>°C</div></div>
+        <button class="rbtn sm" data-cmd="temp+">＋</button>
       </div>`;
     more = `
-      <div class="ctrl-lab">Nhiệt độ</div>
-      <div class="rrow stepper">
-        <button class="rbtn sm" data-cmd="temp-">−</button>
-        <button class="rbtn sm" data-cmd="temp+">＋</button>
-      </div>
       <div class="ctrl-lab">Mức quạt</div>
       <div class="rrow wrap">
         ${FANS.map(([v, lab]) => `<button class="rbtn xs${v === ctrlFan ? " active" : ""}" data-fan="${v}">${lab}</button>`).join("")}
@@ -254,14 +246,19 @@ function ctrlBody(e) {
       <div class="rrow wrap">
         ${MODES.map(([v, lab]) => `<button class="rbtn xs${v === "cool" ? " active" : ""}" data-mode="${v}">${lab}</button>`).join("")}
       </div>`;
-  } else if (e.buttons && e.buttons.length) {
+  } else {
+    main = `
+      <div class="rrow">
+        <button class="rbtn on-btn" data-cmd="on"><span>⏻</span>Bật</button>
+        <button class="rbtn off-btn" data-cmd="off"><span>⏹</span>Tắt</button>
+      </div>`;
     const extras = e.buttons
       .filter((b) => BTN_ICON[b])
       .map((b) => `<button class="rbtn xs" data-btn="${b}"><span>${BTN_ICON[b][0]}</span>${BTN_ICON[b][1]}</button>`)
       .join("");
     if (extras) more = `<div class="ctrl-lab">Nút khác</div><div class="rrow wrap">${extras}</div>`;
   }
-  return powerRow(mid) + (more ? `<button class="more-toggle" id="ctrl-more-btn">⋯ Thêm</button><div id="ctrl-more" class="hidden">${more}</div>` : "");
+  return main + (more ? `<button class="more-toggle" id="ctrl-more-btn">⋯ Thêm</button><div id="ctrl-more" class="hidden">${more}</div>` : "");
 }
 
 function openCtrl(id) {
