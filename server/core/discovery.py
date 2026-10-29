@@ -87,6 +87,7 @@ def upsert(db: Database, method: str, ident: str, **fields) -> None:
     }
     cols.update({k: v for k, v in fields.items() if k in cols})
     cols["raw"] = cols["raw"] if isinstance(cols["raw"], str) else json.dumps(cols["raw"], ensure_ascii=False)
+    ip_fixed = None
     with db.conn() as c:
         c.execute(
             f"""
@@ -100,6 +101,21 @@ def upsert(db: Database, method: str, ident: str, **fields) -> None:
             """,
             (method, ident, *cols.values(), now_iso(), now_iso()),
         )
+        # thiết bị đã thêm mà router cấp lại IP (hay xảy ra sau cúp điện):
+        # khớp qua định danh ổn định (MAC/id) và cập nhật host mới luôn
+        new_ip = cols.get("ip") or ""
+        if new_ip:
+            row = c.execute(
+                """SELECT d.id AS dev, d.host, d.name FROM discovered x
+                   JOIN devices d ON d.id = x.adopted_device_id
+                   WHERE x.method=? AND x.ident=?""",
+                (method, ident),
+            ).fetchone()
+            if row and row["host"] and row["host"] != new_ip:
+                c.execute("UPDATE devices SET host=? WHERE id=?", (new_ip, row["dev"]))
+                ip_fixed = f"'{row['name']}' đổi IP {row['host']} → {new_ip} — đã tự cập nhật"
+    if ip_fixed:
+        log_event(db, "discovery", ip_fixed)
 
 
 # ---------------------------------------------------------------------------
