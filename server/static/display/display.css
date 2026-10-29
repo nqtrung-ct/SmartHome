@@ -167,9 +167,9 @@ main {
 .ctrl-name { font-size: 22px; font-weight: 700; }
 .ctrl-head .btn { margin-left: auto; padding: 10px 14px; }
 
-/* khung xem video camera: MJPEG trong thẻ <img> (khung 640x352) */
-.cam-box { width: min(720px, 92vw); text-align: center; }
-.cam-img { display: block; width: 100%; aspect-ratio: 640 / 352; background: #000; border-radius: 12px; object-fit: contain; }
+/* khung xem video camera: WebRTC (A/V) trong <video>, dự phòng MJPEG <img> (16:9) */
+.cam-box { width: min(920px, 94vw); text-align: center; }
+.cam-img { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; object-fit: contain; }
 .cam-error { padding: 26px 10px; color: var(--muted); }
 
 /* điều khiển PTZ: góc đã lưu — bấm quay về góc đó (sau PIN, không xoay tự do) */

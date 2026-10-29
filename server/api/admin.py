@@ -41,7 +41,7 @@ def display(request: Request):
     rooms = []
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
         entities = db.query(
-            """SELECT e.id, e.name, e.entity_type, e.state, e.driver_data, d.driver
+            """SELECT e.id, e.name, e.entity_type, e.state, e.driver_data, d.driver, d.extra
                FROM entities e JOIN devices d ON d.id=e.device_id
                WHERE COALESCE(e.room_id, d.room_id)=?
                  AND e.entity_type NOT IN ('controller','sensor','switch')""",
@@ -95,9 +95,14 @@ def display(request: Request):
                     k for k in dd.get("codes", {})
                     if k not in ("on", "off", "toggle", "power"))
             if e["entity_type"] == "camera":
-                # góc quay đã lưu (NetSDK PTZ) cho popup màn hình treo tường
+                # góc quay đã lưu (NetSDK PTZ) + tên stream go2rtc (live A/V WebRTC)
                 ent["presets"] = dd.get("presets", [])
                 ent["ptz"] = True
+                try:
+                    dextra = _json.loads(e["extra"] or "{}")
+                except ValueError:
+                    dextra = {}
+                ent["stream"] = dextra.get("go2rtc_stream", "")
             ents.append(ent)
         rooms.append({
             "id": room["id"], "name": room["name"], "floor": room["floor"],
@@ -248,7 +253,7 @@ async def display_camera_stream(request: Request, entity_id: int):
     if not password:
         raise HTTPException(status_code=503, detail="Camera chưa có mật khẩu RTSP")
     port = extra.get("rtsp_port") or 554
-    path = extra.get("rtsp_path") or "/cam/realmonitor?channel=1&subtype=1"
+    path = extra.get("rtsp_path") or "/cam/realmonitor?channel=1&subtype=0"
     url = f"rtsp://{user}:{password}@{row['host']}:{port}{path}"
     proc = await asyncio.create_subprocess_exec(
         ffmpeg, "-loglevel", "error", "-rtsp_transport", "tcp",

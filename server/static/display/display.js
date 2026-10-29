@@ -476,8 +476,52 @@ function wireCtrl(e) {
 
 $("ctrl-close").onclick = () => $("ctrl-overlay").classList.add("hidden");
 
-// --- camera: popup xem video (MJPEG server chuyển mã từ RTSP) + PTZ ---
+// --- camera: popup xem video (WebRTC A/V qua go2rtc; dự phòng MJPEG) + PTZ ---
 let camEntity = null;
+let camPc = null;  // RTCPeerConnection live A/V
+
+function stopWebrtc() {
+  if (camPc) { camPc.close(); camPc = null; }
+  const v = $("cam-video");
+  if (v) v.srcObject = null;
+}
+
+function startWebrtc(video, streamName) {
+  return new Promise((resolve, reject) => {
+    const pc = new RTCPeerConnection();
+    camPc = pc;
+    pc.ontrack = (ev) => {
+      video.srcObject = ev.streams[0];
+      video.play().catch(() => {});
+      resolve();
+    };
+    (async () => {
+      try {
+        pc.addTransceiver("video", { direction: "recvonly" });
+        pc.addTransceiver("audio", { direction: "recvonly" });
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        // chờ đủ ICE candidate trong LAN (có thời hạn để không treo)
+        await new Promise((res) => {
+          if (pc.iceGatheringState === "complete") return res();
+          const t = setTimeout(res, 1500);
+          pc.addEventListener("icegatheringstatechange", () => {
+            if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
+          });
+        });
+        // go2rtc chạy chung máy server — API webrtc kiểu JSON offer/answer
+        const resp = await fetch(`http://${location.hostname}:1984/api/webrtc?src=${streamName}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "offer", sdp: pc.localDescription.sdp }),
+        });
+        if (!resp.ok) throw new Error("webrtc " + resp.status);
+        const answer = await resp.json();
+        await pc.setRemoteDescription(answer);
+        setTimeout(() => { if (video.readyState < 2) reject(new Error("chưa có hình")); }, 6000);
+      } catch (err) { reject(err); }
+    })();
+  });
+}
 
 function openCam(id) {
   const { e, r } = findEntity(id);
@@ -488,16 +532,27 @@ function openCam(id) {
   $("cam-room").textContent = r ? r.name : "";
   renderCamPresets();
   $("cam-ctrl").classList.toggle("hidden", !e.ptz);
-  const img = $("cam-img"), err = $("cam-error");
+  const video = $("cam-video"), img = $("cam-img"), err = $("cam-error");
   err.classList.add("hidden");
-  img.classList.remove("hidden");
-  img.onerror = () => {  // camera rớt giữa chừng / không chuyển mã được
+  $("cam-overlay").classList.remove("hidden");
+  const fallbackMjpeg = () => {  // không WebRTC được -> MJPEG HD (không tiếng)
+    video.classList.add("hidden");
+    img.classList.remove("hidden");
+    img.onerror = () => {
+      img.classList.add("hidden");
+      img.src = "";
+      err.classList.remove("hidden");
+    };
+    img.src = `/api/display/camera/${id}/stream?ts=${Date.now()}`;
+  };
+  if (e.stream && typeof RTCPeerConnection !== "undefined") {
+    video.classList.remove("hidden");
     img.classList.add("hidden");
     img.src = "";
-    err.classList.remove("hidden");
-  };
-  img.src = `/api/display/camera/${id}/stream?ts=${Date.now()}`;
-  $("cam-overlay").classList.remove("hidden");
+    startWebrtc(video, e.stream).catch(() => { stopWebrtc(); fallbackMjpeg(); });
+  } else {
+    fallbackMjpeg();
+  }
 }
 
 function renderCamPresets() {
@@ -532,7 +587,8 @@ async function sendPtz(body) {
 }
 
 function closeCam() {
-  $("cam-img").src = "";  // ngắt luồng -> server giết tiến trình ffmpeg
+  stopWebrtc();                       // ngắt phiên WebRTC
+  $("cam-img").src = "";              // ngắt MJPEG -> server giết ffmpeg
   $("cam-overlay").classList.add("hidden");
 }
 $("cam-close").onclick = closeCam;
