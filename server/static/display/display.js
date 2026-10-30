@@ -213,7 +213,17 @@ async function refresh() {
     $("w-wind").textContent = w.wind;
     $("w-hum").textContent = w.humidity;
     $("w-rain").textContent = w.rain_prob ?? "–";
-    $("w-range").textContent = `${w.temp_min}° - ${w.temp_max}°`;
+    $("w-max").textContent = `↑ ${w.temp_max}°`;
+    $("w-min").textContent = `↓ ${w.temp_min}°`;
+    // dự báo ngày mai / mốt — icon + min/max, chú thích khi rê chuột
+    (w.forecast || []).forEach((d, i) => {
+      const ic = $(`w-fc${i + 1}`);
+      if (!ic) return;
+      ic.textContent = WMO_ICON(d.code);
+      ic.title = d.condition.replace(/^./, (c) => c.toUpperCase());
+      $(`w-fc${i + 1}-max`).textContent = `↑ ${d.temp_max}°`;
+      $(`w-fc${i + 1}-min`).textContent = `↓ ${d.temp_min}°`;
+    });
   } else {
     $("w-cond").textContent = "không lấy được thời tiết";
   }
@@ -666,6 +676,16 @@ async function doCommand(e, cmd) {
 }
 
 // ---------------------------------------------------------------- timers
+const TIMER_WD = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
+function repeatLabel(rep) {
+  if (!rep) return "";
+  if (rep === "daily") return "mỗi ngày";
+  const days = rep.split(",").map(Number).sort((a, b) => a - b);
+  if (days.length === 2 && days[0] === 5 && days[1] === 6) return "cuối tuần";
+  if (days.length === 5 && days.join("") === "01234") return "T2–T6";
+  if (days.length === 1) return "mỗi " + TIMER_WD[days[0]];
+  return days.map((d) => TIMER_WD[d]).join("+");
+}
 function renderTimers(timers) {
   // không có hẹn giờ thì ẩn cả card, khỏi hiện chỗ trống
   const card = $("timers-card");
@@ -675,9 +695,10 @@ function renderTimers(timers) {
         const at = new Date(t.target_at);
         const hhmm = at.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", hour12: false });
         const day = at.toLocaleDateString("vi-VN", { day: "numeric", month: "numeric" });
+        const rep = repeatLabel(t.repeat);
         return `<div class="timer">
-          <div class="t-time">${hhmm}<div class="t-room">${day}</div></div>
-          <div><div class="t-msg">${esc(t.message)}</div>
+          <div class="t-time">${rep ? "🔁 " : ""}${hhmm}<div class="t-room">${rep ? rep + " · " : ""}${day}</div></div>
+          <div><div class="t-msg">${t.has_action ? "⚙️ " : ""}${esc(t.message)}</div>
           ${t.room ? `<div class="t-room">${esc(t.room)}</div>` : ""}</div>
         </div>`;
       }).join("");

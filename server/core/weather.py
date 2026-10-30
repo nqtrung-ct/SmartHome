@@ -79,6 +79,13 @@ class Weather:
         current, daily, _ = self._data()
         return {**current, **daily[0]}
 
+    def forecast(self, days: int = 2) -> list[dict]:
+        """Dự báo các ngày tới (bỏ hôm nay) — icon ngày mai/mốt trên màn tường."""
+        _, daily, _ = self._data()
+        return [{"code": d["code"], "condition": d["condition"],
+                 "temp_max": d["temp_max"], "temp_min": d["temp_min"]}
+                for d in daily[1:1 + days]]
+
     def summary(self, day: int = 0) -> str:
         """Short Vietnamese weather summary for voice replies. day: 0 today,
         1 tomorrow, 2 the day after."""

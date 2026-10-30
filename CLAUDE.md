@@ -29,6 +29,7 @@ Ghi chú làm việc trong repo này (cho Claude Code và lập trình viên). C
 
 - `server/core/text_command.py` — não lệnh: fast-path (regex trên bản normalized) + tool-calls LLM + các hàm `act_*` dùng chung. Mọi câu trả lời người dùng bằng tiếng Việt.
 - `server/core/scheduler.py` — hẹn giờ + announce qua WS; poll Tuya: LAN 60 giây (`tuya.poll_seconds`), cloud 180 giây (`tuya.cloud_seconds`).
+- **Hẹn giờ** (bảng `timers`, xem `text_command.py` phần "Timers"): một lần hoặc lặp (`repeat` = `daily` hoặc CSV thứ Python 0=T2..6=CN), nhắc nhở (`message`) hoặc **chạy lệnh thiết bị** (`action` JSON `{entity_id, command, params}` — câu kiểu "7 giờ tối tắt điều hòa", không có từ nhắc/hẹn). Đến giờ: chạy action (nếu có) + phát qua WS phòng tạo lệnh, lặp thì tự nhảy `target_at` lần kế (`next_repeat`). Giọng nói còn liệt kê ("hẹn giờ nào đang chờ"), hủy (**phải xác nhận** "có/không" — `_PENDING_CANCEL` trong `text_command.py`), dời ("thêm 1 tiếng" / "tới 1 giờ sáng mai" — `act_move_timer`). Giờ nhà luôn **GMT+7** qua `server.util.now()` bất kể múi giờ máy.
 - `server/core/discovery.py` — các scanner (Broadlink/Tuya/mDNS/SSDP/ONVIF/ping). Danh sách mặc định chỉ hiện thiết bị hỗ trợ (`?all=1` xem tất cả).
 - `server/drivers/` — mẫu `Driver.adopt/set_state/get_state`; `driver_data` (JSON trong DB) là nơi cấu hình từng entity (dps Tuya, `readonly`, `cloud_meter`...).
 - `server/voice/` — pipeline STT→lệnh→TTS; `handsfree.py` = wake word server-side (wake "trợ lý ơi", kết thúc bằng keyword hoặc im lặng 3 giây).
@@ -37,7 +38,7 @@ Ghi chú làm việc trong repo này (cho Claude Code và lập trình viên). C
 
 ## Quy ước
 
-- So khớp lệnh/alias đều qua `server.util.normalize()` (bỏ dấu, lowercase) — regex và alias viết cho bản đã normalize. Alias khớp **theo từ riêng** (`_alias_in`) — không dùng substring trần, kẻo alias ngắn "ac" trúng "khách" rồi tắt nhầm điều hòa thật.
+- So khớp lệnh/alias đều qua `server.util.normalize()` (bỏ dấu, lowercase) — regex và alias viết cho bản đã normalize. Alias khớp **theo từ riêng** (`_alias_in`) — không dùng substring trần, kẻo alias ngắn "ac" trúng "khách" rồi tắt nhầm điều hòa thật. **Bẫy**: "đèn" và "đến" normalize cùng thành `den` — không đưa `den` vào danh sách từ cần bỏ khi tách lời nhắc hẹn giờ (`_WHEN_DROP` trong `text_command.py`).
 - Câu trả lời giọng nói **không nêu phòng** khi lệnh không nói rõ phòng (mic ở phòng nào thì thiết bị phòng đó là mặc định); chỉ thêm tên phòng khi lệnh nêu rõ (xem `_room_where()` trong `text_command.py`).
 - **Phòng của thực thể**: `entities.room_id` (NULL = theo phòng thiết bị gốc); mọi nơi nhóm/theo phòng dùng phòng hiệu dụng `COALESCE(e.room_id, d.room_id)` — xem `_entity_room()` trong `text_command.py`. Tab Thiết bị nhóm theo phòng; sửa tên/phòng qua modal ✏️; modal của hub (entity `controller`) còn thêm/sửa/xóa **thiết bị con** (UI gọi entity là "thiết bị con" với hub). Xóa hết thiết bị của một phần cứng thì phần cứng bị xóa theo (`DELETE /entities/{id}` tự dọn).
 - **Entity readonly** (`"readonly": true` trong `driver_data`): UI ẩn nút, `act_switch` và `POST /entities/{id}/command` từ chối — áp dụng cho mọi driver. Dùng cho thiết bị chỉ-trạng-thái (breaker, hub luôn bật). Hub luôn bật còn dùng entity_type `controller` (chỉ tồn tại trong DB, không chọn được trong UI — badge "điều khiển", chấm xanh, từ chối bật/tắt).

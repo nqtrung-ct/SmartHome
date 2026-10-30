@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from server.api.deps import require_admin, voice_identity
 from server.db import log_event
-from server.util import now_iso
+from server.util import now as util_now, now_iso
 
 router = APIRouter()
 
@@ -35,6 +35,7 @@ def display(request: Request):
     weather = None
     try:
         weather = app.state.weather.snapshot()
+        weather["forecast"] = app.state.weather.forecast(2)
     except Exception:
         weather = None
 
@@ -110,9 +111,11 @@ def display(request: Request):
         })
 
     timers = [
-        {"target_at": t["target_at"], "message": t["message"], "room": t["room_name"]}
+        {"target_at": t["target_at"], "message": t["message"], "room": t["room_name"],
+         "repeat": t["repeat"], "has_action": bool(t["action"])}
         for t in db.query(
-            """SELECT t.target_at, t.message, r.name AS room_name FROM timers t
+            """SELECT t.target_at, t.message, t.repeat, t.action, r.name AS room_name
+               FROM timers t
                LEFT JOIN rooms r ON r.id=t.room_id
                WHERE t.done=0 ORDER BY t.target_at LIMIT 5"""
         )
@@ -319,7 +322,7 @@ async def display_unlock(request: Request, body: DisplayUnlockIn):
         raise HTTPException(status_code=401, detail="Mã PIN không đúng")
     token = secrets.token_hex(16)
     tokens = _display_tokens(request.app)
-    now = datetime.now()
+    now = util_now()
     for k in [k for k, exp in tokens.items() if exp < now]:
         del tokens[k]  # dọn token hết hạn luôn
     tokens[token] = now + timedelta(seconds=DISPLAY_UNLOCK_SECONDS)
@@ -338,7 +341,7 @@ class DisplayCommandIn(BaseModel):
 async def display_command(request: Request, body: DisplayCommandIn):
     tokens = _display_tokens(request.app)
     expiry = tokens.get(str(body.token or ""))
-    if not expiry or expiry < datetime.now():
+    if not expiry or expiry < util_now():
         raise HTTPException(status_code=401, detail="Phiên mở khóa hết hạn, nhập lại mã PIN")
     from server.api.devices import run_entity_command
     state = await run_entity_command(request.app, body.entity, body.command, body.params)
@@ -429,7 +432,7 @@ class DisplayPtzIn(PtzIn):
 async def display_ptz(request: Request, body: DisplayPtzIn):
     tokens = _display_tokens(request.app)
     expiry = tokens.get(str(body.token or ""))
-    if not expiry or expiry < datetime.now():
+    if not expiry or expiry < util_now():
         raise HTTPException(status_code=401, detail="Phiên mở khóa hết hạn, nhập lại mã PIN")
     if body.action != "goto":
         # màn hình treo tường chỉ được gọi góc đã lưu — xoay/lưu/xóa làm ở admin
@@ -449,7 +452,7 @@ def pair(request: Request, body: dict):
     code = str(body.get("code", "")).strip()
     name = str(body.get("client_name", "")).strip() or "Android"
     row = db.one("SELECT * FROM pairing_codes WHERE code=? AND used=0", (code,))
-    if not row or datetime.fromisoformat(row["expires_at"]) < datetime.now():
+    if not row or datetime.fromisoformat(row["expires_at"]) < util_now():
         raise HTTPException(status_code=400, detail="Mã ghép nối không đúng hoặc đã hết hạn")
     db.execute("UPDATE pairing_codes SET used=1 WHERE id=?", (row["id"],))
     token = secrets.token_hex(24)
@@ -613,7 +616,7 @@ def delete_floor(request: Request, floor_id: int, _: None = Depends(require_admi
 def create_pairing_code(request: Request, _: None = Depends(require_admin)):
     db = request.app.state.db
     code = f"{secrets.randbelow(1000000):06d}"
-    expires = (datetime.now() + timedelta(minutes=15)).isoformat(timespec="seconds")
+    expires = (util_now() + timedelta(minutes=15)).isoformat(timespec="seconds")
     db.execute("INSERT INTO pairing_codes(code, expires_at) VALUES (?,?)", (code, expires))
     return {"code": code, "expires_at": expires}
 

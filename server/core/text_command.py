@@ -19,7 +19,9 @@ from server.drivers.base import DriverError, loads
 from server.util import (
     hhmm_adjusted,
     next_hhmm,
+    next_repeat,
     normalize,
+    now,
     now_iso,
     parse_iso,
     trailing_number,
@@ -170,15 +172,63 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_timer",
-            "description": "Hẹn giờ nhắc nhở. Cho một trong hai: minutes (số phút tới) hoặc time (giờ dạng HH:MM)",
+            "description": "Hẹn giờ: nhắc nhở một việc, hoặc bật/tắt thiết bị khi đến giờ "
+                           "(thiết bị đặt qua entity + state). Cho một trong hai: minutes (số phút tới) hoặc time (giờ HH:MM 24h)",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "minutes": {"type": "number", "description": "Số phút kể từ bây giờ"},
                     "time": {"type": "string", "description": "Giờ cụ thể HH:MM (24h)"},
-                    "message": {"type": "string", "description": "Việc cần nhắc"},
+                    "message": {"type": "string", "description": "Việc cần nhắc (bỏ qua nếu có entity + state)"},
+                    "repeat": {"type": "string",
+                               "enum": ["none", "daily", "weekdays", "weekend", "mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                               "description": "none=một lần; daily=mỗi ngày; weekdays=thứ Hai đến thứ Sáu; "
+                                              "weekend=thứ Bảy và Chủ Nhật; mon..sun=mỗi tuần vào thứ đó"},
+                    "day": {"type": "string", "enum": ["today", "tomorrow", "day_after"],
+                            "description": "today=hôm nay, tomorrow=ngày mai, day_after=ngày mốt"},
+                    "entity": {"type": "string", "description": "Thiết bị cần bật/tắt khi đến giờ (nếu hẹn thao tác, không phải nhắc)"},
+                    "state": {"type": "string", "enum": ["on", "off"]},
+                    "temperature": {"type": "integer", "minimum": 16, "maximum": 30,
+                                    "description": "Nhiệt độ nếu thiết bị là điều hòa và state=on"},
                 },
                 "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_timers",
+            "description": "Liệt kê các hẹn giờ đang chờ (nhắc nhở lẫn hẹn bật/tắt thiết bị)",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_timer",
+            "description": "Hủy hẹn giờ đang chờ. Trợ lý sẽ hỏi lại xác nhận, chỉ hủy khi người dùng đồng ý",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Từ khóa trong lời nhắc của hẹn giờ cần hủy, ví dụ: tắt bếp. Bỏ trống hoặc 'all' = tất cả"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_timer",
+            "description": "Dời giờ hẹn đang chờ: cộng/thêm phút (shift_minutes, âm = sớm hơn) hoặc đặt lại giờ tuyệt đối (time HH:MM)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Từ khóa trong lời nhắc của hẹn giờ cần dời, ví dụ: tắt máy lạnh"},
+                    "shift_minutes": {"type": "number", "description": "Dời thêm bao nhiêu phút (âm = sớm lại)"},
+                    "time": {"type": "string", "description": "Giờ mới HH:MM (24h)"},
+                    "day": {"type": "string", "enum": ["today", "tomorrow", "day_after"]},
+                },
             },
         },
     },
@@ -580,7 +630,7 @@ async def act_sensor(db, drivers, entity, room_id=None, metric=None) -> dict:
     # a sensor that has not reported for an hour is treated as unreachable:
     # say so instead of repeating hours-old numbers as if they were current
     updated = parse_iso(entity["updated_at"]) if entity["updated_at"] else None
-    if updated and (datetime.now() - updated).total_seconds() > 3600:
+    if updated and (now() - updated).total_seconds() > 3600:
         room = _room_name(db, _entity_room(db, entity) or room_id)
         where = f" ở {room.lower()}" if room else ""
         return {"reply": f"Mình không lấy được thông tin từ cảm biến{where} — đã hơn một tiếng không có số liệu mới.",
@@ -707,19 +757,19 @@ def _vi_clock(hour: int, minute: int) -> str:
 def act_datetime(ask_time=False, ask_date=False, ask_lunar=False, day=0,
                  delta_minutes=None) -> dict:
     """Hỏi giờ / ngày tháng / âm lịch — trả lời ngay, không cần thiết bị."""
-    now = datetime.now()
+    now_dt = now()
     label = DAY_LABELS.get(day, "Hôm nay")
     parts = []
     if ask_time:
         if delta_minutes:
-            target = now + timedelta(minutes=delta_minutes)
+            target = now_dt + timedelta(minutes=delta_minutes)
             span = (f"{delta_minutes // 60:g} tiếng" if delta_minutes % 60 == 0
                     else f"{delta_minutes:g} phút")
             parts.append(f"sau {span} nữa là {_vi_clock(target.hour, target.minute)}")
         else:
-            parts.append(f"bây giờ là {_vi_clock(now.hour, now.minute)}")
+            parts.append(f"bây giờ là {_vi_clock(now_dt.hour, now_dt.minute)}")
     if ask_date:
-        when = now + timedelta(days=day)
+        when = now_dt + timedelta(days=day)
         if ask_lunar:
             # hỏi âm thì chỉ đọc âm — ngày dương nghe thêm thành thừa
             ld, lm, ly, leap = solar_to_lunar(when.day, when.month, when.year)
@@ -734,23 +784,392 @@ def act_datetime(ask_time=False, ask_date=False, ask_lunar=False, day=0,
             "action": {"tool": "get_datetime", "ok": True, "day": day}}
 
 
-def act_timer(db, room_id, message: str, minutes=None, time_str=None) -> dict:
-    if time_str:
-        hh, mm = time_str.split(":")[:2]
-        target = next_hhmm(int(hh), int(mm))
-    elif minutes:
-        target = datetime.now() + timedelta(minutes=float(minutes))
+def act_timer(db, room_id, message=None, minutes=None, time_str=None,
+              repeat="", day_offset=None, weekday=None, action=None) -> dict:
+    """Tạo hẹn giờ: nhắc nhở (message) hoặc thao tác thiết bị (action JSON)."""
+    if minutes:
+        target = now() + timedelta(minutes=float(minutes))
+        repeat, day_offset, weekday = "", None, None  # "X phút nữa" không lặp được
+    elif time_str:
+        hh, mm = (int(p) for p in time_str.split(":")[:2])
+        if repeat:
+            target = next_repeat(repeat, hh, mm)
+        elif day_offset:
+            target = (now() + timedelta(days=day_offset)).replace(
+                hour=hh, minute=mm, second=0, microsecond=0)
+        elif weekday is not None:
+            target = next_repeat(str(weekday), hh, mm)
+        else:
+            target = next_hhmm(hh, mm)
     else:
         return {"reply": "Mình chưa rõ thời gian hẹn.", "action": {"tool": "set_timer", "ok": False}}
-    message = message.strip() or "hẹn giờ"
+    message = (message or "").strip() or (action or {}).get("message") or "hẹn giờ"
     db.execute(
-        "INSERT INTO timers(target_at, room_id, message, created_at) VALUES (?,?,?,?)",
-        (target.isoformat(timespec="seconds"), room_id, message, now_iso()),
+        "INSERT INTO timers(target_at, room_id, message, created_at, repeat, action) "
+        "VALUES (?,?,?,?,?,?)",
+        (target.isoformat(timespec="seconds"), room_id, message, now_iso(), repeat,
+         json.dumps(action, ensure_ascii=False) if action else ""),
     )
     clock = target.strftime("%H:%M")
-    in_ = f" (sau {int(minutes)} phút nữa)" if minutes and not time_str else ""
-    return {"reply": f"Ok, {clock}{in_} mình nhắc bạn: {message}.",
-            "action": {"tool": "set_timer", "ok": True, "at": clock}}
+    when = _when_label(repeat, day_offset, weekday)
+    in_ = f" (sau {int(minutes)} phút nữa)" if minutes else ""
+    verb = f"mình sẽ {message}." if action else f"mình nhắc bạn: {message}."
+    return {"reply": f"Ok, {when}{clock}{in_} {verb}",
+            "action": {"tool": "set_timer", "ok": True, "at": clock, "repeat": repeat or None}}
+
+
+# ---------------------------------------------------------------------------
+# Hẹn giờ: parse giờ/lặp/ngày + liệt kê / hủy (xác nhận) / dời
+
+_WD_ALT = r"thu\s*(?:hai|ba|tu|nam|sau|bay|[2-8])|chu\s*nhat|\bcn\b"
+
+
+def _wd_value(text: str) -> int | None:
+    """'thứ hai/thứ 2' -> 0 ... 'chủ nhật/thứ 8' -> 6 (thứ Python)."""
+    t = re.sub(r"\s+", " ", text.strip().lower())
+    words = {"hai": 0, "ba": 1, "tu": 2, "nam": 3, "sau": 4, "bay": 5, "nhat": 6}
+    m = re.fullmatch(r"(?:thu\s*)?([2-8])", t)
+    if m:
+        n = int(m.group(1))
+        return n - 2 if n <= 7 else 6  # "thứ 8" là cách gọi dân dã của Chủ nhật
+    m = re.fullmatch(r"(?:thu|chu)\s*(\w+)", t)
+    if m and m.group(1) in words:
+        return words[m.group(1)]
+    if t == "cn":
+        return 6
+    return None
+
+
+def _parse_when(norm: str):
+    """(repeat, day_offset, weekday): 'mỗi ngày', 'T2 đến T6', 'cuối tuần',
+    'ngày mai', 'thứ N' (có mỗi/hàng = lặp tuần, không = một lần tới)."""
+    repeat, day_offset, weekday = "", None, None
+    if re.search(r"\b(moi|hang)\s+(ngay|buoi|sang|trua|chieu|toi|dem)\b", norm):
+        repeat = "daily"
+    if re.search(r"\bcuoi tuan\b|\bthu bay va chu nhat\b", norm):
+        repeat = "5,6"
+    m = re.search(rf"({_WD_ALT})\s+(?:den|toi)\s+({_WD_ALT})", norm)
+    if m:
+        a, b = _wd_value(m.group(1)), _wd_value(m.group(2))
+        if a is not None and b is not None:
+            span = list(range(a, b + 1)) if a <= b else list(range(a, 7)) + list(range(0, b + 1))
+            repeat = ",".join(map(str, span))
+    if not repeat:
+        for m in re.finditer(_WD_ALT, norm):
+            found = _wd_value(m.group(0))
+            if found is None:
+                continue
+            if re.search(r"\b(moi|hang)\b", norm):
+                repeat = str(found)  # "mỗi thứ hai" = lặp hàng tuần
+            else:
+                weekday = found     # "thứ năm lúc 5h" = lần tới thôi
+            break
+    if re.search(r"\bmai\b", norm):        # "ngày mai" / "6 giờ sáng mai"
+        day_offset = 1
+    elif re.search(r"\bngay mot\b", norm):
+        day_offset = 2
+    return repeat, day_offset, weekday
+
+
+def _clock_from_norm(norm: str):
+    """Giờ trong câu: '15:30', '3 giờ chiều', '3 giờ rưỡi', '6 giờ 30 phút',
+    'tới 1 giờ'. Trả về (hour, minute) hoặc None."""
+    hhmm = re.search(r"\b(\d{1,2}):(\d{2})\b", norm)
+    if hhmm:
+        hour, minute = int(hhmm.group(1)), int(hhmm.group(2))
+        part = re.match(r"\s*(chieu|toi|dem|sang|trua)", norm[hhmm.end():])
+        return hhmm_adjusted(hour, minute, part.group(1) if part else None), minute
+    m = re.search(r"\b(\d{1,2})\s*gio\s+ruoi\b", norm)
+    if m:
+        return hhmm_adjusted(int(m.group(1)), 30, None), 30
+    # "6 giờ 30 [phút] [tối]" — chữ 'phút' và buổi đều có thể bị lược
+    m = re.search(r"\b(\d{1,2})\s*gio\s+(\d{1,2})(?:\s*phut)?\s*(?:\b(chieu|toi|sang|dem|trua)\b)?", norm)
+    if m and m.group(2):
+        hour, minute = int(m.group(1)), min(int(m.group(2)), 59)
+        return hhmm_adjusted(hour, minute, m.group(3)), minute
+    m = re.search(r"\b(\d{1,2})\s*gio\s*(?:chieu|toi|sang|dem)\b", norm)
+    if m:
+        part = m.group(0).split()[-1]
+        return hhmm_adjusted(int(m.group(1)), 0, part), 0
+    # "tới/về 1 giờ" (không kèm sáng/chiều): giờ tuyệt đối — phân biệt với
+    # "thêm 1 giờ" (khoảng thời gian) bằng từ đi trước
+    m = re.search(r"\b(?:toi|ve|vao|luc)\s+(\d{1,2})\s*gio\b", norm)
+    if m:
+        return int(m.group(1)) % 24, 0
+    return None
+
+
+# từ chỉ thời gian/lệnh — bỏ đi rồi phần còn lại của câu mới là lời nhắc.
+# KHÔNG đưa "den" vào đây: "đèn" và "đến" cùng normalize thành "den", bỏ nó
+# sẽ cắt mất từ "đèn" trong lời nhắc.
+_WHEN_DROP = {
+    "vao", "luc", "khoang", "nua", "thi", "roi", "moi", "hang", "ngay", "mai",
+    "hom", "nay", "cuoi", "tuan", "tu", "sang", "trua", "chieu", "toi",
+    "dem", "ruoi", "gio", "phut", "tieng", "hen", "cai", "ca",
+}
+
+
+def _strip_when(text: str) -> str:
+    """Bỏ các từ chỉ thời gian để lại đúng nội dung việc cần nhắc."""
+    keep = []
+    for tok in text.split():
+        n = normalize(tok)
+        if n in _WHEN_DROP or n.isdigit() or re.fullmatch(r"\d{1,2}:\d{2}", n) \
+                or _wd_value(n) is not None:
+            continue
+        keep.append(tok)
+    return " ".join(keep).strip()
+
+
+def _timer_message(raw: str) -> str:
+    """Lời nhắc = phần sau 'nhắc/hẹn/báo [tôi]', bỏ từ chỉ giờ; không có từ
+    đó thì lấy cả câu bỏ từ chỉ giờ."""
+    parts = re.split(r"(?:nhắc|hẹn|báo)\s*(?:tôi|em|mình|tui)?", raw, flags=re.I)
+    tail = parts[-1].strip() if len(parts) > 1 else raw
+    if not tail:
+        return "hẹn giờ"
+    return _strip_when(tail) or "hẹn giờ"
+
+
+def _repeat_label(repeat: str) -> str:
+    if repeat == "daily":
+        return "mỗi ngày"
+    days = sorted(int(d) for d in repeat.split(",") if d.strip().isdigit())
+    if days == [5, 6]:
+        return "cuối tuần"
+    if days == [0, 1, 2, 3, 4]:
+        return "thứ Hai đến thứ Sáu"
+    if len(days) == 1:
+        return f"mỗi {WEEKDAYS_VI[days[0]].lower()}"
+    return " và ".join(WEEKDAYS_VI[d].lower() for d in days)
+
+
+def _when_label(repeat: str, day_offset, weekday) -> str:
+    """Đầu câu trả lời: 'mỗi ngày ', 'ngày mai ', 'Thứ Năm ', '' (hôm nay)."""
+    if repeat:
+        return f"{_repeat_label(repeat).lower()} "
+    if day_offset == 1:
+        return "ngày mai "
+    if day_offset == 2:
+        return "ngày mốt "
+    if weekday is not None:
+        return f"{WEEKDAYS_VI[weekday].lower()} "
+    return ""
+
+
+def _when_short(timer_row) -> str:
+    at = parse_iso(timer_row["target_at"])
+    clock = at.strftime("%H:%M")
+    if timer_row["repeat"] == "daily":
+        return f"mỗi ngày {clock}"
+    if timer_row["repeat"]:
+        return f"{_repeat_label(timer_row['repeat']).lower()} {clock}"
+    day, today = at.date(), now().date()
+    if day == today:
+        return clock
+    if day == today + timedelta(days=1):
+        return f"ngày mai {clock}"
+    return f"ngày {at.day}/{at.month} {clock}"
+
+
+def _timers_brief(rows) -> str:
+    return "; ".join(f"{t['message'].lower()} ({_when_short(t)})" for t in rows)
+
+
+def act_list_timers(db) -> dict:
+    rows = db.query(
+        """SELECT t.*, r.name AS room_name FROM timers t
+           LEFT JOIN rooms r ON r.id=t.room_id WHERE t.done=0 ORDER BY t.target_at""")
+    if not rows:
+        return {"reply": "Hiện không có hẹn giờ nào đang chờ.",
+                "action": {"tool": "list_timers", "ok": True}}
+    head = "Mình đang giữ" if len(rows) > 1 else "Đang có"
+    return {"reply": f"{head} {len(rows)} hẹn giờ: {_timers_brief(rows)}.",
+            "action": {"tool": "list_timers", "ok": True, "count": len(rows)}}
+
+
+# xác nhận hủy đang chờ lời đáp, theo từng phòng (0 = console không phòng)
+_PENDING_CANCEL: dict[int, dict] = {}
+
+_CONFIRM_NO = (r"^(khong|khong roi|khong phai|khong can|thoi|bo qua|khoan|de sau|"
+               r"chua|chua chac|de|dung hen)(\s+(nhe|nha|di|roi|nua))*[\s,.!?-]*$")
+_CONFIRM_YES = (r"^(co|co roi|dung|dung roi|ok|ok roi|ur|um|u|chac chan|vay|di|"
+                r"huy di|lam di|nghe)(\s+(nhe|nha|di|roi|nua))*[\s,.!?-]*$")
+
+
+def _confirm_answer(norm: str) -> str | None:
+    if re.match(_CONFIRM_NO, norm):
+        return "no"
+    if re.match(_CONFIRM_YES, norm):
+        return "yes"
+    return None
+
+
+# từ đệm của câu quản lý hẹn giờ (từ lệnh + từ chỉ thời gian) — bỏ đi rồi
+# phần còn lại mới khớp với lời nhắc đã lưu
+_TIMER_STOP = {
+    "huy", "bo", "xoa", "tat", "hen", "gio", "gi", "cai", "nhung", "di", "het",
+    "nhe", "nua", "cua", "toi", "minh", "em", "giup", "phut", "con", "chua",
+    "dang", "lam", "hay", "cho", "ve", "den", "va", "roi", "doi", "lui", "dich",
+    "chuyen", "sua", "chinh", "them", "keo", "dai", "don", "lai", "som", "tre",
+    "hon", "thoi", "gian", "chut", "ca", "voi", "mot", "that",
+    "tieng", "giay", "sang", "trua", "chieu", "dem", "ruoi", "vao", "khoang",
+    "hai", "ba", "bon", "nam", "sau", "bay", "tam", "chin", "muoi", "lam",
+    "ngay", "mai", "hom", "nay",
+}
+
+
+def _timer_query_words(norm: str) -> list[str]:
+    return [w for w in norm.split()
+            if w not in _TIMER_STOP and not w.isdigit() and _wd_value(w) is None]
+
+
+def act_cancel_timer(db, room_id, query: str = "") -> dict:
+    """Hủy hẹn giờ — Luôn hỏi lại xác nhận; lời đáp 'có/không' xử lý ở
+    handle_command (xem _PENDING_CANCEL)."""
+    rows = db.query("SELECT * FROM timers WHERE done=0 ORDER BY target_at")
+    if not rows:
+        return {"reply": "Hiện không có hẹn giờ nào để hủy.",
+                "action": {"tool": "cancel_timer", "ok": False}}
+    norm = normalize(query)
+    want_all = bool(re.search(r"\b(het|tat ca|moi)\b", norm))
+    words = _timer_query_words(norm)
+    if want_all:
+        matches = list(rows)
+    elif words:
+        matches = [t for t in rows
+                   if all(w in normalize(t["message"]).split() for w in words)]
+    else:
+        matches = list(rows) if len(rows) == 1 else []
+    if not matches:
+        if not words and len(rows) > 1:
+            return {"reply": "Bạn muốn hủy hẹn giờ nào? " + _timers_brief(rows),
+                    "action": {"tool": "cancel_timer", "ok": False}}
+        return {"reply": "Mình không tìm thấy hẹn giờ nào như vậy.",
+                "action": {"tool": "cancel_timer", "ok": False}}
+    if len(matches) > 1 and not want_all:
+        return {"reply": "Có mấy hẹn giờ trùng ý, bạn nêu rõ hơn nhé: " + _timers_brief(matches),
+                "action": {"tool": "cancel_timer", "ok": False}}
+    if len(matches) == 1:
+        label = f"hẹn giờ '{matches[0]['message']}' ({_when_short(matches[0])})"
+    else:
+        label = f"{len(matches)} hẹn giờ"
+    key = room_id if room_id is not None else 0
+    _PENDING_CANCEL[key] = {"ids": [t["id"] for t in matches], "label": label,
+                            "expires": now() + timedelta(seconds=60)}
+    return {"reply": f"Bạn có chắc muốn hủy {label} không? Nói 'có' để hủy, 'không' để giữ nguyên.",
+            "action": {"tool": "cancel_timer", "ok": True, "confirming": True}}
+
+
+def _shift_minutes(norm: str):
+    """Số phút dời trong 'dời/lùi ... thêm X phút/giờ' (dương = muộn hơn,
+    'sớm hơn/sớm lại' = âm). None = câu không có khoảng dời."""
+    tokens = norm.split()
+    for i, tok in enumerate(tokens):
+        if tok in ("phut", "gio", "tieng"):
+            got = trailing_number(tokens[:i])
+            if not got:
+                continue
+            minutes = got[0] if tok == "phut" else got[0] * 60
+            if re.search(r"\b(som|som hon|som lai|keo len|truoc hon)\b", norm):
+                minutes = -minutes
+            return minutes
+    return None
+
+
+def act_move_timer(db, room_id, text: str) -> dict | None:
+    """"Dời/đổi/lùi hẹn giờ...": None = câu không phải lệnh dời (nhường nhánh khác)."""
+    norm = normalize(text)
+    if not re.search(r"\b(doi|lui|dich|chuyen|sua|chinh|keo|don)\b", norm):
+        return None
+    rows = db.query("SELECT * FROM timers WHERE done=0 ORDER BY target_at")
+    if not rows:
+        return None
+    words = _timer_query_words(norm)
+    if words:
+        matches = [t for t in rows
+                   if all(w in normalize(t["message"]).split() for w in words)]
+    else:
+        matches = list(rows) if len(rows) == 1 else []
+    if not matches:
+        if "hen gio" not in norm:
+            return None  # không nhắc hẹn giờ nào -> không phải câu dời
+        return {"reply": "Mình không tìm thấy hẹn giờ nào như vậy.",
+                "action": {"tool": "move_timer", "ok": False}}
+    if len(matches) > 1:
+        return {"reply": "Có mấy hẹn giờ trùng ý, bạn nêu rõ hơn nhé: " + _timers_brief(matches),
+                "action": {"tool": "move_timer", "ok": False}}
+    timer = matches[0]
+    clock = _clock_from_norm(norm)
+    delta = _shift_minutes(norm) if clock is None else None
+    if clock is None and delta is None:
+        return None  # có động từ dời nhưng không có giờ mới -> nhường nhánh thường
+    if clock is not None:
+        hh, mm = clock
+        _, day_offset, _ = _parse_when(norm)
+        if timer["repeat"]:
+            target = next_repeat(timer["repeat"], hh, mm)
+        elif day_offset:
+            target = (now() + timedelta(days=day_offset)).replace(
+                hour=hh, minute=mm, second=0, microsecond=0)
+        else:
+            target = next_hhmm(hh, mm)
+    else:
+        target = parse_iso(timer["target_at"]) + timedelta(minutes=delta)
+        if target <= now():
+            return {"reply": "Giờ dời tới đã qua rồi, mình không dời được.",
+                    "action": {"tool": "move_timer", "ok": False}}
+    db.execute("UPDATE timers SET target_at=? WHERE id=?",
+               (target.isoformat(timespec="seconds"), timer["id"]))
+    moved = {"target_at": target.isoformat(timespec="seconds"), "repeat": timer["repeat"]}
+    if clock is not None:
+        change = f"tới {target.strftime('%H:%M')}"
+    else:
+        change = f"{'sớm' if delta < 0 else 'muộn'} hơn {abs(delta):g} phút"
+    return {"reply": f"Ok, mình dời hẹn giờ '{timer['message']}' {change}, "
+                     f"giờ là {_when_short(moved)}.",
+            "action": {"tool": "move_timer", "ok": True, "at": target.strftime("%H:%M")}}
+
+
+def _timer_action(db, ent, on: bool, temperature=None, mentioned=None) -> dict:
+    """Lệnh thiết bị sẽ chạy khi hẹn giờ đến, kèm câu mô tả làm lời nhắc."""
+    where = _room_where(db, _entity_room(db, ent), mentioned)
+    if ent["entity_type"] == "climate":
+        if on:
+            last = loads(ent["state"]) if ent["state"] else {}
+            params = {"mode": last.get("mode") or "cool",
+                      "temperature": int(temperature or last.get("temperature") or 26)}
+            return {"entity_id": ent["id"], "name": ent["name"], "command": "set",
+                    "params": params,
+                    "message": f"bật {ent['name'].lower()}{where} {params['temperature']} độ"}
+        return {"entity_id": ent["id"], "name": ent["name"], "command": "off",
+                "params": {}, "message": f"tắt {ent['name'].lower()}{where}"}
+    return {"entity_id": ent["id"], "name": ent["name"],
+            "command": "on" if on else "off", "params": {},
+            "message": f"{'bật' if on else 'tắt'} {ent['name'].lower()}{where}"}
+
+
+def _device_action_from_text(db, norm, room_id):
+    """Câu 'lúc X giờ bật/tắt Y' không có từ nhắc/hẹn → lệnh thiết bị cho timer.
+    None = không ra thiết bị nào (coi như nhắc nhở thường)."""
+    has_on = bool(re.search(r"\b(bat|mo|bat len)\b", norm))
+    has_off = bool(re.search(r"\b(tat|tat di)\b", norm))
+    if not (has_on or has_off):
+        return None
+    mentioned = _room_from_text(db, norm)
+    temp = _temp_from_text(norm)
+    ent = resolve_entity(db, norm, room_id, "climate")
+    if not ent:
+        for etype in ("light", "switch", "fan", "media"):
+            cand = resolve_entity(db, norm, room_id, etype)
+            if cand and cand["entity_type"] == etype:  # bỏ qua controller (hub)
+                ent = cand
+                break
+    if not ent:
+        return None
+    if ent["entity_type"] == "controller" or loads(ent["driver_data"]).get("readonly"):
+        return None
+    return _timer_action(db, ent, on=has_on, temperature=temp, mentioned=mentioned)
 
 
 # ---------------------------------------------------------------------------
@@ -770,40 +1189,29 @@ def _temp_from_text(norm: str):
     return None
 
 
-def _parse_timer(norm: str, raw: str):
-    """Return (minutes|None, time_str|None, message)."""
+def _parse_timer(norm: str, raw: str) -> dict:
+    """Giờ hẹn + nội dung từ câu đã normalize. Trả về dict: minutes/time_str
+    (một trong hai), message, repeat, day_offset, weekday."""
+    clock = _clock_from_norm(norm)
+    if clock is not None:
+        hour, minute = clock
+        repeat, day_offset, weekday = _parse_when(norm)
+        return {"minutes": None, "time_str": f"{hour:02d}:{minute:02d}",
+                "message": _timer_message(raw), "repeat": repeat,
+                "day_offset": day_offset, "weekday": weekday}
+
+    # "<số> phút/giờ/tiếng nữa" duration
     tokens = norm.split()
-
-    # clock time: "15:30" or "3 giờ chiều"
-    hhmm = re.search(r"\b(\d{1,2}):(\d{2})\b", norm)
-    if hhmm:
-        hour, minute = int(hhmm.group(1)), int(hhmm.group(2))
-        tail = norm[hhmm.end():]
-        part = re.match(r"\s*(chieu|toi|dem)", tail)
-        hour = hhmm_adjusted(hour, minute, part.group(1) if part else None)
-    else:
-        word_clock = re.search(r"\b(\d{1,2})\s*gio\s*(chieu|toi|sang|dem)\b", norm)
-        if not word_clock:
-            word_clock = re.search(r"\b(\d{1,2})\s*gio\s+(ruoi)\b", norm)  # "3 giờ rưỡi"
-        if word_clock:
-            hour = hhmm_adjusted(int(word_clock.group(1)), 30, word_clock.group(2) if word_clock.group(2) != "ruoi" else None)
-            minute = 30 if word_clock.group(2) == "ruoi" else 0
-        else:
-            hour = None
-    if hour is not None:
-        message = re.split(r"(?:nhắc|hẹn|báo)\s*(?:tôi|em|mình|tui)?", raw, flags=re.I)
-        return None, f"{hour:02d}:{minute:02d}", message[-1].strip() if len(message) > 1 else "hẹn giờ"
-
-    # "<số> phút/giờ nữa" duration
     for i, tok in enumerate(tokens):
         if tok in ("phut", "gio", "tieng") or tok.startswith("gio:"):
             got = trailing_number(tokens[:i])
             if not got:
                 continue
             minutes = got[0] if tok == "phut" else got[0] * 60
-            message = re.split(r"(?:nhắc|hẹn|báo)\s*(?:tôi|em|mình|tui)?", raw, flags=re.I)
-            return minutes, None, message[-1].strip() if len(message) > 1 else "hẹn giờ"
-    return None, None, None
+            return {"minutes": minutes, "time_str": None, "message": _timer_message(raw),
+                    "repeat": "", "day_offset": None, "weekday": None}
+    return {"minutes": None, "time_str": None, "message": "", "repeat": "",
+            "day_offset": None, "weekday": None}
 
 
 def _duration_minutes(norm: str):
@@ -893,11 +1301,26 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             re.search(r"\broi\b", norm) and (has_on or has_off)):
         return None
 
+    # dời hẹn giờ ("dời tắt máy lạnh thêm 1 tiếng") — phải đứng TRƯỚC mọi nhánh
+    # khác vì câu chứa động từ bật/tắt + giờ, lọt xuống nhánh thường sẽ tắt
+    # nhầm thiết bị ngay lập tức
+    moved = act_move_timer(db, room_id, text)
+    if moved:
+        return moved
+
+    # quản lý hẹn giờ đang chờ: hủy (trợ lý hỏi lại xác nhận), hỏi danh sách
+    if "hen gio" in norm or re.search(r"\b(da|vua|con)\s+hen\b", norm):
+        if re.search(r"\b(huy|bo|xoa|tat)\b.*\bhen gio\b", norm) and not re.search(r"\d", norm):
+            return act_cancel_timer(db, room_id, query=text)
+        if not re.search(r"\d", norm) and not (has_on or has_off) \
+                and re.search(r"\b(gi|nao|nhung|dang|con)\b", norm):
+            return act_list_timers(db)
+
     # timers: fast shortcut unless the sentence is clearly multi-intent
     # ("bật đèn và 15 phút nữa nhắc tôi..." needs the LLM to do both)
     timerish = re.search(r"\b(nhac|hen|bao)\b", norm) or re.search(
         r"\d+\s*(phut|gio|tieng)|\d{1,2}:\d{2}", norm
-    )
+    ) or re.search(r"\b(mot|hai|ba|bon|nam|sau|bay|tam|chin|muoi|lam)\s+(phut|gio|tieng)\b", norm)
     multi_intent = re.search(r"\broi\b|\bsau do\b|\bva\b|\bva ca\b|\bthem\b|\bngoai ra\b", norm)
 
     # hỏi giờ / ngày tháng / âm lịch — phải đứng TRƯỚC nhánh hẹn giờ vì câu hỏi
@@ -916,9 +1339,17 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             )
 
     if timerish and not multi_intent:
-        minutes, time_str, message = _parse_timer(norm, text)
-        if minutes or time_str:
-            return act_timer(db, room_id, message or "hẹn giờ", minutes=minutes, time_str=time_str)
+        parsed = _parse_timer(norm, text)
+        if parsed["minutes"] or parsed["time_str"]:
+            # không có từ nhắc/hẹn/báo mà nói tên thiết bị + bật/tắt: hẹn giờ
+            # THAO TÁC thiết bị, không phải lời nhắc
+            action = None
+            if not _timer_intent(norm):
+                action = _device_action_from_text(db, norm, room_id)
+            return act_timer(db, room_id, message=None if action else parsed["message"],
+                             minutes=parsed["minutes"], time_str=parsed["time_str"],
+                             repeat=parsed["repeat"], day_offset=parsed["day_offset"],
+                             weekday=parsed["weekday"], action=action)
 
     # weather (rain questions included: "ngày mai có mưa không") — single-intent
     # only, multi-part sentences go to the LLM so no half gets dropped
@@ -1148,10 +1579,46 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             return act_datetime(ask_date=True, ask_lunar=part == "lunar", day=day)
 
         if name == "set_timer":
-            return act_timer(
-                db, room_id, args.get("message", "hẹn giờ"),
-                minutes=args.get("minutes"), time_str=args.get("time"),
-            )
+            rep = {"none": "", "daily": "daily", "weekdays": "0,1,2,3,4",
+                   "weekend": "5,6", "mon": "0", "tue": "1", "wed": "2",
+                   "thu": "3", "fri": "4", "sat": "5", "sun": "6"}.get(
+                str(args.get("repeat") or "none").lower(), "")
+            day_off = {"today": 0, "tomorrow": 1, "day_after": 2}.get(str(args.get("day") or ""))
+            action = None
+            if args.get("entity") and args.get("state"):
+                ent = resolve_entity(db, str(args["entity"]), room_id)
+                if ent and ent["entity_type"] != "controller" \
+                        and not loads(ent["driver_data"]).get("readonly"):
+                    mentioned = _room_from_text(
+                        db, normalize(f"{args['entity']} {args.get('room') or ''}"))
+                    action = _timer_action(db, ent, args["state"] == "on",
+                                           args.get("temperature"), mentioned)
+            return act_timer(db, room_id, args.get("message"),
+                             minutes=args.get("minutes"), time_str=args.get("time"),
+                             repeat=rep, day_offset=day_off, action=action)
+
+        if name == "list_timers":
+            return act_list_timers(db)
+
+        if name == "cancel_timer":
+            q = str(args.get("query") or "").strip().lower()
+            return act_cancel_timer(
+                db, room_id,
+                query="hủy hết hẹn giờ" if q in ("all", "tat ca", "tất cả")
+                else f"hủy hẹn giờ {q}".strip())
+
+        if name == "move_timer":
+            parts = ["dời hẹn giờ", str(args.get("query") or "")]
+            shift = args.get("shift_minutes")
+            if shift is not None:
+                parts.append(f"{'sớm hơn' if shift < 0 else 'thêm'} {abs(int(shift))} phút")
+            if args.get("time"):
+                parts.append(f"tới {args['time']}")
+                if args.get("day") == "tomorrow":
+                    parts.append("ngày mai")
+                elif args.get("day") == "day_after":
+                    parts.append("ngày mốt")
+            return act_move_timer(db, room_id, " ".join(parts))
 
         return {"reply": f"Công cụ '{name}' chưa được hỗ trợ.", "action": {"tool": name, "ok": False}}
     except DriverError as exc:
@@ -1163,7 +1630,7 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
 async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
     system = (
         "Bạn là trợ lý nhà thông minh tiếng Việt. "
-        f"Thời gian hiện tại: {datetime.now().strftime('%H:%M, %d/%m/%Y')}.\n"
+        f"Thời gian hiện tại: {now().strftime('%H:%M, %d/%m/%Y')}.\n"
         f"{_llm_context(db, room_id)}\n"
         "Ưu tiên gọi công cụ để điều khiển thiết bị. Chỉ trả lời văn bản khi không có công cụ phù hợp. "
         "Khi hỏi thời tiết ngày mai/mốt, gọi get_weather với day tương ứng. "
@@ -1265,6 +1732,23 @@ async def handle_command(db: Database, drivers, cfg: Config, weather, text: str,
     text = text.strip()
     if not text:
         return {"reply": "Mình không nghe thấy gì cả.", "actions": [], "engine": "none"}
+
+    # lời đáp xác nhận hủy hẹn giờ đang chờ (theo phòng; hết hạn hoặc câu
+    # chuyện khác = tự bỏ, câu mới xử lý bình thường)
+    key = room_id if room_id is not None else 0
+    pending = _PENDING_CANCEL.get(key)
+    if pending:
+        answer = _confirm_answer(normalize(text))
+        if now() > pending["expires"] or answer:
+            _PENDING_CANCEL.pop(key, None)
+        if answer == "yes":
+            for tid in pending["ids"]:
+                db.execute("UPDATE timers SET done=1 WHERE id=? AND done=0", (tid,))
+            return {"reply": f"Đã hủy {pending['label']}.",
+                    "actions": [{"tool": "cancel_timer", "ok": True}], "engine": "fast"}
+        if answer == "no":
+            return {"reply": "Ok, mình giữ nguyên hẹn giờ.",
+                    "actions": [{"tool": "cancel_timer", "ok": False}], "engine": "fast"}
 
     try:
         outcome = await fast_path(db, drivers, weather, text, room_id)

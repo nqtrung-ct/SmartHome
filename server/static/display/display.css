@@ -75,16 +75,33 @@ main {
 .small { font-size: 13.5px; }
 
 /* --- weather --- */
-.weather-top { display: flex; align-items: center; gap: 18px; }
-.w-icon { font-size: 74px; line-height: 1; filter: drop-shadow(0 4px 18px rgba(255, 200, 80, .25)); }
-.w-temp { font-size: 58px; font-weight: 700; line-height: 1.05; }
+.weather-top { display: flex; align-items: center; gap: 14px; }
+.w-icon { font-size: 66px; line-height: 1; filter: drop-shadow(0 4px 18px rgba(255, 200, 80, .25)); }
+.w-now { min-width: 0; }
+/* min/max kề nhiệt hiện tại: max trên, min dưới, chữ nhỏ hơn (hẹp quá thì tự xuống dòng) */
+.w-temp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.w-temp { font-size: 58px; font-weight: 700; line-height: 1.05; white-space: nowrap; }
+.w-mm { display: flex; flex-direction: column; font-size: 18px; font-weight: 600; line-height: 1.35; }
+.w-mm.fc { font-size: 14px; }  /* bản nhỏ hơn trong ô dự báo */
+.w-max { color: #ffc46b; }
+.w-min { color: #9fc1ff; }
 .w-stats { display: flex; gap: 12px; margin-top: 22px; }
 .w-stats > div {
   flex: 1; background: var(--card2); border-radius: 16px; padding: 12px 8px; text-align: center;
 }
 .w-num { display: block; font-size: 22px; font-weight: 700; }
 .w-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
-.w-range { margin-top: 16px; font-size: 24px; font-weight: 700; text-align: center; }
+/* dự báo ngày mai / mốt: 2 cột icon + min/max; line nhạt chia hôm nay / các ngày sau */
+.w-fc {
+  display: flex; gap: 12px; margin-top: 14px; padding-top: 14px;
+  border-top: 1px solid rgba(139, 149, 167, .18);
+}
+.w-fc > div {
+  flex: 1; background: var(--card2); border-radius: 16px; padding: 10px 8px; text-align: center;
+}
+.w-fc-row { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.w-fc-ic { display: block; font-size: 30px; line-height: 1.2; }
+.w-fc-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 
 /* --- room cards: ít phòng thì 1 cột rộng, không đủ chỗ dọc mới tách 2 cột --- */
 .room-grid { display: grid; gap: 16px; align-content: start; }

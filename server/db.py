@@ -59,7 +59,9 @@ CREATE TABLE IF NOT EXISTS timers(
   room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
   message TEXT NOT NULL,
   done INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  repeat TEXT NOT NULL DEFAULT '',      -- '' = một lần | 'daily' | CSV thứ Python (0=T2..6=CN)
+  action TEXT NOT NULL DEFAULT ''      -- JSON lệnh thiết bị {"entity_id","command","params",...}; '' = chỉ nhắc
 );
 CREATE TABLE IF NOT EXISTS discovered(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +116,11 @@ class Database:
                 "ALTER TABLE entities ADD COLUMN room_id INTEGER "
                 "REFERENCES rooms(id) ON DELETE SET NULL"
             )
+        tcols = {row["name"] for row in self.query("PRAGMA table_info(timers)")}
+        if "repeat" not in tcols:
+            self.execute("ALTER TABLE timers ADD COLUMN repeat TEXT NOT NULL DEFAULT ''")
+        if "action" not in tcols:
+            self.execute("ALTER TABLE timers ADD COLUMN action TEXT NOT NULL DEFAULT ''")
         if seed_floors:
             # first run with the floors table: sensible defaults + keep any floor
             # names already assigned to rooms
@@ -159,13 +166,13 @@ def log_event(db: Database, source: str, message: str, level: str = "info") -> N
 def cleanup_old_rows(db: Database, days: int) -> dict[str, int]:
     """Drop stale rows: events older than `days`, pairing codes used/expired
     over a day ago, timers done over a week ago. Returns deleted counts."""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
-    from server.util import now_iso
+    from server.util import now, now_iso
 
-    events_before = datetime.now() - timedelta(days=days)
-    day_ago = datetime.now() - timedelta(days=1)
-    week_ago = datetime.now() - timedelta(days=7)
+    events_before = now() - timedelta(days=days)
+    day_ago = now() - timedelta(days=1)
+    week_ago = now() - timedelta(days=7)
     counts: dict[str, int] = {}
     with db.conn() as c:
         for table, where, cutoff in (

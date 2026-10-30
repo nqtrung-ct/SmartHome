@@ -6,7 +6,31 @@ import json
 import time
 
 from server.db import Database, log_event
-from server.util import now_iso, parse_iso
+from server.util import next_repeat, now, now_iso, parse_iso
+
+
+async def _run_timer_action(app, action: dict) -> str:
+    """Thực thi lệnh thiết bị của hẹn giờ; trả về câu nói báo kết quả."""
+    from server.core.text_command import _set_state
+    from server.drivers.base import loads
+
+    db: Database = app.state.db
+    ent = db.one("SELECT * FROM entities WHERE id=?", (action.get("entity_id"),))
+    name = (ent["name"] if ent else action.get("name") or "thiết bị").lower()
+    if not ent:
+        return f"Hẹn giờ không chạy được: không còn thiết bị {name}."
+    if ent["entity_type"] == "controller" or loads(ent["driver_data"]).get("readonly"):
+        return f"Hẹn giờ không chạy được: {name} không bật/tắt được."
+    try:
+        await _set_state(db, app.state.drivers, ent,
+                         action.get("command", ""), action.get("params") or {})
+    except Exception as exc:
+        return f"Hẹn giờ không chạy được: lỗi khi bật/tắt {name} ({exc})."
+    if action.get("command") == "set":
+        temp = (action.get("params") or {}).get("temperature")
+        return f"Đã bật {name} {temp} độ theo hẹn giờ."
+    verb = {"on": "bật", "off": "tắt"}.get(action.get("command"), "chỉnh")
+    return f"Đã {verb} {name} theo hẹn giờ."
 
 
 def sync_meter_with_switch(db: Database, switch_id: int, on: bool) -> None:
@@ -179,12 +203,28 @@ async def scheduler_loop(app) -> None:
                 (now_iso(),),
             )
             for timer in due:
-                db.execute("UPDATE timers SET done=1 WHERE id=?", (timer["id"],))
-                message = f"Đã đến giờ hẹn: {timer['message']}"
-                log_event(db, "scheduler", f"Hẹn giờ đến: {timer['message']} (timer #{timer['id']})")
+                action = json.loads(timer["action"]) if timer["action"] else None
+                repeat = timer["repeat"] or ""
+                # cập nhật TRƯỚC khi chạy để khỏi bắn 2 lần nếu chạy lỗi giữa chừng;
+                # hẹn lặp thì nhảy sang lần kế, một lần thì đóng
+                if repeat:
+                    at = parse_iso(timer["target_at"])
+                    nxt = next_repeat(repeat, at.hour, at.minute, after=now())
+                    db.execute("UPDATE timers SET target_at=? WHERE id=?",
+                               (nxt.isoformat(timespec="seconds"), timer["id"]))
+                else:
+                    db.execute("UPDATE timers SET done=1 WHERE id=?", (timer["id"],))
+                if action:
+                    message = await _run_timer_action(app, action)
+                    log_event(db, "scheduler",
+                              f"Hẹn giờ chạy: {action.get('message', '')} (timer #{timer['id']})")
+                else:
+                    message = f"Đã đến giờ hẹn: {timer['message']}"
+                    log_event(db, "scheduler",
+                              f"Hẹn giờ đến: {timer['message']} (timer #{timer['id']})")
                 connections = getattr(app.state, "voice_connections", None)
                 pipeline = getattr(app.state, "pipeline", None)
-                if connections:
+                if connections and message:
                     await connections.announce_room(timer["room_id"], message, pipeline)
             # battery sensors surface briefly (~seconds every 15 min): poll often
             if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 60)):

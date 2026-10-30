@@ -877,6 +877,16 @@ window.delClient = async (id) => {
 };
 
 // ---------------------------------------------------------------- console
+const TIMER_WD = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
+function repeatLabel(rep) {
+  if (!rep) return "";
+  if (rep === "daily") return "mỗi ngày";
+  const days = rep.split(",").map(Number).sort((a, b) => a - b);
+  if (days.length === 2 && days[0] === 5 && days[1] === 6) return "cuối tuần";
+  if (days.length === 5 && days.join("") === "01234") return "T2–T6";
+  if (days.length === 1) return "mỗi " + TIMER_WD[days[0]];
+  return days.map((d) => TIMER_WD[d]).join("+");
+}
 
 async function renderConsole() {
   const el = $("#tab-console");
@@ -885,7 +895,7 @@ async function renderConsole() {
   el.innerHTML = `
     <div class="card">
       <h2>⌨️ Lệnh văn bản</h2>
-      <p class="small muted">Thử như đang nói trong một phòng: "bật đèn", "tắt điều hòa phòng khách", "điều hòa 26 độ", "15 phút nữa nhắc tôi tắt bếp", "thời tiết hôm nay thế nào".</p>
+      <p class="small muted">Thử như đang nói trong một phòng: "bật đèn", "tắt điều hòa phòng khách", "điều hòa 26 độ", "15 phút nữa nhắc tôi tắt bếp", "mỗi ngày 6 giờ sáng bật đèn phòng khách", "thời tiết hôm nay thế nào".</p>
       <div class="row">
         <select id="cmd-room">${`<option value="">— không phòng —</option>` + rooms.map((r) =>
           `<option value="${r.id}">${esc(roomLabel(r))}</option>`).join("")}</select>
@@ -896,8 +906,9 @@ async function renderConsole() {
     </div>
     <div class="card">
       <h2>⏰ Hẹn giờ (${timers.pending.length} chờ)</h2>
-      ${timers.pending.length ? `<table><tr><th>Lúc</th><th>Nhắc</th><th>Phòng</th><th></th></tr>
-        ${timers.pending.map((t) => `<tr><td>${esc(t.target_at)}</td><td>${esc(t.message)}</td>
+      ${timers.pending.length ? `<table><tr><th>Lúc</th><th>Nhắc</th><th>Lặp lại</th><th>Phòng</th><th></th></tr>
+        ${timers.pending.map((t) => `<tr><td>${esc(t.target_at)}</td><td>${t.action ? "⚙️ " : ""}${esc(t.message)}</td>
+          <td class="small">${esc(repeatLabel(t.repeat) || "—")}</td>
           <td class="small">${esc(t.room_name || "-")}</td>
           <td><button class="small-btn danger" onclick="cancelTimer(${t.id})">Hủy</button></td></tr>`).join("")}
       </table>` : `<p class="muted small">Không có hẹn giờ nào.</p>`}
@@ -923,6 +934,7 @@ window.sendCommand = async () => {
   } catch (e) { out.textContent = "Lỗi: " + e.message; }
 };
 window.cancelTimer = async (id) => {
+  if (!confirm("Hủy hẹn giờ này?")) return;
   await api(`/timers/${id}`, { method: "DELETE" }); renderConsole();
 };
 

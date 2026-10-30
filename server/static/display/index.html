@@ -31,8 +31,14 @@
     <div class="card weather">
       <div class="weather-top">
         <span id="w-icon" class="w-icon">⛅</span>
-        <div>
-          <div id="w-temp" class="w-temp">--°</div>
+        <div class="w-now">
+          <div class="w-temp-row">
+            <span id="w-temp" class="w-temp">--°</span>
+            <span class="w-mm">
+              <span id="w-max" class="w-max">↑ --°</span>
+              <span id="w-min" class="w-min">↓ --°</span>
+            </span>
+          </div>
           <div id="w-cond" class="muted">đang tải…</div>
         </div>
       </div>
@@ -41,7 +47,22 @@
         <div><span class="w-num" id="w-hum">–</span><span class="w-lab">độ ẩm %</span></div>
         <div><span class="w-num" id="w-rain">–</span><span class="w-lab">mưa %</span></div>
       </div>
-      <div class="w-range muted" id="w-range">--° - --°</div>
+      <div class="w-fc">
+        <div>
+          <div class="w-fc-row">
+            <span id="w-fc1" class="w-fc-ic">–</span>
+            <span class="w-mm fc"><span id="w-fc1-max" class="w-max">↑ –°</span><span id="w-fc1-min" class="w-min">↓ –°</span></span>
+          </div>
+          <span class="w-fc-lab">Mai</span>
+        </div>
+        <div>
+          <div class="w-fc-row">
+            <span id="w-fc2" class="w-fc-ic">–</span>
+            <span class="w-mm fc"><span id="w-fc2-max" class="w-max">↑ –°</span><span id="w-fc2-min" class="w-min">↓ –°</span></span>
+          </div>
+          <span class="w-fc-lab">Mốt</span>
+        </div>
+      </div>
     </div>
     <div class="card hidden" id="timers-card">
       <h2>Hẹn giờ sắp tới</h2>

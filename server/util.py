@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 def normalize(text: str) -> str:
@@ -18,8 +18,19 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Giờ nhà luôn là GMT+7 bất kể múi giờ của máy (Windows/Docker/VPN đổi múi
+# giờ hệ thống cũng không lệch). Giữ dạng naive để chuỗi ISO trong DB so
+# sánh được với nhau và trình duyệt ở VN parse đúng.
+TZ = timezone(timedelta(hours=7))
+
+
+def now() -> datetime:
+    """Giờ 'tường' của nhà (GMT+7, naive) — mọi tính giờ dùng hàm này."""
+    return datetime.now(TZ).replace(tzinfo=None)
+
+
 def now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return now().isoformat(timespec="seconds")
 
 
 def lan_ip() -> str | None:
@@ -170,13 +181,27 @@ def trailing_number(tokens: list[str]) -> tuple[float, int] | None:
     return (value, i) if value is not None else None
 
 
-def next_hhmm(hour: int, minute: int) -> datetime:
+def next_hhmm(hour: int, minute: int, after: datetime | None = None) -> datetime:
     """The next wall-clock occurrence of hour:minute (today, or tomorrow if passed)."""
-    now = datetime.now()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
+    after = after or now()
+    target = after.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= after:
         target += timedelta(days=1)
     return target
+
+
+def next_repeat(repeat: str, hour: int, minute: int, after: datetime | None = None) -> datetime:
+    """Lần chạy kế tiếp của hẹn giờ lặp: 'daily' hoặc CSV thứ Python (0=T2..6=CN)."""
+    after = after or now()
+    if repeat == "daily":
+        return next_hhmm(hour, minute, after)
+    days = {int(d) for d in repeat.split(",") if d.strip().isdigit()}
+    for add in range(8):  # hôm nay (nếu còn giờ) đến hết tuần sau
+        cand = (after + timedelta(days=add)).replace(
+            hour=hour, minute=minute, second=0, microsecond=0)
+        if cand.weekday() in days and cand > after:
+            return cand
+    return next_hhmm(hour, minute, after)  # fallback không bao giờ tới
 
 
 def hhmm_adjusted(hour: int, minute: int, part_of_day: str | None) -> int:
