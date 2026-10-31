@@ -106,6 +106,7 @@ main {
 /* dòng sạc/xả của ô pin: mũi tên to rõ nghĩa hơn chữ */
 .s-lab#s-batt-sub { font-size: 14px; color: var(--muted); }
 #s-batt-sub .s-arr { width: 17px; height: 17px; vertical-align: -3.5px; color: #9fc1ff; }
+#s-batt-sub .s-bolt { color: #ffc46b; }  /* sét sạc: vàng năng lượng, khác hẳn mũi tên xả */
 #s-batt-sub b { color: inherit; font-weight: 600; }
 /* dự báo ngày mai / mốt: 2 cột icon + min/max; line nhạt chia hôm nay / các ngày sau */
 .w-fc {

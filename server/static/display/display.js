@@ -704,15 +704,16 @@ function renderSolar(so) {
     $("s-batt").textContent = `${so.battery_soc}%`;
     // thanh nạp trong icon pin đầy theo SOC (vùng vẽ trong 4.5..15.5 = 11 đơn vị)
     $("s-batt-fill").setAttribute("width", (11 * Math.min(Math.max(so.battery_soc, 0), 100) / 100).toFixed(1));
-    // công suất pin theo chuẩn BMS: âm = sạc (mũi tên lên), dương = xả (mũi tên xuống)
+    // công suất pin theo chuẩn BMS: âm = sạc (biểu tượng sét - đang nhận năng lượng),
+    // dương = xả (mũi tên lên - điện đang đi ra khỏi pin)
     const pb = so.battery_power || 0;
     const ARR_UP = '<svg class="s-arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
-    const ARR_DN = '<svg class="s-arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>';
+    const BOLT = '<svg class="s-arr s-bolt" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>';
     const w = Math.abs(pb) >= 100 ? Math.round(Math.abs(pb) / 10) * 10 : Math.abs(pb);
     let sub;
     if (Math.abs(pb) < 30) sub = "nghỉ";
-    else if (pb >= 0) sub = `${ARR_DN}<b>${w} W</b>`;   // xả: pin cạn dần
-    else sub = `${ARR_UP}<b>${w} W</b>`;                  // sạc: pin đầy dần
+    else if (pb >= 0) sub = `${ARR_UP}<b>${w} W</b>`;   // xả
+    else sub = `${BOLT}<b>${w} W</b>`;                   // sạc
     $("s-batt-sub").innerHTML = sub;
   }
 }
