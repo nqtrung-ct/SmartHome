@@ -679,11 +679,14 @@ async function doCommand(e, cmd) {
 }
 
 // ---------------------------------------------------------------- solar card
-// 1240W -> "1,24 kW"; 760W -> "760 W"
+// 1240W -> "1,24 kW"; 760W -> "760 W" — đơn vị nhỏ hơn số (cỡ chữ dòng pin)
 function fmtW(w) {
   if (w == null || Number.isNaN(w)) return "–";
-  return w >= 1000 ? `${(w / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} kW`
-                   : `${Math.round(w)} W`;
+  const val = w >= 1000
+    ? (w / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 2 })
+    : `${Math.round(w)}`;
+  const unit = w >= 1000 ? "kW" : "W";
+  return `${val} <span class="s-unit">${unit}</span>`;
 }
 function renderSolar(so) {
   const card = $("solar-card");
@@ -694,8 +697,8 @@ function renderSolar(so) {
   card.classList.remove("hidden");
   // quá 1 tiếng không có số mới -> "–", giống quy tắc cảm biến khác
   const stale = so.updated_at && Date.now() - new Date(so.updated_at) > 3600e3;
-  $("s-load").textContent = stale ? "–" : fmtW(so.load_power);
-  $("s-pv").textContent = stale ? "–" : fmtW(so.pv_power);
+  $("s-load").innerHTML = stale ? "–" : fmtW(so.load_power);
+  $("s-pv").innerHTML = stale ? "–" : fmtW(so.pv_power);
   if (stale || so.battery_soc == null) {
     $("s-batt").textContent = "–";
     $("s-batt-sub").textContent = "";
