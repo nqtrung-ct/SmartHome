@@ -100,7 +100,6 @@ main {
 .s-ic { display: block; color: var(--muted); margin-bottom: 3px; }
 .s-ic svg { vertical-align: middle; }
 .s-num { display: block; font-size: 22px; font-weight: 700; }
-.s-num .s-unit { font-size: 14px; font-weight: 600; }  /* đơn vị kW/W nhỏ như dòng phụ pin */
 .s-pv { color: #ffc46b; }   /* điện mặt trời: cùng vàng ấm của số max nhiệt */
 .s-batt { color: #9fc1ff; } /* pin: cùng xanh của số min nhiệt */
 .s-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }

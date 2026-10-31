@@ -679,14 +679,12 @@ async function doCommand(e, cmd) {
 }
 
 // ---------------------------------------------------------------- solar card
-// 1240W -> "1,24 kW"; 760W -> "760 W" — đơn vị nhỏ hơn số (cỡ chữ dòng pin)
-function fmtW(w) {
-  if (w == null || Number.isNaN(w)) return "–";
-  const val = w >= 1000
-    ? (w / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 2 })
-    : `${Math.round(w)}`;
-  const unit = w >= 1000 ? "kW" : "W";
-  return `${val} <span class="s-unit">${unit}</span>`;
+// 1240 -> ["1,24", "kW"]; 760 -> ["760", "W"] — đơn vị xuống hàng riêng như ô pin
+function fmtWU(w) {
+  if (w == null || Number.isNaN(w)) return ["–", ""];
+  return w >= 1000
+    ? [(w / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 2 }), "kW"]
+    : [`${Math.round(w)}`, "W"];
 }
 function renderSolar(so) {
   const card = $("solar-card");
@@ -697,8 +695,12 @@ function renderSolar(so) {
   card.classList.remove("hidden");
   // quá 1 tiếng không có số mới -> "–", giống quy tắc cảm biến khác
   const stale = so.updated_at && Date.now() - new Date(so.updated_at) > 3600e3;
-  $("s-load").innerHTML = stale ? "–" : fmtW(so.load_power);
-  $("s-pv").innerHTML = stale ? "–" : fmtW(so.pv_power);
+  const [loadVal, loadUnit] = stale ? ["–", ""] : fmtWU(so.load_power);
+  const [pvVal, pvUnit] = stale ? ["–", ""] : fmtWU(so.pv_power);
+  $("s-load").textContent = loadVal;
+  $("s-load-unit").textContent = loadUnit;
+  $("s-pv").textContent = pvVal;
+  $("s-pv-unit").textContent = pvUnit;
   if (stale || so.battery_soc == null) {
     $("s-batt").textContent = "–";
     $("s-batt-sub").textContent = "";
