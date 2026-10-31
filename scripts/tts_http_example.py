@@ -22,6 +22,7 @@ chỉ thay hàm synthesize() bên dưới.
 from __future__ import annotations
 
 import io
+import os
 import sys
 import wave
 from pathlib import Path
@@ -31,6 +32,10 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 app = FastAPI()
+
+# Tốc độ đọc piper: length_scale càng lớn càng chậm (1.0 = gốc).
+# Đổi qua biến môi trường TTS_LENGTH_SCALE rồi khởi động lại sidecar.
+LENGTH_SCALE = float(os.environ.get("TTS_LENGTH_SCALE", "1.15"))
 
 _voice = None  # piper.PiperVoice | None (None = placeholder silence)
 
@@ -54,11 +59,18 @@ def _load_piper():
         return None
 
 
-def synthesize(text: str, sample_rate: int = 22050) -> bytes:
-    """PCM16 mono WAV của câu text."""
+def synthesize(text: str, sample_rate: int = 22050, length_scale: float | None = None) -> bytes:
+    """PCM16 mono WAV của câu text. length_scale càng lớn đọc càng chậm."""
     if _voice is not None:
+        scale = length_scale if length_scale else LENGTH_SCALE
         # piper >= 1.3: synthesize() yields AudioChunk per sentence
-        chunks = _voice.synthesize(text)
+        try:
+            from piper import PiperSynthesisConfig
+
+            opts = PiperSynthesisConfig(length_scale=scale)
+            chunks = _voice.synthesize(text, opts)
+        except (ImportError, TypeError):
+            chunks = _voice.synthesize(text)
         pcm = b"".join(chunk.audio_int16_bytes for chunk in chunks)
         return pcm_to_wav(pcm, _voice.config.sample_rate)
     # placeholder: silence proportional to text length
@@ -78,11 +90,13 @@ def pcm_to_wav(pcm: bytes, sample_rate: int, channels: int = 1) -> bytes:
 
 class TtsRequest(BaseModel):
     text: str
+    length_scale: float | None = None  # None = dùng mặc định LENGTH_SCALE của sidecar
 
 
 @app.post("/tts")
 def tts(req: TtsRequest) -> Response:
-    return Response(content=synthesize(req.text), media_type="audio/wav")
+    scale = req.length_scale if req.length_scale else LENGTH_SCALE
+    return Response(content=synthesize(req.text, length_scale=scale), media_type="audio/wav")
 
 
 if __name__ == "__main__":

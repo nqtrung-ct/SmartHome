@@ -84,17 +84,20 @@ def display(request: Request):
             ent = {
                 "id": e["id"], "name": e["name"], "type": e["entity_type"],
                 "driver": e["driver"], "state": state,
-                # màn hình treo tường chỉ điều khiển thiết bị IR (remote);
-                # Tuya/zigbee hiện trạng thái thôi, bấm không có gì xảy ra
-                "controllable": e["driver"] == "broadlink"
-                                and e["entity_type"] in ("light", "switch", "climate", "fan", "media")
-                                and "readonly" not in dd,
+                # màn hình treo tường chỉ điều khiển thiết bị IR (remote) và TV
+                # Android; Tuya/zigbee hiện trạng thái thôi, bấm không có gì xảy ra
+                "controllable": (e["driver"] == "broadlink"
+                                 and e["entity_type"] in ("light", "switch", "climate", "fan", "media")
+                                 and "readonly" not in dd)
+                                or (e["driver"] == "androidtv" and e["entity_type"] == "media"),
             }
             if e["driver"] == "broadlink" and e["entity_type"] != "climate":
                 # on/off/power = Bật/Tắt lớn, không lặp lại trong nút phụ
                 ent["buttons"] = sorted(
                     k for k in dd.get("codes", {})
                     if k not in ("on", "off", "toggle", "power"))
+            if e["driver"] == "androidtv":
+                ent["buttons"] = ["volume_up", "volume_down", "mute", "home", "back", "pause"]
             if e["entity_type"] == "camera":
                 # góc quay đã lưu (NetSDK PTZ) + tên stream go2rtc (live A/V WebRTC)
                 ent["presets"] = dd.get("presets", [])

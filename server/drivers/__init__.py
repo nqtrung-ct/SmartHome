@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from server.config import Config
 from server.db import Database
+from server.drivers.androidtv import AndroidTVDriver
 from server.drivers.base import Driver
 from server.drivers.broadlink_driver import BroadlinkDriver
+from server.drivers.cozylife import CozyLifeDriver
 from server.drivers.dummy import DummyDriver
 from server.drivers.senergy import SenergyDriver
 from server.drivers.tuya import TuyaDriver
@@ -18,6 +20,8 @@ def load_drivers(cfg: Config, db: Database) -> dict[str, Driver]:
         TuyaDriver.name: TuyaDriver(db),
         ZigbeeDriver.name: ZigbeeDriver(cfg, db),
         SenergyDriver.name: SenergyDriver(),
+        AndroidTVDriver.name: AndroidTVDriver(cfg, db),
+        CozyLifeDriver.name: CozyLifeDriver(db),
     }
     # generic = discovered but unsupported: recordable, not controllable
     generic = DummyDriver()

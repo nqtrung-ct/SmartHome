@@ -27,9 +27,14 @@ class TtsNone:
 class TtsHttp:
     def __init__(self, cfg: Config):
         self.url = cfg.get("tts.http_url", "")
+        # length_scale piper: càng lớn đọc càng chậm (1.0 = tốc gốc)
+        self.length_scale = cfg.get("tts.length_scale")
 
     def synthesize(self, text: str) -> tuple[bytes, int] | None:
-        resp = httpx.post(self.url, json={"text": text}, timeout=60)
+        payload = {"text": text}
+        if self.length_scale:
+            payload["length_scale"] = float(self.length_scale)
+        resp = httpx.post(self.url, json=payload, timeout=60)
         resp.raise_for_status()
         audio = resp.content
         return audio, wav_sample_rate(audio)

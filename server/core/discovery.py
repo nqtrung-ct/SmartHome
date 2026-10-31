@@ -39,6 +39,7 @@ OUI_VENDORS = {
     "A4:CF:12": "Espressif (ESP32)",
     "48:E7:29": "Espressif (ESP32)",
     "7C:DF:A1": "Espressif (ESP32)",
+    "A0:F2:62": "Espressif (ESP32)",  # dongle WiFi của inverter Senergy
     "EC:FA:BC": "Espressif (ESP32)",
     "28:6C:07": "Xiaomi",
     "64:09:80": "Xiaomi",
@@ -55,8 +56,11 @@ NAME_BRANDS = [
     ("broadlink", "Broadlink"),
     ("chromecast", "Google"),
     ("googlecast", "Google"),
+    ("androidtv", "Android TV"),
+    ("google tv", "Google TV"),
     ("tuya", "Tuya/SmartLife"),
     ("smartlife", "Tuya/SmartLife"),
+    ("cozylife", "CozyLife"),
     ("sonoff", "Sonoff"),
     ("ewelink", "Sonoff/eWeLink"),
     ("imou", "Imou"),
@@ -69,6 +73,16 @@ NAME_BRANDS = [
     ("shelly", "Shelly"),
     ("tasmota", "Tasmota"),
     ("esp", "Espressif (ESP)"),
+    # TV Android hay gặp (Chromecast built-in không nói lên hãng — phải đọc XML)
+    ("tcl", "TCL"),
+    ("ffalcon", "TCL (FFalcon)"),
+    ("coocaa", "Coocaa"),
+    ("casper", "Casper"),
+    ("sony", "Sony"),
+    ("hisense", "Hisense"),
+    ("panasonic", "Panasonic"),
+    ("sharp", "Sharp"),
+    ("toshiba", "Toshiba"),
 ]
 
 
@@ -188,6 +202,85 @@ def scan_tuya(db: Database, cfg: Config) -> None:
                 "id": dev_id, "ip": info.get("ip"), "ver": info.get("version"),
                 "product": info.get("product"), "name": info.get("name"),
             },
+        )
+
+
+def scan_cozylife(db: Database, cfg: Config) -> None:
+    """CozyLife (DoiT) WiFi: TCP 5555, không phải Tuya nên scanner tuya không thấy.
+
+    Firmware thật thường KHÔNG trả lời UDP 6095 dù đó là phương thức chính thức
+    (thiết bị cấp nguồn cho PC chỉ nghe TCP) — nên quét 2 lớp: broadcast UDP cho
+    firmware biết trả lời, rồi dò TCP 5555 từng IP và hỏi cmd 0 để lọc CozyLife
+    thật (cổng 5555 cũng là cổng ADB của Android — chúng im lặng với JSON).
+    """
+    from server.drivers.cozylife import cozylife_request
+    from server.util import norm_mac
+
+    found: dict[str, dict] = {}  # did -> msg info
+
+    # 1) UDP broadcast 6095 — chính thức, nhanh, bắt firmware tự báo
+    sn = str(int(time.time() * 1000))
+    payload = json.dumps({"cmd": 0, "pv": 0, "sn": sn, "msg": {}}, separators=(",", ":"))
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        local = lan_ip()
+        sock.bind((local, 0))
+        bcast = local.rsplit(".", 1)[0] + ".255"
+        for _ in range(3):
+            for target in ("255.255.255.255", bcast):
+                sock.sendto(payload.encode(), (target, 6095))
+            time.sleep(0.03)
+        sock.settimeout(1.5)
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            try:
+                data, addr = sock.recvfrom(1024)
+            except socket.timeout:
+                break
+            try:
+                msg = json.loads(data).get("msg") or {}
+            except (ValueError, TypeError):
+                continue
+            if isinstance(msg.get("did"), str) and msg["did"]:
+                msg.setdefault("ip", addr[0])
+                found[msg["did"]] = msg
+    except OSError:
+        pass
+    finally:
+        if sock is not None:
+            sock.close()
+
+    # 2) dò TCP 5555 toàn subnet cho firmware im lặng UDP
+    net = _lan_subnet(cfg)
+    hosts = [str(h) for h in net.hosts()] if net else []
+
+    def probe(ip: str):
+        res = cozylife_request(ip, 0, {}, timeout=2.0)
+        if not res:
+            return None
+        msg = res.get("msg") or {}
+        if isinstance(msg.get("did"), str) and msg["did"]:
+            msg.setdefault("ip", ip)
+            return msg["did"], msg
+        return None
+
+    if hosts:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
+            for hit in pool.map(probe, hosts):
+                if hit:
+                    found.setdefault(hit[0], hit[1])
+
+    for did, msg in found.items():
+        upsert(
+            db, "cozylife", did,
+            ip=msg.get("ip", ""), mac=norm_mac(msg.get("mac", "")),
+            brand="CozyLife", supported=1,
+            name=f"CozyLife {did[-6:]}",
+            raw={"did": did, "ip": msg.get("ip"), "pid": msg.get("pid"),
+                 "dtp": msg.get("dtp"), "mac": msg.get("mac"), "rssi": msg.get("rssi")},
         )
 
 
@@ -377,6 +470,150 @@ def scan_wsdiscovery(db: Database, cfg: Config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Android TV / Google TV (TCL, Sony, Xiaomi...)
+
+
+def _port_open(ip: str, port: int, timeout: float = 0.8) -> bool:
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _cast_desc(ip: str) -> dict:
+    """Tên/mẫu TV từ Cast device-desc.xml — TV tự khai nên chính xác hơn header SSDP."""
+    try:
+        import httpx
+
+        text = httpx.get(f"http://{ip}:8008/ssdp/device-desc.xml", timeout=2.5).text
+    except Exception:
+        return {}
+    import html
+
+    out = {}
+    for field in ("friendlyName", "manufacturer", "modelName"):
+        m = re.search(rf"<{field}>(.*?)</{field}>", text, re.S)
+        if m and m.group(1).strip():
+            out[field] = html.unescape(m.group(1)).strip()
+    return out
+
+
+TV_BRANDS = {
+    "tcl": "TCL", "ffalcon": "TCL (FFalcon)", "coocaa": "Coocaa", "casper": "Casper",
+    "sony": "Sony", "xiaomi": "Xiaomi", "hisense": "Hisense", "panasonic": "Panasonic",
+    "sharp": "Sharp", "toshiba": "Toshiba", "aqua": "Aqua",
+}
+
+
+def _tv_brand(manufacturer: str, model: str) -> str:
+    low = f"{manufacturer} {model}".lower()
+    for needle, brand in TV_BRANDS.items():
+        if needle in low:
+            return brand
+    return ""
+
+
+def scan_androidtv(db: Database, cfg: Config) -> None:
+    """Android TV / Google TV: dịch vụ remote v2 (mDNS + cổng 6466/6467) và Cast.
+
+    Chỉ thấy TV đang bật hoặc standby (WiFi còn sống) — tắt ngắt nguồn là không
+    quảng bá gì cả, quét lại sau khi bật TV. TV có Cast nhưng cổng remote đóng
+    (tắt "Điều khiển từ xa qua mạng" trong Cài đặt TV) vẫn hiện nhưng chưa hỗ trợ.
+    """
+    if not cfg.get("discovery.androidtv", True):
+        return
+    candidates: dict[str, dict] = {}
+
+    # mDNS service chính thức của giao thức Android TV Remote v2
+    try:
+        from zeroconf import ServiceBrowser, Zeroconf
+
+        found: dict[str, dict] = {}
+
+        class L:
+            def add_service(self, zc, type_, name):
+                self._rec(zc, type_, name)
+
+            def update_service(self, zc, type_, name):
+                self._rec(zc, type_, name)
+
+            def remove_service(self, zc, type_, name):
+                pass
+
+            def _rec(self, zc, type_, name):
+                try:
+                    info = zc.get_service_info(type_, name)
+                except Exception:
+                    return
+                if info and info.addresses:
+                    ips = [socket.inet_ntoa(a) for a in info.addresses if len(a) == 4]
+                    if ips:
+                        found[ips[0]] = {"name": name.split(".")[0], "port": info.port}
+
+        zc = Zeroconf()
+        try:
+            ServiceBrowser(zc, "_androidtvremote2._tcp.local.", L())
+            time.sleep(int(cfg.get("discovery.mdns_seconds", 3)))
+        finally:
+            zc.close()
+        for ip, info in found.items():
+            candidates.setdefault(ip, {}).update({"mdns": info})
+    except Exception:
+        pass
+
+    # Cast (SSDP đã quét ở scanner trước): TV Android đều có Chromecast built-in;
+    # kernel "android14-..." trong header là dấu chắc, còn lại đọc XML lấy hãng
+    for row in db.query("SELECT * FROM discovered WHERE method='ssdp' AND ip != ''"):
+        try:
+            raw = json.loads(row["raw"]) if row["raw"] else {}
+        except ValueError:
+            raw = {}
+        server = str(raw.get("server") or "")
+        if "chromecast" not in server.lower() and ":8008" not in str(raw.get("location") or ""):
+            continue
+        cand = candidates.setdefault(row["ip"], {})
+        cand["server"] = server
+        if row["mac"]:
+            cand["mac"] = row["mac"]
+        # đuôi UUID của Cast chính là MAC (uuid:…-eec6531b39d6) — IP đổi vẫn khớp
+        tail = re.search(r"([0-9A-Fa-f]{12})$", raw.get("usn") or "")
+        if tail:
+            h = tail.group(1)
+            cand["mac"] = ":".join(h[i:i + 2] for i in range(0, 12, 2)).upper()
+
+    def probe(ip: str) -> dict:
+        info = dict(candidates[ip])
+        info["remote_port"] = _port_open(ip, 6466) or _port_open(ip, 6467)
+        info.update(_cast_desc(ip))
+        return info
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {ip: pool.submit(probe, ip) for ip in candidates}
+        results = {ip: f.result() for ip, f in futures.items()}
+
+    for ip, info in results.items():
+        brand = _tv_brand(info.get("manufacturer", ""), info.get("modelName", ""))
+        model = (info.get("modelName") or "").lower()
+        # nhận là TV khi: biết hãng TV, kernel android, hoặc model có chữ "tv"
+        is_tv = bool(brand) or "android" in (info.get("server") or "").lower() or bool(re.search(r"\btv\b", model))
+        if not is_tv:
+            continue  # Chromecast thường / loa Google — không phải TV
+        name = info.get("friendlyName") or (f"TV {brand}" if brand else f"TV Android {ip}")
+        mac = info.get("mac", "")
+        upsert(
+            db, "androidtv", mac or f"androidtv:{ip}",
+            ip=ip, mac=mac, name=name, brand=brand or "Android TV",
+            supported=1 if info["remote_port"] else 0,
+            raw={
+                "ip": ip, "manufacturer": info.get("manufacturer", ""),
+                "model": info.get("modelName", ""), "friendly": info.get("friendlyName", ""),
+                "remote_port": info["remote_port"], "mdns": info.get("mdns"),
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # Network scan (ping sweep + ARP + MAC vendor)
 
 
@@ -422,6 +659,22 @@ def _vendor(mac: str) -> str:
     return OUI_VENDORS.get(mac[:8].upper(), "")
 
 
+# thương hiệu theo driver — dùng cho thiết bị ĐÃ thêm mà ping sweep gặp lại
+# (hiện đúng tên/hãng thay vì "Thiết bị IP" + hãng theo OUI đôi khi sai lệch)
+DRIVER_BRANDS = {
+    "senergy": "Senergy",
+    "broadlink": "Broadlink",
+    "tuya": "Tuya",
+    "cozylife": "CozyLife",
+    "zigbee": "Zigbee",
+    "androidtv": "Android TV",
+}
+# driver có thiết bị nằm trên LAN nhưng KHÔNG có scanner riêng (không quảng bá
+# gì ra mạng) — ping sweep nhận nuôi: upsert thành dòng loại riêng thay vì
+# "network" mù mờ, định danh bằng MAC để đổi IP vẫn là một dòng
+SWEEP_ADOPTED_METHODS = {"senergy"}
+
+
 def scan_network(db: Database, cfg: Config) -> None:
     if not cfg.get("discovery.network_scan", True):
         return
@@ -435,15 +688,41 @@ def scan_network(db: Database, cfg: Config) -> None:
             if ok:
                 alive.append(ip)
     arp = _arp_table()
+    from server.util import norm_mac
+
+    adopted = {
+        norm_mac(d["mac"]): d
+        for d in db.query("SELECT id, name, mac, driver FROM devices WHERE mac IS NOT NULL AND mac != ''")
+    }
     for ip in alive:
         mac = arp.get(ip, "")
-        vendor = _vendor(mac)
-        upsert(
-            db, "network", ip,
-            ip=ip, mac=mac, brand=vendor,
-            name=vendor or f"Thiết bị {ip}",
-            supported=0, raw={"ip": ip, "mac": mac},
-        )
+        dev = adopted.get(norm_mac(mac))
+        if dev and dev["driver"] in SWEEP_ADOPTED_METHODS:
+            # inverter v.v.: hiện đúng loại thiết bị, hỗ trợ, tên thật
+            upsert(
+                db, dev["driver"], norm_mac(mac) or ip,
+                ip=ip, mac=mac, name=dev["name"],
+                brand=DRIVER_BRANDS.get(dev["driver"], _vendor(mac)),
+                supported=1, raw={"ip": ip, "mac": mac},
+            )
+        elif dev:
+            # máy đã thêm nhưng scanner riêng của nó không thấy lượt này
+            # (offline): vẫn hiện đúng tên, không rơi về "Thiết bị IP"
+            upsert(
+                db, "network", ip,
+                ip=ip, mac=mac,
+                brand=DRIVER_BRANDS.get(dev["driver"], _vendor(mac)),
+                name=dev["name"], supported=1,
+                raw={"ip": ip, "mac": mac},
+            )
+        else:
+            vendor = _vendor(mac)
+            upsert(
+                db, "network", ip,
+                ip=ip, mac=mac, brand=vendor,
+                name=vendor or f"Thiết bị {ip}",
+                supported=0, raw={"ip": ip, "mac": mac},
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -454,8 +733,10 @@ def run_scan(db: Database, cfg: Config, progress=None) -> list[str]:
     scanners = [
         ("broadlink", scan_broadlink),
         ("tuya", scan_tuya),
+        ("cozylife", scan_cozylife),
         ("mdns", scan_mdns),
         ("ssdp", scan_ssdp),
+        ("androidtv", scan_androidtv),  # sau ssdp: tái dùng dòng Cast SSDP
         ("wsdiscovery", scan_wsdiscovery),
         ("network", scan_network),
     ]
@@ -480,10 +761,26 @@ def _cleanup_network_rows(db: Database) -> None:
     """
     from server.util import norm_mac
 
+    # thiết bị đã xóa nhưng dòng quét còn gắn adopted_device_id cũ (xóa từ trước
+    # khi có _unlink_discovered) → bỏ gắn để tab Quét mạng hết badge "đã thêm"
+    db.execute(
+        """UPDATE discovered SET adopted_device_id=NULL
+           WHERE adopted_device_id IS NOT NULL
+             AND adopted_device_id NOT IN (SELECT id FROM devices)"""
+    )
+    # dòng "network" mù mờ phải nhường chỗ khi một scanner cụ thể đã nhận diện
+    # IP đó (kể cả dòng cũ đã adopt — dòng cụ thể mang đủ thông tin hơn)
     db.execute(
         """DELETE FROM discovered
-           WHERE method='network' AND adopted_device_id IS NULL AND ip != ''
+           WHERE method='network' AND ip != ''
              AND ip IN (SELECT ip FROM discovered WHERE method != 'network' AND ip != '')"""
+    )
+    # TV đã nhận diện qua scanner androidtv thì bỏ các dòng "Chromecast" chung
+    # chung của scanner ssdp (cùng IP) kẻo danh sách hiện trùng hai lần
+    db.execute(
+        """DELETE FROM discovered
+           WHERE method='ssdp' AND adopted_device_id IS NULL AND ip != ''
+             AND ip IN (SELECT ip FROM discovered WHERE method='androidtv')"""
     )
     with db.conn() as c:
         c.execute(

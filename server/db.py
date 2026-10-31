@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS pairing_codes(
   expires_at TEXT NOT NULL,
   used INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS xiaozhi_devices(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT NOT NULL UNIQUE,      -- MAC (header Device-Id của thiết bị)
+  client_id TEXT NOT NULL DEFAULT '',  -- UUID sinh trên thiết bị (header Client-Id)
+  name TEXT NOT NULL DEFAULT '',
+  room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+  token TEXT NOT NULL,
+  approved INTEGER NOT NULL DEFAULT 0,
+  info TEXT NOT NULL DEFAULT '{}',     -- JSON hệ thống thiết bị báo lúc gọi OTA
+  created_at TEXT NOT NULL,
+  last_seen TEXT
+);
 CREATE TABLE IF NOT EXISTS timers(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   target_at TEXT NOT NULL,

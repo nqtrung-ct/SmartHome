@@ -24,3 +24,6 @@ android/captures/
 
 .DS_Store
 Thumbs.db
+
+# vendored xiaozhi-esp32 clone (embedded git repo, >1GB; bản build thật ở F:\esp)
+firmware/xiaozhi-esp32/

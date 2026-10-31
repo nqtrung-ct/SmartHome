@@ -32,6 +32,8 @@ TYPE_ALIASES = {
     "climate": ["điều hòa", "máy lạnh", "dieu hoa", "ac"],
     "switch": ["công tắc"],  # "cầu dao" là alias riêng của thiết bị đo điện
     "fan": ["quạt"],
+    # "tivi/tv" KHÔNG phải type-alias: mọi thực thể media (loa IR...) sẽ cuốn
+    # theo lệnh TV — TV Android có alias riêng "tivi,tv" khi adopt
     "media": ["loa"],
     # sensor chỉ giữ alias đúng với MỌI sensor; "nhiệt độ/độ ẩm" là alias riêng
     # của từng cảm biến — nếu để type-alias thì công tơ điện cũng trúng "nhiệt độ"
@@ -77,12 +79,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "press_button",
-            "description": "Bấm một nút trên thiết bị điều khiển từ xa (VD: tăng/giảm âm lượng loa, mute, cho quạt xoay)",
+            "description": "Bấm một nút trên thiết bị điều khiển từ xa (VD: tăng/giảm âm lượng loa, mute, cho quạt xoay, TV về màn hình chính/quay lại/tạm dừng)",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "entity": {"type": "string"},
-                    "button": {"type": "string", "enum": ["volume_up", "volume_down", "mute", "unmute", "swing_on", "swing_off"]},
+                    "button": {"type": "string", "enum": ["volume_up", "volume_down", "mute", "unmute", "swing_on", "swing_off", "home", "back", "pause"]},
                     "room": {"type": "string"},
                 },
                 "required": ["entity", "button"],
@@ -171,7 +173,9 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_datetime",
-            "description": "Xem giờ hiện tại, thứ/ngày dương lịch, hoặc ngày âm lịch kèm can chi",
+            "description": "CHỈ dùng khi người dùng HỎI xem giờ hiện tại, thứ/ngày dương lịch, "
+                           "hoặc ngày âm lịch (câu phải có từ 'ngày'). KHÔNG dùng cho câu ĐẶT "
+                           "hẹn giờ/báo thức/đặt lịch — đó là set_timer.",
             "parameters": {"type": "object", "properties": {
                 "part": {"type": "string", "enum": ["time", "date", "lunar"],
                          "description": "time=giờ, date=thứ/ngày/tháng, lunar=ngày âm lịch"},
@@ -211,7 +215,9 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_timers",
-            "description": "Liệt kê các hẹn giờ đang chờ (nhắc nhở lẫn hẹn bật/tắt thiết bị)",
+            "description": "Liệt kê các hẹn giờ đang chờ — CHỈ khi người dùng HỎI 'còn hẹn giờ "
+                           "nào không'. Câu 'hẹn giờ/đặt lịch/báo thức + nội dung/giờ' là đặt "
+                           "hẹn mới, dùng set_timer.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -395,6 +401,10 @@ async def _set_stateless_read(db, drivers, entity, device) -> dict:
 
 
 async def _set_state(db, drivers, entity, command, params) -> dict:
+    # chặn tận gốc cho mọi đường (fast-path, LLM tool, climate/fan): controller
+    # và thực thể readonly (cầu dao chính...) không bao giờ bị bật/tắt
+    if entity["entity_type"] == "controller" or loads(entity["driver_data"] or "{}").get("readonly"):
+        raise DriverError(f"{entity['name']} chỉ theo dõi trạng thái, không điều khiển được.")
     device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
     driver = drivers.get(device["driver"])
     if not driver:
@@ -424,8 +434,12 @@ def _entity_room(db: Database, entity) -> int | None:
 
 
 async def act_switch(db, drivers, entity, on: bool, mentioned_room=None) -> dict:
-    if entity["entity_type"] == "controller" or loads(entity["driver_data"]).get("readonly"):
+    if entity["entity_type"] == "controller":
         return {"reply": "Đây là bộ điều khiển hồng ngoại, không bật/tắt trực tiếp được.",
+                "action": {"tool": "switch", "entity": entity["name"], "ok": False}}
+    if loads(entity["driver_data"]).get("readonly"):
+        # cầu dao chính, breaker...: chỉ theo dõi, không bao giờ bật/tắt bằng giọng nói
+        return {"reply": f"{entity['name']} chỉ theo dõi trạng thái, không điều khiển được.",
                 "action": {"tool": "switch", "entity": entity["name"], "ok": False}}
     await _set_state(db, drivers, entity, "on" if on else "off", {})
     verb = "bật" if on else "tắt"
@@ -441,6 +455,9 @@ BUTTON_PHRASES = {
     "unmute": "Đã mở tiếng",
     "swing_on": "Đã bật chế độ xoay",
     "swing_off": "Đã tắt chế độ xoay",
+    "home": "Đã về màn hình chính",
+    "back": "Đã quay lại",
+    "pause": "Đã bấm tạm dừng / phát tiếp",
 }
 
 # lệnh và mã IR khác tên: nút mute là toggle nên "mở tiếng" bấm lại chính nó,
@@ -776,8 +793,11 @@ def weather_day(norm: str) -> int:
 
 def datetime_question(norm: str) -> tuple[bool, bool, bool]:
     """Câu hỏi về giờ / ngày tháng / âm lịch? Trả về (giờ, ngày, âm lịch).
-    "Bao giờ" (= khi nào) không tính — câu đó để LLM trả lời tự do."""
-    lunar = bool(re.search(r"\bam lich\b|\blich am\b|\bmung may\b", norm))
+    "Bao giờ" (= khi nào) không tính — câu đó để LLM trả lời tự do.
+    Âm lịch PHẢI có 'ngày/mùng' trong câu ("âm lịch hôm nay là ngày mấy") kẻo
+    'đặt lịch…' loại câu khác bị hút vào đây."""
+    lunar = bool(re.search(r"\bam lich\b|\blich am\b|\bmung\b", norm)) \
+        and bool(re.search(r"\bngay\b|\bmung\b", norm))
     ask_time = bool(re.search(r"\bmay gio\b|\bgio hien tai\b", norm))
     ask_date = lunar or bool(re.search(
         r"\bthu may\b|\bngay (may|bao nhieu|gi)\b|\bngay thang\b", norm))
@@ -789,6 +809,28 @@ def _timer_intent(norm: str) -> bool:
     'bao giờ' là từ hỏi nên không tính."""
     return bool(re.search(r"\b(nhac|hen)\b", norm)
                 or re.search(r"\bbao\b(?!\s*(nhieu|gio))", norm))
+
+
+def _fix_hen_gio(text: str) -> str:
+    """STT hay nghe 'hẹn' thành 'hiện' ("hãy hẹn giờ 15 phút" -> "hãy hiện
+    giờ 15 phút"). Đổi lại khi câu mang khuôn lệnh hẹn giờ — 'hiện giờ' kèm
+    mốc thời gian hoặc từ hỏi/quản lý hẹn giờ — kẻo phá câu hợp lệ như 'hiện
+    giờ là mấy giờ', 'hiện giờ đèn đang bật không'."""
+    norm = normalize(text)
+    if "hien gio" not in norm:
+        return text
+    if re.search(r"\bmay gio\b|\bbao gio\b|\bgio hien tai\b|\bhien gio la\b", norm):
+        return text  # câu hỏi/khẳng định về thời điểm hiện tại
+    head, _, tail = norm.partition("hien gio")
+    if not (re.search(r"\d", tail)
+            or re.search(r"\b(hay|huy|bo|xoa|doi|di|chuyen|dat|con|da|vua)\b", head)):
+        return text
+    words = text.split()
+    for i, w in enumerate(words[:-1]):
+        if normalize(w).rstrip(".,!?") == "hien" \
+                and normalize(words[i + 1]).rstrip(".,!?") == "gio":
+            words[i] = "hẹn"
+    return " ".join(words)
 
 
 def rain_question(norm: str) -> bool:
@@ -914,7 +956,9 @@ def act_timer(db, room_id, message=None, minutes=None, time_str=None,
 # ---------------------------------------------------------------------------
 # Hẹn giờ: parse giờ/lặp/ngày + liệt kê / hủy (xác nhận) / dời
 
-_WD_ALT = r"thu\s*(?:hai|ba|tu|nam|sau|bay|[2-8])|chu\s*nhat|\bcn\b"
+# 'bay' PHẢI đứng trước 'ba': regex alternation lấy nhánh đầu tiên khớp,
+# để 'ba' trước thì "thứ bay" bị cắt thành "thứ ba" (đã trả giá)
+_WD_ALT = r"thu\s*(?:hai|bay|ba|tu|nam|sau|[2-8])|chu\s*nhat|\bcn\b"
 
 
 def _wd_value(text: str) -> int | None:
@@ -964,9 +1008,23 @@ def _parse_when(norm: str):
     return repeat, day_offset, weekday
 
 
+# số bằng chữ thường đi kèm giờ ("lúc sáu giờ", "sáu giờ sáng") — dùng cho cả
+# _clock_from_norm lẫn lọc từ rác trong lời nhắc
+_NUM_WORDS = {
+    "mot": 1, "hai": 2, "ba": 3, "bon": 4, "nam": 5, "sau": 6, "bay": 7,
+    "tam": 8, "chin": 9, "muoi": 10, "muoi mot": 11, "muoi hai": 12,
+}
+_NUM_ALT = "|".join(_NUM_WORDS)
+
+
+def _num_word(s: str) -> int | None:
+    """'sáu' -> 6, 'muoi hai' -> 12; None nếu không phải số bằng chữ."""
+    return _NUM_WORDS.get(s.strip())
+
+
 def _clock_from_norm(norm: str):
     """Giờ trong câu: '15:30', '3 giờ chiều', '3 giờ rưỡi', '6 giờ 30 phút',
-    'tới 1 giờ'. Trả về (hour, minute) hoặc None."""
+    'tới 1 giờ', 'lúc sáu giờ', 'sáu giờ sáng mai'. Trả về (hour, minute) hoặc None."""
     hhmm = re.search(r"\b(\d{1,2}):(\d{2})\b", norm)
     if hhmm:
         hour, minute = int(hhmm.group(1)), int(hhmm.group(2))
@@ -980,15 +1038,18 @@ def _clock_from_norm(norm: str):
     if m and m.group(2):
         hour, minute = int(m.group(1)), min(int(m.group(2)), 59)
         return hhmm_adjusted(hour, minute, m.group(3)), minute
-    m = re.search(r"\b(\d{1,2})\s*gio\s*(?:chieu|toi|sang|dem)\b", norm)
+    # "6 giờ sáng/tối" hoặc "sáu giờ sáng" (số bằng chữ)
+    m = re.search(rf"\b(\d{{1,2}}|{_NUM_ALT})\s*gio\s*(?:\b(chieu|toi|sang|dem)\b)", norm)
     if m:
-        part = m.group(0).split()[-1]
-        return hhmm_adjusted(int(m.group(1)), 0, part), 0
-    # "tới/về 1 giờ" (không kèm sáng/chiều): giờ tuyệt đối — phân biệt với
-    # "thêm 1 giờ" (khoảng thời gian) bằng từ đi trước
-    m = re.search(r"\b(?:toi|ve|vao|luc)\s+(\d{1,2})\s*gio\b", norm)
+        part = m.group(2)
+        hour = int(m.group(1)) if m.group(1).isdigit() else _num_word(m.group(1))
+        return hhmm_adjusted(hour, 0, part), 0
+    # "tới/về/vào/lúc 1 giờ" hoặc "lúc sáu giờ" (không kèm sáng/chiều): giờ tuyệt
+    # đối — phân biệt với "thêm 1 giờ" (khoảng thời gian) bằng từ đi trước
+    m = re.search(rf"\b(?:toi|ve|vao|luc)\s+(\d{{1,2}}|{_NUM_ALT})\s*gio\b", norm)
     if m:
-        return int(m.group(1)) % 24, 0
+        hour = int(m.group(1)) if m.group(1).isdigit() else _num_word(m.group(1))
+        return hour % 24, 0
     return None
 
 
@@ -1008,7 +1069,7 @@ def _strip_when(text: str) -> str:
     for tok in text.split():
         n = normalize(tok)
         if n in _WHEN_DROP or n.isdigit() or re.fullmatch(r"\d{1,2}:\d{2}", n) \
-                or _wd_value(n) is not None:
+                or _wd_value(n) is not None or _num_word(n) is not None:
             continue
         keep.append(tok)
     return " ".join(keep).strip()
@@ -1017,6 +1078,8 @@ def _strip_when(text: str) -> str:
 def _timer_message(raw: str) -> str:
     """Lời nhắc = phần sau 'nhắc/hẹn/báo [tôi]', bỏ từ chỉ giờ; không có từ
     đó thì lấy cả câu bỏ từ chỉ giờ."""
+    if "bao thuc" in normalize(raw):
+        return "báo thức"  # tách theo 'báo' sẽ chỉ còn 'thức'
     parts = re.split(r"(?:nhắc|hẹn|báo)\s*(?:tôi|em|mình|tui)?", raw, flags=re.I)
     tail = parts[-1].strip() if len(parts) > 1 else raw
     if not tail:
@@ -1098,6 +1161,15 @@ def _confirm_answer(norm: str) -> str | None:
     return None
 
 
+def awaiting_confirmation(room_id) -> bool:
+    """Phòng này có lời xác nhận hủy hẹn giờ đang chờ không?
+
+    Gateway thoại dùng để bỏ qua bộ lọc câu rác: khi chờ "có/không",
+    câu trả lời rất ngắn ('có', 'ok', 'ừ') là hợp lệ, không phải nhiễu."""
+    pending = _PENDING_CANCEL.get(room_id if room_id is not None else 0)
+    return bool(pending and now() <= pending["expires"])
+
+
 # từ đệm của câu quản lý hẹn giờ (từ lệnh + từ chỉ thời gian) — bỏ đi rồi
 # phần còn lại mới khớp với lời nhắc đã lưu
 _TIMER_STOP = {
@@ -1136,8 +1208,18 @@ def act_cancel_timer(db, room_id, query: str = "") -> dict:
         matches = list(rows) if len(rows) == 1 else []
     if not matches:
         if not words and len(rows) > 1:
-            return {"reply": "Bạn muốn hủy hẹn giờ nào? " + _timers_brief(rows),
-                    "action": {"tool": "cancel_timer", "ok": False}}
+            # lưu trạng thái chờ để lời đáp "có" (= hủy hết) hoặc nêu tên
+            # cái cần hủy không rơi sang LLM như câu nói thường
+            key = room_id if room_id is not None else 0
+            _PENDING_CANCEL[key] = {
+                "ids": [t["id"] for t in rows], "label": f"tất cả {len(rows)} hẹn giờ",
+                "expires": now() + timedelta(seconds=60),
+            }
+            return {
+                "reply": f"Mình có {len(rows)} hẹn giờ: {_timers_brief(rows)}. "
+                         "Nói 'có' nếu hủy hết, hoặc nêu rõ cái cần hủy.",
+                "action": {"tool": "cancel_timer", "ok": False, "choosing": True},
+            }
         return {"reply": "Mình không tìm thấy hẹn giờ nào như vậy.",
                 "action": {"tool": "cancel_timer", "ok": False}}
     if len(matches) > 1 and not want_all:
@@ -1298,8 +1380,21 @@ def _parse_timer(norm: str, raw: str) -> dict:
     for i, tok in enumerate(tokens):
         if tok in ("phut", "gio", "tieng") or tok.startswith("gio:"):
             got = trailing_number(tokens[:i])
+            if not got and i > 0 and tokens[i - 1].isdigit():
+                # "sau 20 phút": 'sau' (sáu=6) bị nuốt thành số ghép rồi fail —
+                # thử lại chỉ với token số ngay trước
+                got = (float(tokens[i - 1]), i - 1)
             if not got:
                 continue
+            # Câu nêu NGÀY (mai/mỗi ngày/thứ N) mà kèm số giờ -> đó là giờ tuyệt
+            # đối ("vào sáng mai lúc sáu giờ", "mỗi ngày 6 giờ"), không phải
+            # "cộng thêm N tiếng" — trả giá vì "hẹn 6 giờ sáng mai" bị cộng 6 tiếng.
+            repeat, day_offset, weekday = _parse_when(norm)
+            if tok != "phut" and (repeat or day_offset or weekday is not None) \
+                    and 0 < got[0] <= 23:
+                return {"minutes": None, "time_str": f"{int(got[0]):02d}:00",
+                        "message": _timer_message(raw), "repeat": repeat,
+                        "day_offset": day_offset, "weekday": weekday}
             minutes = got[0] if tok == "phut" else got[0] * 60
             return {"minutes": minutes, "time_str": None, "message": _timer_message(raw),
                     "repeat": "", "day_offset": None, "weekday": None}
@@ -1318,6 +1413,71 @@ def _duration_minutes(norm: str):
             if got:
                 return got[0] if tok == "phut" else got[0] * 60
     return None
+
+
+# app mở được trên TV Android ("mở YouTube trên TV") — package Android
+TV_APPS = {
+    "youtube": ("YouTube", "com.google.android.youtube.tv"),
+    "netflix": ("Netflix", "com.netflix.ninja"),
+    "spotify": ("Spotify", "com.spotify.tv.android"),
+}
+
+
+def _tv_app(norm: str) -> str | None:
+    """Câu này muốn mở app nào trên TV? ("mở YouTube trên tivi")"""
+    for app in TV_APPS:
+        if re.search(rf"\b{app}\b", norm):
+            return app
+    return None
+
+
+async def act_tv_app(db, drivers, entity, app: str, mentioned_room=None) -> dict:
+    label, pkg = TV_APPS[app]
+    await _set_state(db, drivers, entity, "set", {"app": pkg})
+    where = _room_where(db, _entity_room(db, entity), mentioned_room)
+    return {"reply": f"Đã mở {label} trên {entity['name'].lower()}{where}.",
+            "action": {"tool": "tv_app", "entity": entity["name"], "app": app, "ok": True}}
+
+
+def _tv_nav_button(norm: str) -> str | None:
+    """Lệnh điều hướng/phát-nghỉ của TV ("tivi về màn hình chính", "quay lại tv",
+    "tạm dừng tivi"). Câu PHẢI nhắc TV — "quay lại" hay "tạm dừng" trần không
+    phải là lệnh TV (thường là nói chuyện với người)."""
+    if not re.search(r"\b(tv|tivi)\b", norm):
+        return None
+    if re.search(r"man hinh chinh|ve home|\bhome\b", norm):
+        return "home"
+    if re.search(r"quay lai|lui lai|tro lai|\bback\b", norm):
+        return "back"
+    if re.search(r"tam dung|dung lai|tiep tuc|phat tiep", norm):
+        return "pause"
+    return None
+
+
+def tv_status_question(norm: str) -> bool:
+    """"TV đang xem gì / tivi đang mở gì / tv đang bật không?"."""
+    return bool(re.search(r"\b(tv|tivi)\b", norm) and re.search(r"\bdang\b", norm)
+                and re.search(r"\b(xem|mo|bat|chay|nghe|gi|khong)\b", norm))
+
+
+async def act_tv_status(db, drivers, entity, mentioned_room=None) -> dict:
+    """Đọc trạng thái TV realtime (đang bật, app nào, âm lượng) qua kết nối dài hạn."""
+    device = db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
+    state = await _set_stateless_read(db, drivers, entity, device)
+    where = _room_where(db, _entity_room(db, entity), mentioned_room)
+    if state.get("state") != "on":
+        return {"reply": f"{entity['name']}{where} đang tắt.",
+                "action": {"tool": "tv_status", "entity": entity["name"], "ok": True}}
+    bits = []
+    if state.get("app"):
+        bits.append(f"đang xem {state['app']}")
+    if state.get("volume") is not None:
+        bits.append(f"âm lượng {state['volume']}")
+        if state.get("muted"):
+            bits.append("đang tắt tiếng")
+    body = ", ".join(bits) or "không lấy được thông tin"
+    return {"reply": f"{entity['name']}{where} đang bật — {body}.",
+            "action": {"tool": "tv_status", "entity": entity["name"], "ok": True}}
 
 
 def volume_button(norm: str) -> str | None:
@@ -1339,16 +1499,19 @@ def volume_button(norm: str) -> str | None:
 
 def act_list_active(db: Database, room_id=None, mentioned_room=None) -> dict:
     """"Cái gì đang bật?" — chỉ liệt kê thiết bị có phản hồi trạng thái thật;
-    thiết bị IR (broadlink) không biết mình bật/tắt nên không bao giờ xuất hiện."""
+    thiết bị IR (broadlink) không biết mình bật/tắt nên không bao giờ xuất hiện.
+    Thực thể readonly (cầu dao chính, hub...) luôn on nên cũng bỏ ra khỏi danh sách."""
     rooms = {r["id"]: r["name"] for r in db.query("SELECT id, name FROM rooms")}
     rows = db.query(
-        """SELECT e.name, e.room_id, e.state, d.room_id AS device_room
+        """SELECT e.name, e.room_id, e.state, e.driver_data, d.room_id AS device_room
            FROM entities e JOIN devices d ON d.id=e.device_id
            WHERE e.entity_type IN ('light','switch','climate','fan','media')
              AND d.driver!='broadlink'"""
     )
     on = []
     for e in rows:
+        if loads(e["driver_data"] or "{}").get("readonly"):
+            continue
         try:
             state = json.loads(e["state"] or "{}")
         except ValueError:
@@ -1443,6 +1606,12 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
                              minutes=parsed["minutes"], time_str=parsed["time_str"],
                              repeat=parsed["repeat"], day_offset=parsed["day_offset"],
                              weekday=parsed["weekday"], action=action)
+        # "đặt lịch/báo thức" không nêu giờ (STT cũng hay nghe 'hẹn' thành
+        # 'hiện') — hỏi lại giờ thay vì để LLM trả lời giờ hiện tại/âm lịch
+        if re.search(r"\bbao thuc\b|\bdat (lich|bao)\b|\bhen gio bao\b", norm) \
+                and not (has_on or has_off):
+            return {"reply": "Bạn muốn mình đặt báo thức mấy giờ nhỉ?",
+                    "action": {"tool": "set_timer", "ok": False, "pending": "alarm"}}
 
     # weather (rain questions included: "ngày mai có mưa không") — single-intent
     # only, multi-part sentences go to the LLM so no half gets dropped
@@ -1491,6 +1660,14 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         return {"reply": "Mình không tìm thấy camera nào.",
                 "action": {"tool": "camera_preset", "ok": False}}
 
+    # hỏi trạng thái TV ("TV đang xem gì", "tivi đang bật không") — đặt TRƯỚC
+    # nhánh liệt kê "cái gì đang bật" kẻo "TV đang bật gì" bị nuốt thành danh sách
+    if not multi_intent and tv_status_question(norm):
+        entity = resolve_entity(db, norm, room_id, "media") or resolve_entity(db, "tv", room_id, "media")
+        if entity and entity["entity_type"] == "media":
+            return await act_tv_status(db, drivers, entity,
+                                       mentioned_room=_room_from_text(db, norm))
+
     # "cái gì đang bật?" — câu hỏi liệt kê, đặt TRƯỚC nhánh on/off vì chứa từ "bật";
     # thiết bị IR không có trạng thái thật nên act_list_active tự loại khỏi danh sách
     if re.search(r"\b(dang bat|dang mo|dang chay)\b", norm) and re.search(r"\b(gi|nao)\b", norm):
@@ -1504,6 +1681,23 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         entity = resolve_entity(db, norm, room_id) or resolve_entity(db, "loa", room_id)
         if entity:
             return await act_button(db, drivers, entity, vol,
+                                    mentioned_room=_room_from_text(db, norm))
+
+    # mở app trên TV Android ("mở YouTube trên TV"): đặt TRƯỚC nhánh on/off vì
+    # "mở" cũng là động từ bật — câu nhắc tên app là muốn mở app, không bật nguồn
+    tv_app = _tv_app(norm)
+    if tv_app:
+        entity = resolve_entity(db, norm, room_id, "media") or resolve_entity(db, "tv", room_id, "media")
+        if entity:
+            return await act_tv_app(db, drivers, entity, tv_app,
+                                    mentioned_room=_room_from_text(db, norm))
+
+    # điều hướng TV ("tivi về màn hình chính", "quay lại tv", "tạm dừng tivi")
+    tv_nav = _tv_nav_button(norm)
+    if tv_nav:
+        entity = resolve_entity(db, norm, room_id, "media") or resolve_entity(db, "tv", room_id, "media")
+        if entity:
+            return await act_button(db, drivers, entity, tv_nav,
                                     mentioned_room=_room_from_text(db, norm))
 
     # quạt xoay/cố định: nút swing là toggle — "cho quạt xoay", "quạt cố định";
@@ -1836,6 +2030,16 @@ async def handle_command(db: Database, drivers, cfg: Config, weather, text: str,
     text = text.strip()
     if not text:
         return {"reply": "Mình không nghe thấy gì cả.", "actions": [], "engine": "none"}
+
+    # từ chối an toàn: câu kết thúc bằng "hủy lệnh" -> không thực hiện gì cả
+    # (nói ngay khi trợ lý đang hiểu nhầm, trước khi nó kịp chạy)
+    if normalize(text).rstrip(" .,!?").endswith("huy lenh"):
+        return {"reply": "Ok, mình hủy lệnh vừa rồi.",
+                "actions": [{"tool": "abort", "ok": True}], "engine": "fast"}
+
+    # STT nghe 'hẹn' thành 'hiện' ("hãy hẹn giờ 15 phút" -> "hãy hiện giờ") —
+    # sửa lại cho fast-path lẫn LLM trước khi xử lý
+    text = _fix_hen_gio(text)
 
     # lời đáp xác nhận hủy hẹn giờ đang chờ (theo phòng; hết hạn hoặc câu
     # chuyện khác = tự bỏ, câu mới xử lý bình thường)

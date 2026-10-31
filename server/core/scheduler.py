@@ -236,6 +236,41 @@ async def _poll_cameras(app) -> None:
         )
 
 
+async def _poll_cozylife(app) -> None:
+    """Cập nhật trạng thái công tắc CozyLife (TCP 5555, query chỉ đọc).
+
+    Thiết bị mất nguồn thì không trả lời — công tắc ghi 'off' (không có điện
+    thì chẳng thể bật); sensor đo điện giữ số cũ, không ghi đè giá trị rỗng.
+    """
+    driver = app.state.drivers.get("cozylife")
+    if not driver:
+        return
+    db: Database = app.state.db
+    rows = db.query(
+        """SELECT e.id AS eid, e.entity_type AS etype, e.driver_data, d.id AS did, d.host, d.extra
+           FROM entities e JOIN devices d ON d.id = e.device_id
+           WHERE d.driver='cozylife'"""
+    )
+    for row in rows:
+        entity = {"id": row["eid"], "driver_data": row["driver_data"]}
+        device = {"id": row["did"], "host": row["host"], "extra": row["extra"]}
+        try:
+            state = await asyncio.to_thread(driver.get_state, entity, device)
+        except Exception:
+            if row["etype"] == "switch":
+                db.execute(
+                    "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+                    ('{"state": "off"}', now_iso(), row["eid"]),
+                )
+            continue
+        if not any(v is not None for v in state.values()):
+            continue  # có trả lời nhưng rỗng — giữ số cũ
+        db.execute(
+            "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+            (json.dumps(state, ensure_ascii=False), now_iso(), row["eid"]),
+        )
+
+
 async def scheduler_loop(app) -> None:
     db: Database = app.state.db
     from server.db import cleanup_old_rows
@@ -245,6 +280,7 @@ async def scheduler_loop(app) -> None:
     last_cloud_poll = 0.0
     last_camera_poll = 0.0
     last_solar_poll = 0.0
+    last_cozylife_poll = 0.0
     while True:
         try:
             today = now_iso()[:10]
@@ -296,6 +332,9 @@ async def scheduler_loop(app) -> None:
             if time.time() - last_solar_poll >= int(app.state.cfg.get("solar.poll_seconds", 180)):
                 last_solar_poll = time.time()
                 await _poll_solar(app)
+            if time.time() - last_cozylife_poll >= int(app.state.cfg.get("cozylife.poll_seconds", 60)):
+                last_cozylife_poll = time.time()
+                await _poll_cozylife(app)
         except asyncio.CancelledError:
             return
         except Exception as exc:

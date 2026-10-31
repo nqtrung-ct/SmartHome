@@ -114,6 +114,24 @@ async def adopt(request: Request, discovered_id: int, body: AdoptIn, _: None = D
         driver_name = "onvif"
         name = body.name or row["name"] or f"Camera {row['ip']}"
         extra = {"endpoint": raw.get("endpoint", "")}
+    elif method == "androidtv":
+        # TV Android/Google TV: thêm vào xong phải pair 1 lần (TV hiện mã 6 số)
+        # trong tab Thiết bị — TV phải đang bật
+        driver_name = "androidtv"
+        name = body.name or row["name"] or f"TV {row['ip']}"
+        extra = {}
+    elif method == "cozylife":
+        # CozyLife (DoiT): local TCP 5555, không cần key. Mặc định readonly
+        # (chỉ xem bật/tắt) — công tắc loại này hay cấp nguồn cho thiết bị khác
+        driver_name = "cozylife"
+        name = body.name or row["name"] or f"CozyLife {row['ip']}"
+        extra = {"did": row["ident"], "pid": raw.get("pid", ""), "dtp": raw.get("dtp", "")}
+    elif method == "senergy":
+        # inverter Senergy: đọc số liệu qua Modbus TCP (cổng 502), không cần
+        # phòng — thực thể là cảm biến "Điện mặt trời"
+        driver_name = "senergy"
+        name = body.name or row["name"] or "Inverter Senergy"
+        extra = {}
     elif body.force:
         driver_name = "generic"
         name = body.name or row["name"] or f"Thiết bị {row['ip']}"

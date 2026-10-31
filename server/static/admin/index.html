@@ -27,13 +27,16 @@
       <select id="m-driver">
         <option value="broadlink">Điều khiển (Broadlink hồng ngoại — thêm được thực thể, học mã IR)</option>
         <option value="tuya">Tuya WiFi</option>
+        <option value="cozylife">CozyLife WiFi</option>
         <option value="zigbee">Zigbee (đã pair trong Zigbee2MQTT)</option>
         <option value="onvif">Camera (ONVIF/RTSP)</option>
+        <option value="androidtv">TV Android / Google TV (TCL, Sony, Xiaomi...)</option>
+        <option value="senergy">Inverter điện mặt trời (Senergy — Modbus TCP)</option>
         <option value="generic">Khác (chỉ ghi nhận)</option>
         <option value="dummy">Ảo (test không cần phần cứng)</option>
       </select>
     </label>
-    <label class="driver-field df-broadlink df-tuya df-onvif">Địa chỉ IP *
+    <label class="driver-field df-broadlink df-tuya df-cozylife df-onvif df-androidtv df-senergy">Địa chỉ IP *
       <input id="m-host" placeholder="192.168.1.50">
     </label>
     <label class="driver-field df-broadlink">MAC (để trống = tự dò qua IP)
@@ -85,6 +88,31 @@
   </div>
 </div>
 
+<div id="tv-modal" class="overlay hidden">
+  <div class="card modal-card">
+    <h2>📺 Điều khiển TV</h2>
+    <div id="tv-status" class="small" style="margin-bottom:10px">Đang tải…</div>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
+      <button class="small-btn" onclick="tvCmd('on')">⏻ Bật</button>
+      <button class="small-btn" onclick="tvCmd('mute')">🔇 Tắt tiếng</button>
+      <button class="small-btn" onclick="tvCmd('off')">⏻ Tắt</button>
+      <button class="small-btn" onclick="tvCmd('volume_up')">🔊 +</button>
+      <button class="small-btn" onclick="tvCmd('home')">🏠 Màn hình chính</button>
+      <button class="small-btn" onclick="tvCmd('volume_down')">🔉 −</button>
+      <button class="small-btn" onclick="tvCmd('back')">◀ Quay lại</button>
+      <button class="small-btn" onclick="tvCmd('pause')">⏯ Tạm dừng</button>
+    </div>
+    <div class="row" style="gap:8px">
+      <button class="small-btn" onclick="tvApp('youtube')">▶ YouTube</button>
+      <button class="small-btn" onclick="tvApp('netflix')">▶ Netflix</button>
+      <button class="small-btn" onclick="tvApp('spotify')">▶ Spotify</button>
+    </div>
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button id="tv-close">Đóng</button>
+    </div>
+  </div>
+</div>
+
 <div id="edit-modal" class="overlay hidden">
   <div class="card modal-card">
     <h2 id="e-title">✏️ Sửa thiết bị</h2>
@@ -98,6 +126,16 @@
       <select id="e-room"></select>
     </label>
     <div id="e-hw" class="small muted" style="margin:4px 0 10px"></div>
+    <div id="e-pair-wrap" class="hidden">
+      <h3 style="margin:10px 0 6px">🔗 Ghép nối TV (làm 1 lần)</h3>
+      <div id="e-pair-status" class="small" style="margin-bottom:8px">Đang kiểm tra…</div>
+      <div class="row">
+        <button class="small-btn" id="e-pair-start">Bắt đầu ghép nối</button>
+        <input id="e-pair-code" placeholder="Mã 6 số trên TV" inputmode="numeric" maxlength="10" style="width:130px">
+        <button class="primary small-btn" id="e-pair-finish">✓ Hoàn tất</button>
+      </div>
+      <p class="small muted" style="margin-top:6px">TV phải đang bật. Bấm "Bắt đầu ghép nối" — TV hiện mã 6 số, nhập mã rồi bấm "✓ Hoàn tất".</p>
+    </div>
     <div id="e-children-wrap" class="hidden">
       <h3 style="margin:10px 0 6px">Thiết bị con (điều khiển qua hồng ngoại)</h3>
       <div id="e-children"></div>

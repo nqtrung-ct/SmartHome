@@ -183,7 +183,7 @@ function safeJson(s) { try { return JSON.parse(s || "{}"); } catch { return {}; 
 function typeVi(t) {
   return {
     switch: "công tắc", light: "đèn", climate: "điều hòa",
-    fan: "quạt", media: "loa",
+    fan: "quạt", media: "TV/loa",
     sensor: "cảm biến", camera: "camera", controller: "điều khiển",
   }[t] || t;
 }
@@ -300,6 +300,9 @@ const dot = (ok, okText, badText) =>
 
 async function renderAssistant() {
   const el = $("#tab-assistant");
+  // trạng thái phải probe Ollama (đến 5s khi Ollama tắt) — hiện chỗ này ngay
+  // kẻo tab trắng trơn trông như hỏng
+  el.innerHTML = `<div class="card muted">Đang tải trạng thái trợ lý…</div>`;
   const st = await api("/assistant/status").catch(() => null);
   if (!st) { el.innerHTML = `<div class="card muted">Không tải được trạng thái trợ lý.</div>`; return; }
 
@@ -447,8 +450,70 @@ function renderPtzList(presets) {
     : `<p class="muted small">Chưa có góc nào. Xoay camera tới vị trí mong muốn (app Imou) rồi bấm "Lưu góc hiện tại".</p>`;
 }
 
+// --- điều khiển TV Android (remote trong modal) ---
+let tvEntityId = null;
+let tvTimer = null;
+let tvBusy = false;
+
+window.openTvModal = (id) => {
+  tvEntityId = id;
+  $("#tv-modal").classList.remove("hidden");
+  tvRefresh();
+  clearInterval(tvTimer);
+  tvTimer = setInterval(tvRefresh, 5000);  // driver đẩy trạng thái realtime — poll nhẹ
+};
+
+$("#tv-close").onclick = () => {
+  $("#tv-modal").classList.add("hidden");
+  clearInterval(tvTimer);
+};
+
+async function tvRefresh() {
+  if (tvBusy) return;
+  tvBusy = true;
+  const el = $("#tv-status");
+  try {
+    const res = await api(`/entities/${tvEntityId}/state`);
+    const s = res.state || {};
+    if (s.state !== "on") {
+      el.innerHTML = `<span class="badge off">đang tắt</span> <span class="small muted">bấm "Bật" — TV mất vài giây để khởi động</span>`;
+    } else {
+      const bits = [
+        s.app ? `📺 ${esc(s.app)}` : "",
+        s.volume != null ? `🔊 ${s.volume}` : "",
+        s.muted ? "🔇 đang tắt tiếng" : "",
+      ].filter(Boolean).join(" · ");
+      el.innerHTML = `<span class="badge on">đang bật</span> <span class="small">${bits}</span>`;
+    }
+  } catch (e) {
+    el.innerHTML = `<span class="badge off">không thấy TV</span> <span class="small muted">${esc(e.message || "")}</span>`;
+  } finally {
+    tvBusy = false;
+  }
+}
+
+async function tvCmd(command) {
+  try {
+    await api(`/entities/${tvEntityId}/command`, { method: "POST", body: JSON.stringify({ command }) });
+  } catch (e) { toast("❌ " + (e.message || "Lỗi")); }
+  setTimeout(tvRefresh, 1500);  // đợi TV áp dụng rồi đọc lại trạng thái
+}
+
+async function tvApp(app) {
+  const pkg = {
+    youtube: "com.google.android.youtube.tv",
+    netflix: "com.netflix.ninja",
+    spotify: "com.spotify.tv.android",
+  }[app];
+  try {
+    await api(`/entities/${tvEntityId}/command`, { method: "POST", body: JSON.stringify({ command: "set", params: { app: pkg } }) });
+  } catch (e) { toast("❌ " + (e.message || "Lỗi")); }
+  setTimeout(tvRefresh, 2500);
+}
+
 async function renderDevices() {
   const el = $("#tab-devices");
+  el.innerHTML = `<div class="card muted">Đang tải thiết bị…</div>`;
   const [devices, rooms] = await Promise.all([api("/devices"), api("/rooms"), loadFloors()]);
   devicesCache = devices;
   roomsCache = rooms;
@@ -488,6 +553,8 @@ async function renderDevices() {
       ? ` · <b>${meter}</b>` : "";
     const ptzBtn = e.entity_type === "camera"
       ? `<button class="small-btn" onclick="openPtzModal(${e.id})" title="Góc quay camera">🎯</button>` : "";
+    const tvBtn = d.driver === "androidtv"
+      ? `<button class="small-btn" onclick="openTvModal(${e.id})" title="Điều khiển TV">📺</button>` : "";
     return `<div class="entity">
         <div style="flex:1;min-width:0">
           <div class="name">${esc(e.name)} <span class="badge">${typeVi(e.entity_type)}</span></div>
@@ -495,6 +562,7 @@ async function renderDevices() {
         </div>
         <div class="row">
           ${ptzBtn}
+          ${tvBtn}
           <button class="small-btn" onclick="openEditModal(${e.id})" title="Sửa tên, phòng, thiết bị con">✏️</button>
           <button class="small-btn danger" onclick="delEntity(${e.id})">✕</button>
         </div>
@@ -592,7 +660,7 @@ $("#m-save").onclick = async () => {
   const driver = $("#m-driver").value;
   const host = $("#m-host").value.trim();
   if (!name) { err.textContent = "Nhập tên thiết bị"; return; }
-  if ((driver === "broadlink" || driver === "tuya" || driver === "onvif") && !host) {
+  if ((driver === "broadlink" || driver === "tuya" || driver === "cozylife" || driver === "onvif" || driver === "androidtv" || driver === "senergy") && !host) {
     err.textContent = "Thiết bị loại này cần địa chỉ IP"; return;
   }
   try {
@@ -661,6 +729,12 @@ window.openEditModal = (entityId) => {
   $("#e-name").value = e.name;
   $("#e-alias").value = e.aliases || "";
   $("#e-hw").textContent = `Thiết bị gốc: ${d.name}${d.host ? " · " + d.host : ""}`;
+  // TV Android: hiện khu ghép nối (pair 1 lần, TV phải đang bật)
+  $("#e-pair-wrap").classList.toggle("hidden", d.driver !== "androidtv");
+  if (d.driver === "androidtv") {
+    $("#e-pair-code").value = "";
+    refreshPairStatus(d.id);
+  }
   // hiện phòng hiệu dụng (phòng riêng nếu có, không thì phòng thiết bị gốc);
   // chọn "— theo thiết bị gốc —" để quay lại kế thừa
   const effRoom = e.room_id ?? d.room_id ?? null;
@@ -688,6 +762,54 @@ $("#e-add-child").onclick = () => {
   const empty = $("#e-children .small.muted");
   if (empty) empty.remove();
   $("#e-children").insertAdjacentHTML("beforeend", childRow(null));
+};
+
+// --- ghép nối TV Android (modal sửa thiết bị) ---
+async function refreshPairStatus(deviceId) {
+  const el = $("#e-pair-status");
+  if (!el) return;
+  el.textContent = "Đang kiểm tra…";
+  try {
+    const st = await api(`/devices/${deviceId}/pair`);
+    el.innerHTML = st.connected
+      ? `<span class="badge on">đã ghép nối</span> <span class="small">${esc(st.model || "TV")}${st.is_on != null ? " · đang " + (st.is_on ? "bật" : "tắt") : ""}</span>`
+      : st.reachable
+        ? `<span class="badge off">chưa ghép nối</span> <span class="small">TV đang bật (${esc(st.tv_name || "?")}) — sẵn sàng ghép nối</span>`
+        : `<span class="badge off">không thấy TV</span> <span class="small">kiểm tra TV đang bật, cùng mạng với server</span>`;
+  } catch (err) {
+    el.textContent = "Lỗi: " + err.message;
+  }
+}
+
+$("#e-pair-start").onclick = async () => {
+  const btn = $("#e-pair-start");
+  btn.disabled = true;
+  btn.textContent = "Đang gửi…";
+  try {
+    await api(`/devices/${editCtx.d.id}/pair/start`, { method: "POST", body: "{}" });
+    toast("TV đang hiện mã ghép nối — nhập mã rồi bấm ✓ Hoàn tất");
+    $("#e-pair-code").focus();
+  } catch (err) {
+    toast("Lỗi: " + err.message);
+  }
+  btn.disabled = false;
+  btn.textContent = "Bắt đầu ghép nối";
+};
+
+$("#e-pair-finish").onclick = async () => {
+  const code = $("#e-pair-code").value.trim();
+  if (!code) { $("#e-pair-code").focus(); return; }
+  try {
+    const res = await api(`/devices/${editCtx.d.id}/pair/finish`, {
+      method: "POST", body: JSON.stringify({ code }),
+    });
+    toast("Đã ghép nối " + (res.model || "TV") + " ✅");
+    $("#e-pair-code").value = "";
+    refreshPairStatus(editCtx.d.id);
+  } catch (err) {
+    toast("Lỗi: " + err.message + " — bấm \"Bắt đầu ghép nối\" rồi thử mã mới");
+    refreshPairStatus(editCtx.d.id);
+  }
 };
 $("#e-cancel").onclick = () => $("#edit-modal").classList.add("hidden");
 
@@ -781,7 +903,7 @@ async function refreshDiscovered() {
     <div class="card"><table>
       <tr><th>Thiết bị</th><th>IP / ID</th><th>Nguồn</th><th>Hãng</th><th></th></tr>
       ${rows.map((r) => {
-        const guessedDriver = { broadlink: "broadlink", tuya: "tuya", wsdiscovery: "onvif" }[r.method] || "generic";
+        const guessedDriver = { broadlink: "broadlink", tuya: "tuya", cozylife: "cozylife", wsdiscovery: "onvif", androidtv: "androidtv", senergy: "senergy" }[r.method] || "generic";
         return `
         <tr>
           <td><b>${esc(r.name || "?")}</b>

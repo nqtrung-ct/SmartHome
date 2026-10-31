@@ -19,8 +19,10 @@ DEFAULTS: dict[str, Any] = {
         "advertise_mdns": True,
     },
     "mqtt": {"enabled": False, "host": "127.0.0.1", "port": 1883, "base_topic": "zigbee2mqtt"},
-    "stt": {"engine": "none", "model_dir": "data/models/stt", "num_threads": 2},
-    "tts": {"engine": "none", "http_url": ""},
+    "stt": {"engine": "none", "model_dir": "data/models/stt", "num_threads": 2,
+            "decoding_method": "", "max_active_paths": 4,
+            "hotwords_file": "hotwords.txt", "hotwords_score": 2.0},
+    "tts": {"engine": "none", "http_url": "", "length_scale": 1.15},
     "llm": {"engine": "ollama", "base_url": "http://127.0.0.1:11434", "model": "qwen3:4b", "timeout": 30},
     "weather": {"latitude": 21.0285, "longitude": 105.8542},
     "discovery": {
@@ -29,12 +31,16 @@ DEFAULTS: dict[str, Any] = {
         "mdns_seconds": 3,
         "ssdp_seconds": 3,
         "wsdiscovery": True,
+        "androidtv": True,  # scanner TV Android/Google TV (Cast + cổng remote 6466/6467)
     },
+    "androidtv": {"client_name": "Nhà thông minh"},  # tên hiện trên TV lúc ghép nối
     "broadlink": {"timeout": 5},
     "camera": {"poll_seconds": 60},  # chu kỳ kiểm tra camera online (socket RTSP)
+    "cozylife": {"poll_seconds": 60},  # chu kỳ đọc trạng thái công tắc CozyLife (TCP 5555, chỉ đọc)
     "solar": {"poll_seconds": 180},  # chu kỳ đọc inverter Senergy (Modbus TCP) - đừng nhanh hơn 30s
     "frigate": {"base_url": "http://127.0.0.1:5000"},  # API nội bộ của NVR Docker (map 127.0.0.1)
     "display": {"pin": ""},  # mã 4 số mở khóa điều khiển trên màn hình treo tường
+    "xiaozhi": {"volume": 100},  # âm lượng loa thiết bị phòng (0-100), áp dụng mỗi phiên
     "retention": {"days": 30},
 }
 

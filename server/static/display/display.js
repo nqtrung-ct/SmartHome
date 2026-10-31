@@ -254,7 +254,11 @@ const SPEAKER_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="non
 const SNOW_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/></svg>`;
 const DROPLET_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>`;
 const VIDEO_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>`;
+const TV_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="15" rx="2"/><path d="m17 2-5 5-5-5"/></svg>`;
 const TYPE_ICON = { light: "💡", switch: "🔌", climate: SNOW_SVG, fan: FAN_SVG, media: SPEAKER_SVG, camera: VIDEO_SVG };
+// TV Android và loa cùng là media — icon khác nhau theo driver
+const entityIcon = (e) =>
+  (e.type === "media" && e.driver === "androidtv" ? TV_SVG : TYPE_ICON[e.type]) || "🔘";
 
 // thiết bị IR không phản hồi trạng thái thật — chỉ hiện tên, không hiện bật/tắt
 // (camera: trạng thái online do scheduler poll socket RTSP)
@@ -264,6 +268,8 @@ function chipState(e) {
     const on = e.state && e.state.state === "on";
     return on && e.state.temperature != null ? `${e.state.temperature}°` : "đang tắt";
   }
+  if (e.driver === "androidtv" && e.state && e.state.state === "on")
+    return e.state.app || "đang bật";  // TV Android: hiện app đang xem
   return e.state && e.state.state === "on" ? "đang bật" : "đang tắt";
 }
 
@@ -295,13 +301,13 @@ function renderRooms(rooms) {
       <div class="chip-row">
         ${(r.entities || []).map((e) => {
           const ctl = e.controllable ? " ctl" : "";
-          const on = chipState(e) === "đang bật";
+          const on = !!(e.state && e.state.state === "on");
           // camera đang bật: bấm mở popup xem video
           const cam = e.type === "camera" && on ? " cam" : "";
           const ir = e.driver === "broadlink" ? `<span class="ir-tag">IR</span>` : "";
           const st = chipState(e);
           return `<div class="chip${ctl}${cam}${on ? " on" : ""}" data-ent="${e.id}">
-            <span class="chip-ic">${TYPE_ICON[e.type] || "🔘"}</span>
+            <span class="chip-ic">${entityIcon(e)}</span>
             <span class="chip-body">
               <span class="chip-name">${esc(e.name)}${ir}</span>
               ${st ? `<span class="chip-st">${st}</span>` : ""}
@@ -397,6 +403,7 @@ let ctrlMode = "cool";
 const BTN_ICON = {
   swing: ["", "Xoay"], fan_mode: ["", "Tốc độ"],
   volume_up: ["🔊", "To hơn"], volume_down: ["🔉", "Nhỏ hơn"], mute: ["🔇", "Tắt tiếng"],
+  home: ["🏠", "Màn hình chính"], back: ["◀", "Quay lại"], pause: ["⏯", "Tạm dừng"],
 };
 const FANS = [["quiet", "Yên lặng"], ["low", "Thấp"], ["mid", "Vừa"], ["high", "Cao"], ["auto", "Tự động"]];
 const MODES = [["cool", "Lạnh"], ["dry", "Khô"], ["fan_only", "Gió"], ["heat_cool", "Ổn"]];
@@ -451,7 +458,7 @@ function openCtrl(id) {
   const { e, r } = findEntity(id);
   if (!e) return;
   if (!unlocked()) { showPin(() => openCtrl(id), e.name); return; }
-  $("ctrl-icon").innerHTML = TYPE_ICON[e.type] || "🔘";
+  $("ctrl-icon").innerHTML = entityIcon(e);
   $("ctrl-name").textContent = e.name;
   $("ctrl-room").textContent = r ? r.name : "";
   $("ctrl-body").innerHTML = ctrlBody(e);

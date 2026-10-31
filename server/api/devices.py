@@ -122,8 +122,15 @@ def patch_device(request: Request, device_id: int, body: DevicePatch, _: None = 
 
 @router.delete("/devices/{device_id}")
 def delete_device(request: Request, device_id: int, _: None = Depends(require_admin)):
+    _unlink_discovered(request.app.state.db, device_id)
     request.app.state.db.execute("DELETE FROM devices WHERE id=?", (device_id,))
     return {"ok": True}
+
+
+def _unlink_discovered(db, device_id: int) -> None:
+    """Bỏ gắn dòng quét của thiết bị bị xóa, kẻo tab Quét mạng vẫn badge 'đã thêm'
+    (adopted_device_id không có FK nên không tự dọn)."""
+    db.execute("UPDATE discovered SET adopted_device_id=NULL WHERE adopted_device_id=?", (device_id,))
 
 
 # --- entities ---------------------------------------------------------------
@@ -180,6 +187,23 @@ def patch_entity(request: Request, entity_id: int, body: EntityPatch, _: None = 
         ):
             raise HTTPException(status_code=404, detail="Không có phòng này")
         db.execute("UPDATE entities SET room_id=? WHERE id=?", (body.room_id, entity_id))
+        # Cảm biến điện năng (cloud_meter) là một "phần" của công tắc đo điện —
+        # UI gộp số V/kW vào dòng công tắc, nên dời công tắc qua phòng khác thì
+        # sensor phải đi theo, không thì lệch với nơi hiển thị số. Chỉ áp dụng
+        # khi công tắc là kênh bật/tắt duy nhất của device (cầu dao 1 kênh).
+        switches = db.query(
+            "SELECT id FROM entities WHERE device_id=? AND entity_type IN ('switch','light')",
+            (row["device_id"],),
+        )
+        if len(switches) == 1 and switches[0]["id"] == entity_id:
+            for m in db.query(
+                "SELECT id, driver_data FROM entities WHERE device_id=? AND entity_type='sensor'",
+                (row["device_id"],),
+            ):
+                if json.loads(m["driver_data"] or "{}").get("cloud_meter"):
+                    db.execute(
+                        "UPDATE entities SET room_id=? WHERE id=?", (body.room_id, m["id"])
+                    )
     if body.entity_type is not None:
         if body.entity_type not in ("switch", "light", "climate", "fan", "media", "sensor", "camera"):
             raise HTTPException(status_code=400, detail="entity_type không hợp lệ")
@@ -195,6 +219,7 @@ def delete_entity(request: Request, entity_id: int, _: None = Depends(require_ad
     if row and not db.one("SELECT id FROM entities WHERE device_id=?", (row["device_id"],)):
         # hết thực thể thì bỏ luôn phần cứng để không còn thiết bị ma tàng hình trong DB
         device = db.one("SELECT name FROM devices WHERE id=?", (row["device_id"],))
+        _unlink_discovered(db, row["device_id"])
         db.execute("DELETE FROM devices WHERE id=?", (row["device_id"],))
         if device:
             log_event(db, "admin", f"Đã xóa thiết bị '{device['name']}' (hết thiết bị)")
@@ -254,6 +279,55 @@ async def entity_state(request: Request, entity_id: int, _: None = Depends(requi
         return {"state": state, "updated_at": entity["updated_at"]}
     except DriverError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# --- Android TV pairing (làm 1 lần sau khi thêm TV) ---------------------------
+
+
+def _tv_device_and_driver(request: Request, device_id: int):
+    db = request.app.state.db
+    device = db.one("SELECT * FROM devices WHERE id=?", (device_id,))
+    if not device:
+        raise HTTPException(status_code=404, detail="Không có thiết bị")
+    driver = request.app.state.drivers.get(device["driver"])
+    if device["driver"] != "androidtv" or not driver:
+        raise HTTPException(status_code=400, detail="Thiết bị này không phải TV Android")
+    return device, driver
+
+
+@router.get("/devices/{device_id}/pair")
+async def tv_pair_status(request: Request, device_id: int, _: None = Depends(require_admin)):
+    device, driver = _tv_device_and_driver(request, device_id)
+    try:
+        return await asyncio.to_thread(driver.pair_status, device)
+    except DriverError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/devices/{device_id}/pair/start")
+async def tv_pair_start(request: Request, device_id: int, _: None = Depends(require_admin)):
+    """Bắt đầu ghép nối — TV hiện mã 6 số, nhập mã qua /pair/finish."""
+    device, driver = _tv_device_and_driver(request, device_id)
+    try:
+        await asyncio.to_thread(driver.pair_start, device)
+    except DriverError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+class PairCodeIn(BaseModel):
+    code: str
+
+
+@router.post("/devices/{device_id}/pair/finish")
+async def tv_pair_finish(request: Request, device_id: int, body: PairCodeIn,
+                         _: None = Depends(require_admin)):
+    device, driver = _tv_device_and_driver(request, device_id)
+    try:
+        info = await asyncio.to_thread(driver.pair_finish, device, body.code)
+    except DriverError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "model": " ".join(x for x in (info.get("manufacturer"), info.get("model")) if x)}
 
 
 # --- IR learning --------------------------------------------------------------

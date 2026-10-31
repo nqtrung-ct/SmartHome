@@ -6,8 +6,10 @@
 #               (voice: vi_VN-vais1000-medium from huggingface.co/rhasspy/piper-voices)
 # tinytuya    : local control of Tuya WiFi devices (needs local keys)
 # numpy       : used with sherpa-onnx for audio buffers
+# sentencepiece: token hóa hotwords cho STT (xem data/models/stt-vi70k/hotwords.txt)
 
 sherpa-onnx>=1.10
 piper-tts>=1.3
 tinytuya>=1.13
 numpy>=1.26
+sentencepiece>=0.2

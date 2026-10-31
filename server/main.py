@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from server.api import admin, assistant, command_api, devices, discovery_api, voice_api
+from server.api import admin, assistant, command_api, devices, discovery_api, voice_api, xiaozhi
 from server.config import Config
 from server.core.scheduler import start_scheduler
 from server.core.weather import Weather
@@ -79,6 +79,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     for router in (admin.router, assistant.router, devices.router, discovery_api.router, command_api.router):
         app.include_router(router, prefix="/api")
     app.include_router(voice_api.router)
+    app.include_router(xiaozhi.router)
 
     @app.get("/admin", include_in_schema=False)
     async def admin_redirect():  # StaticFiles doesn't redirect the bare path itself
