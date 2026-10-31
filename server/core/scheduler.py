@@ -8,6 +8,8 @@ import time
 from server.db import Database, log_event
 from server.util import next_repeat, now, now_iso, parse_iso
 
+_last_ip_heal = 0.0  # lần cuối quét mạng để tự chữa IP (cooldown 5 phút)
+
 
 async def _run_timer_action(app, action: dict) -> str:
     """Thực thi lệnh thiết bị của hẹn giờ; trả về câu nói báo kết quả."""
@@ -151,9 +153,30 @@ async def _poll_tuya_cloud(app) -> None:
             )
 
 
+async def _heal_device_ip(app, device_id: int) -> str | None:
+    """Poll thiết bị mạng thất bại: có thể router đã cấp lại IP. Quét ping+ARP
+    rồi tự chữa host theo MAC (qua _cleanup_network_rows — quy tắc "cùng MAC").
+    Trả về host mới nếu đổi, None nếu không/he không được. Cooldown để khỏi
+    quét ồ ạt khi thiết bị chỉ đang ngủ hay mất điện."""
+    global _last_ip_heal
+    db: Database = app.state.db
+    if time.time() - _last_ip_heal < 300:
+        return None
+    _last_ip_heal = time.time()
+    from server.core.discovery import _cleanup_network_rows, scan_network
+    old = db.one("SELECT host, mac FROM devices WHERE id=?", (device_id,))
+    if not old or not old["mac"]:
+        return None  # không có MAC thì không khớp được
+    await asyncio.to_thread(scan_network, db, app.state.cfg)
+    await asyncio.to_thread(_cleanup_network_rows, db)
+    new = db.one("SELECT host FROM devices WHERE id=?", (device_id,))
+    return new["host"] if new and new["host"] != old["host"] else None
+
+
 async def _poll_solar(app) -> None:
     """Inverter Senergy (Modbus TCP): PV/pin/tải cho card điện năng màn hình tường.
-    Dongle CPU yếu - chỉ 2 yêu cầu đọc mỗi nhịp, chu kỳ mặc định 3 phút."""
+    Dongle CPU yếu - chỉ 2 yêu cầu đọc mỗi nhịp, chu kỳ mặc định 3 phút.
+    Đọc thất bại (IP có thể đã đổi) -> quét mạng tự chữa theo MAC rồi thử lại."""
     driver = app.state.drivers.get("senergy")
     if not driver:
         return
@@ -164,10 +187,19 @@ async def _poll_solar(app) -> None:
     )
     for row in rows:
         entity = {"id": row["eid"]}
-        device = {"id": row["did"], "host": row["host"]}
-        try:
-            state = await asyncio.to_thread(driver.get_state, entity, device)
-        except Exception:
+        host = row["host"]
+        state = None
+        for _attempt in (1, 2):
+            try:
+                state = await asyncio.to_thread(
+                    driver.get_state, entity, {"id": row["did"], "host": host})
+                break
+            except Exception:
+                new_host = await _heal_device_ip(app, row["did"])
+                if not new_host:
+                    break
+                host = new_host
+        if not state:
             continue  # dongle nghỉ/mất WiFi: giữ số cũ, UI tự hiện "—" khi quá 1 tiếng
         db.execute(
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",
