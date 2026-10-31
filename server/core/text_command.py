@@ -137,6 +137,18 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_solar",
+            "description": "Xem điện năng nhà: pin còn bao nhiêu phần trăm (và đang sạc/xả), "
+                           "điện mặt trời đang sản xuất bao nhiêu, nhà đang dùng bao nhiêu",
+            "parameters": {"type": "object", "properties": {
+                "metric": {"type": "string", "enum": ["battery", "pv", "load"],
+                           "description": "battery=pin, pv=điện mặt trời, load=nha đang dùng"},
+            }},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_active",
             "description": "Liệt kê các thiết bị đang bật (đèn, công tắc, điều hòa có phản hồi trạng thái thật; không gồm thiết bị điều khiển bằng IR)",
             "parameters": {"type": "object", "properties": {
@@ -669,6 +681,87 @@ async def act_sensor(db, drivers, entity, room_id=None, metric=None) -> dict:
         reply = f"Cảm biến chưa có số liệu {missing}." if missing else "Cảm biến chưa có số liệu."
     return {"reply": reply,
             "action": {"tool": "get_sensor", "ok": bool(bits), "state": state}}
+
+
+def _solar_entity(db: Database):
+    """Sensor entity của inverter Senergy (điện mặt trời/pin/tải nhà)."""
+    return db.one(
+        """SELECT e.* FROM entities e JOIN devices d ON d.id=e.device_id
+           WHERE d.driver='senergy' AND e.entity_type='sensor' LIMIT 1"""
+    )
+
+
+def _watt_vi(w) -> str:
+    """830 -> "830 oát"; 1830 -> "1.8 kilo oát"."""
+    if w >= 1000:
+        return f"{w / 1000:.1f} kilo oát"
+    return f"{w:.0f} oát"
+
+
+def act_solar(db: Database, metric: str | None = None) -> dict:
+    """Hỏi về điện năng nhà: pin còn bao nhiêu %, điện mặt trời đang sản xuất
+    bao nhiêu, nhà đang dùng bao nhiêu. metric: 'battery' | 'pv' | 'load' | None."""
+    entity = _solar_entity(db)
+    if not entity:
+        return {"reply": "Chưa có thiết bị điện mặt trời nào.",
+                "action": {"tool": "get_solar", "ok": False}}
+    updated = parse_iso(entity["updated_at"]) if entity["updated_at"] else None
+    if updated and (now() - updated).total_seconds() > 3600:
+        return {"reply": "Mình không lấy được thông tin điện năng — đã hơn một tiếng "
+                         "không có số liệu mới.",
+                "action": {"tool": "get_solar", "ok": False, "stale": True}}
+    state = loads(entity["state"])
+    soc = state.get("battery_soc")
+    pv = state.get("pv_power")
+    load = state.get("load_power")
+    pb = state.get("battery_power")  # âm = sạc, dương = xả (chuẩn BMS)
+
+    def batt_bits():
+        bits = []
+        if soc is not None:
+            bits.append(f"pin đang còn {soc}%")
+        if pb is not None and abs(pb) >= 30:
+            bits.append(f"đang {'xả' if pb > 0 else 'sạc'} {_watt_vi(abs(pb))}")
+        return bits
+
+    reply = None
+    if metric == "battery":
+        bits = batt_bits()
+        if bits:
+            reply = ", ".join(bits) + "."
+    elif metric == "pv":
+        if pv is not None:
+            reply = f"Điện mặt trời đang sản xuất {_watt_vi(pv)}."
+    elif metric == "load":
+        if load is not None:
+            reply = f"Nhà đang dùng {_watt_vi(load)}."
+    if reply is None:
+        bits = batt_bits()
+        if pv is not None:
+            bits.append(f"điện mặt trời {_watt_vi(pv)}")
+        if load is not None:
+            bits.append(f"nhà đang dùng {_watt_vi(load)}")
+        if not bits:
+            return {"reply": "Chưa có số liệu điện năng.",
+                    "action": {"tool": "get_solar", "ok": False}}
+        reply = ", ".join(bits) + "."
+    return {"reply": reply[0].upper() + reply[1:],
+            "action": {"tool": "get_solar", "ok": True,
+                       "battery_soc": soc, "pv_power": pv, "load_power": load}}
+
+
+def _solar_question(norm: str) -> str | None:
+    """Câu hỏi về điện năng nhà? Trả về metric ('battery'|'pv'|'load') hoặc None.
+    "pin mặt trời" là hỏi PV; "pin" không kèm "mặt trời" là hỏi pin tích trữ."""
+    if re.search(r"\b(dien mat troi|pin mat troi)\b", norm):
+        return "pv"
+    if re.search(r"\bpin\b", norm) and re.search(
+            r"\b(bao nhieu|con |phan tram|dang (sac|xa|the nao)|sac hay xa)\b", norm):
+        return "battery"
+    if re.search(r"\b(tai nha|nha dang (dung|tieu thu)|dang tieu thu|dang dung bao nhieu dien)\b",
+                 norm):
+        return "load"
+    return None
 
 
 def weather_day(norm: str) -> int:
@@ -1359,6 +1452,14 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         return act_weather(weather, weather_day(norm),
                            rain=rain_question(norm), evening=evening_question(norm))
 
+    # điện năng nhà (inverter Senergy): "pin còn bao nhiêu %", "điện mặt trời
+    # đang sản xuất bao nhiêu", "nhà đang dùng bao nhiêu" — đặt TRƯỚC gate
+    # chặn câu hỏi công suất lưới dưới đây kẻo bị nuốt ("tieu thu", "kw"...)
+    if not multi_intent and not (has_on or has_off):
+        solar_metric = _solar_question(norm)
+        if solar_metric:
+            return act_solar(db, solar_metric)
+
     # power questions: solar home, grid draw is ~0 W and misleading - trợ lý
     # không đọc số điện bằng giọng nói; Vol/kW nằm trên tab Tổng quan
     if not (has_on or has_off) and re.search(
@@ -1565,6 +1666,9 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             if not entity:
                 return {"reply": "Phòng này chưa có cảm biến.", "action": {"tool": name, "ok": False}}
             return await act_sensor(db, drivers, entity, room_id, metric)
+
+        if name == "get_solar":
+            return act_solar(db, str(args.get("metric", "")) or None)
 
         if name == "get_weather":
             # an explicit day in the user's text outranks what the model passed

@@ -151,6 +151,30 @@ async def _poll_tuya_cloud(app) -> None:
             )
 
 
+async def _poll_solar(app) -> None:
+    """Inverter Senergy (Modbus TCP): PV/pin/tải cho card điện năng màn hình tường.
+    Dongle CPU yếu - chỉ 2 yêu cầu đọc mỗi nhịp, chu kỳ mặc định 3 phút."""
+    driver = app.state.drivers.get("senergy")
+    if not driver:
+        return
+    db: Database = app.state.db
+    rows = db.query(
+        """SELECT e.id AS eid, d.id AS did, d.host FROM entities e
+           JOIN devices d ON d.id=e.device_id WHERE d.driver='senergy'"""
+    )
+    for row in rows:
+        entity = {"id": row["eid"]}
+        device = {"id": row["did"], "host": row["host"]}
+        try:
+            state = await asyncio.to_thread(driver.get_state, entity, device)
+        except Exception:
+            continue  # dongle nghỉ/mất WiFi: giữ số cũ, UI tự hiện "—" khi quá 1 tiếng
+        db.execute(
+            "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+            (json.dumps(state, ensure_ascii=False), now_iso(), row["eid"]),
+        )
+
+
 async def _poll_cameras(app) -> None:
     """Camera ONVIF: online = mở được socket RTSP (:554, dự phòng :80).
     Trạng thái này cho UI (chip 'đang bật/tắt', quyền mở popup video)."""
@@ -188,6 +212,7 @@ async def scheduler_loop(app) -> None:
     last_sensor_poll = 0.0
     last_cloud_poll = 0.0
     last_camera_poll = 0.0
+    last_solar_poll = 0.0
     while True:
         try:
             today = now_iso()[:10]
@@ -236,6 +261,9 @@ async def scheduler_loop(app) -> None:
             if time.time() - last_camera_poll >= int(app.state.cfg.get("camera.poll_seconds", 60)):
                 last_camera_poll = time.time()
                 await _poll_cameras(app)
+            if time.time() - last_solar_poll >= int(app.state.cfg.get("solar.poll_seconds", 180)):
+                last_solar_poll = time.time()
+                await _poll_solar(app)
         except asyncio.CancelledError:
             return
         except Exception as exc:

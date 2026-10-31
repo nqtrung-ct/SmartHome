@@ -240,6 +240,9 @@ async function refresh() {
     gw.className = "grid-warn hidden";
   }
 
+  // card điện năng: tiêu thụ / điện mặt trời / pin
+  renderSolar(data.solar);
+
   renderRooms(data.rooms);
   renderTimers(data.timers);
 }
@@ -673,6 +676,45 @@ async function doCommand(e, cmd) {
     return;
   }
   if (await sendCommand(e, cmd, {})) refresh();
+}
+
+// ---------------------------------------------------------------- solar card
+// 1240W -> "1,24 kW"; 760W -> "760 W"
+function fmtW(w) {
+  if (w == null || Number.isNaN(w)) return "–";
+  return w >= 1000 ? `${(w / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} kW`
+                   : `${Math.round(w)} W`;
+}
+function renderSolar(so) {
+  const card = $("solar-card");
+  if (!so) {
+    card.classList.add("hidden");
+    return;
+  }
+  card.classList.remove("hidden");
+  // quá 1 tiếng không có số mới -> "–", giống quy tắc cảm biến khác
+  const stale = so.updated_at && Date.now() - new Date(so.updated_at) > 3600e3;
+  $("s-load").textContent = stale ? "–" : fmtW(so.load_power);
+  $("s-pv").textContent = stale ? "–" : fmtW(so.pv_power);
+  if (stale || so.battery_soc == null) {
+    $("s-batt").textContent = "–";
+    $("s-batt-sub").textContent = "";
+    $("s-batt-fill").setAttribute("width", "0");
+  } else {
+    $("s-batt").textContent = `${so.battery_soc}%`;
+    // thanh nạp trong icon pin đầy theo SOC (vùng vẽ trong 4.5..15.5 = 11 đơn vị)
+    $("s-batt-fill").setAttribute("width", (11 * Math.min(Math.max(so.battery_soc, 0), 100) / 100).toFixed(1));
+    // công suất pin theo chuẩn BMS: âm = sạc (mũi tên lên), dương = xả (mũi tên xuống)
+    const pb = so.battery_power || 0;
+    const ARR_UP = '<svg class="s-arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+    const ARR_DN = '<svg class="s-arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>';
+    const w = Math.abs(pb) >= 100 ? Math.round(Math.abs(pb) / 10) * 10 : Math.abs(pb);
+    let sub;
+    if (Math.abs(pb) < 30) sub = "nghỉ";
+    else if (pb >= 0) sub = `${ARR_DN}<b>${w} W</b>`;   // xả: pin cạn dần
+    else sub = `${ARR_UP}<b>${w} W</b>`;                  // sạc: pin đầy dần
+    $("s-batt-sub").innerHTML = sub;
+  }
 }
 
 // ---------------------------------------------------------------- timers

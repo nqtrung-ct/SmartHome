@@ -159,6 +159,28 @@ def display(request: Request):
             "low_voltage": on and voltage is not None and 0 < voltage < 200,
         }
 
+    # card điện năng: inverter Senergy (PV / pin / tải) - sensor entity của driver senergy
+    solar = None
+    row = db.one(
+        """SELECT e.state, e.updated_at FROM entities e
+           JOIN devices d ON d.id=e.device_id
+           WHERE d.driver='senergy' AND e.entity_type='sensor' ORDER BY e.id LIMIT 1"""
+    )
+    if row:
+        try:
+            st = _json.loads(row["state"] or "{}")
+        except ValueError:
+            st = {}
+        if st.get("pv_power") is not None:
+            solar = {
+                "pv_power": st.get("pv_power"),
+                "load_power": st.get("load_power"),
+                "battery_soc": st.get("battery_soc"),
+                "battery_voltage": st.get("battery_voltage"),
+                "battery_power": st.get("battery_power"),
+                "updated_at": row["updated_at"],
+            }
+
     # chỉ để tương thích client cũ — màn hình mới không dùng các số này nữa
     counts = {
         "rooms": len(rooms),
@@ -179,6 +201,7 @@ def display(request: Request):
         "timers": timers,
         "counts": counts,
         "grid": grid,
+        "solar": solar,
         "updated_at": now_iso(),
     }
 

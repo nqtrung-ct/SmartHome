@@ -91,6 +91,22 @@ main {
 }
 .w-num { display: block; font-size: 22px; font-weight: 700; }
 .w-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+/* --- card điện năng (dưới card thời tiết, cùng ngôn ngữ thiết kế) --- */
+.s-stats { display: flex; gap: 12px; }
+.s-stats > div {
+  flex: 1; background: var(--card2); border-radius: 16px; padding: 12px 8px; text-align: center;
+}
+.s-ic { display: block; color: var(--muted); margin-bottom: 3px; }
+.s-ic svg { vertical-align: middle; }
+.s-num { display: block; font-size: 22px; font-weight: 700; }
+.s-pv { color: #ffc46b; }   /* điện mặt trời: cùng vàng ấm của số max nhiệt */
+.s-batt { color: #9fc1ff; } /* pin: cùng xanh của số min nhiệt */
+.s-lab { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+/* dòng sạc/xả của ô pin: mũi tên to rõ nghĩa hơn chữ */
+.s-lab#s-batt-sub { font-size: 14px; color: var(--muted); }
+#s-batt-sub .s-arr { width: 17px; height: 17px; vertical-align: -3.5px; color: #9fc1ff; }
+#s-batt-sub b { color: inherit; font-weight: 600; }
 /* dự báo ngày mai / mốt: 2 cột icon + min/max; line nhạt chia hôm nay / các ngày sau */
 .w-fc {
   display: flex; gap: 12px; margin-top: 14px; padding-top: 14px;
