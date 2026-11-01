@@ -33,9 +33,11 @@ DEFAULTS: dict[str, Any] = {
         "wsdiscovery": True,
         "androidtv": True,  # scanner TV Android/Google TV (Cast + cổng remote 6466/6467)
     },
-    "androidtv": {"client_name": "Nhà thông minh"},  # tên hiện trên TV lúc ghép nối
+    # tên hiện trên TV lúc ghép nối; poll giữ DB luôn tươi (màn hình đọc DB)
+    "androidtv": {"client_name": "Nhà thông minh", "poll_seconds": 45},
     "broadlink": {"timeout": 5},
-    "camera": {"poll_seconds": 60},  # chu kỳ kiểm tra camera online (socket RTSP)
+    "camera": {"poll_seconds": 60,  # chu kỳ kiểm tra camera online (socket RTSP)
+               "home_return_seconds": 60},  # rời góc mặc định ⭐ quá lâu thì tự quay về
     "cozylife": {"poll_seconds": 60},  # chu kỳ đọc trạng thái công tắc CozyLife (TCP 5555, chỉ đọc)
     "solar": {"poll_seconds": 180},  # chu kỳ đọc inverter Senergy (Modbus TCP) - đừng nhanh hơn 30s
     "frigate": {"base_url": "http://127.0.0.1:5000"},  # API nội bộ của NVR Docker (map 127.0.0.1)

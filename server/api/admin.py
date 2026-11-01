@@ -16,6 +16,34 @@ from server.util import now as util_now, now_iso
 router = APIRouter()
 
 
+def solar_snapshot(db) -> dict | None:
+    """Số liệu inverter Senergy (PV / pin / tải) — dùng chung cho /api/display
+    (màn hình treo tường) và /api/overview (dashboard admin)."""
+    import json as _json
+
+    row = db.one(
+        """SELECT e.state, e.updated_at FROM entities e
+           JOIN devices d ON d.id=e.device_id
+           WHERE d.driver='senergy' AND e.entity_type='sensor' ORDER BY e.id LIMIT 1"""
+    )
+    if not row:
+        return None
+    try:
+        st = _json.loads(row["state"] or "{}")
+    except ValueError:
+        st = {}
+    if st.get("pv_power") is None:
+        return None
+    return {
+        "pv_power": st.get("pv_power"),
+        "load_power": st.get("load_power"),
+        "battery_soc": st.get("battery_soc"),
+        "battery_voltage": st.get("battery_voltage"),
+        "battery_power": st.get("battery_power"),
+        "updated_at": row["updated_at"],
+    }
+
+
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -163,26 +191,7 @@ def display(request: Request):
         }
 
     # card điện năng: inverter Senergy (PV / pin / tải) - sensor entity của driver senergy
-    solar = None
-    row = db.one(
-        """SELECT e.state, e.updated_at FROM entities e
-           JOIN devices d ON d.id=e.device_id
-           WHERE d.driver='senergy' AND e.entity_type='sensor' ORDER BY e.id LIMIT 1"""
-    )
-    if row:
-        try:
-            st = _json.loads(row["state"] or "{}")
-        except ValueError:
-            st = {}
-        if st.get("pv_power") is not None:
-            solar = {
-                "pv_power": st.get("pv_power"),
-                "load_power": st.get("load_power"),
-                "battery_soc": st.get("battery_soc"),
-                "battery_voltage": st.get("battery_voltage"),
-                "battery_power": st.get("battery_power"),
-                "updated_at": row["updated_at"],
-            }
+    solar = solar_snapshot(db)
 
     # chỉ để tương thích client cũ — màn hình mới không dùng các số này nữa
     counts = {
@@ -239,15 +248,33 @@ async def display_camera_stream(request: Request, entity_id: int):
         st = _json.loads(row["state"] or "{}")
     except ValueError:
         st = {}
-    if st.get("state") != "on":
-        raise HTTPException(status_code=503, detail="Camera đang tắt hoặc mất kết nối")
-    ffmpeg = _shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise HTTPException(status_code=503, detail="Server chưa cài ffmpeg")
     try:
         extra = _json.loads(row["extra"] or "{}")
     except ValueError:
         extra = {}
+    ffmpeg = _shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(status_code=503, detail="Server chưa cài ffmpeg")
+    if st.get("state") != "on":
+        # state do scheduler cập nhật mỗi 60s — camera vừa lên là DB còn "off".
+        # Thử socket RTSP thật: mở được thì phát tiếp và tự correct state,
+        # khỏi bắt người dùng chờ phút poll kế tiếp
+        import socket as _socket
+
+        def _alive() -> bool:
+            try:
+                with _socket.create_connection(
+                        (row["host"], int(extra.get("rtsp_port") or 554)), timeout=2):
+                    return True
+            except OSError:
+                return False
+
+        if not await asyncio.to_thread(_alive):
+            raise HTTPException(status_code=503, detail="Camera đang tắt hoặc mất kết nối")
+        from server.util import now_iso
+
+        db.execute("UPDATE entities SET state=?, updated_at=? WHERE id=?",
+                   ('{"state": "on"}', now_iso(), entity_id))
     cred = {}
     raw = ""
     # IP đổi (tự chữa qua MAC lúc quét) thì secret theo host cũ trượt:
@@ -282,7 +309,9 @@ async def display_camera_stream(request: Request, entity_id: int):
     if not password:
         raise HTTPException(status_code=503, detail="Camera chưa có mật khẩu RTSP")
     port = extra.get("rtsp_port") or 554
-    path = extra.get("rtsp_path") or "/cam/realmonitor?channel=1&subtype=0"
+    # sub stream 640x352: fallback này chiếu trong popup nhỏ — sub nhẹ và có
+    # hình nhanh hơn nhiều so với main 2K
+    path = extra.get("rtsp_path") or "/cam/realmonitor?channel=1&subtype=1"
     url = f"rtsp://{user}:{password}@{row['host']}:{port}{path}"
     proc = await asyncio.create_subprocess_exec(
         ffmpeg, "-loglevel", "error", "-rtsp_transport", "tcp",
@@ -437,11 +466,31 @@ async def run_camera_ptz(app, entity_id: int, body: PtzIn) -> dict:
                 dd = {}
             presets = dd.get("presets", [])
             if 0 <= body.index < len(presets):
-                presets.pop(body.index)
+                removed = presets.pop(body.index)
+                if dd.get("home_preset") == removed["name"]:
+                    dd.pop("home_preset", None)  # góc mặc định đã xóa thì bỏ luôn
             dd["presets"] = presets
             db.execute("UPDATE entities SET driver_data=? WHERE id=?",
                        (_json.dumps(dd, ensure_ascii=False), entity_id))
-            return {"ok": True, "presets": presets}
+            return {"ok": True, "presets": presets, "home": dd.get("home_preset", "")}
+        elif body.action == "home":
+            # góc mặc định: scheduler thấy camera rời góc này quá lâu sẽ tự quay về.
+            # Lưu theo TÊN (index đổi khi xóa góc); bấm lại góc đang mặc định = bỏ
+            try:
+                dd = _json.loads(row["driver_data"] or "{}")
+            except ValueError:
+                dd = {}
+            presets = dd.get("presets", [])
+            if not (0 <= body.index < len(presets)):
+                raise HTTPException(status_code=404, detail="Không có góc này")
+            name = presets[body.index]["name"]
+            if dd.get("home_preset") == name:
+                dd.pop("home_preset", None)
+            else:
+                dd["home_preset"] = name
+            db.execute("UPDATE entities SET driver_data=? WHERE id=?",
+                       (_json.dumps(dd, ensure_ascii=False), entity_id))
+            return {"ok": True, "presets": presets, "home": dd.get("home_preset", "")}
         else:
             raise HTTPException(status_code=400, detail="action không hợp lệ")
     except ptz.PtzError as exc:

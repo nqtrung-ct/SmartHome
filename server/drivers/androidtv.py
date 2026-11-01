@@ -288,6 +288,16 @@ class AndroidTVDriver(Driver):
             self._send(remote, lambda r: r.send_launch_app_command(pkg))
             return {"state": "on", "app": label}
 
+        if command == "set" and params.get("search"):
+            # deep link trang kết quả tìm kiếm YouTube — app YouTube TV tự mở
+            # với từ khóa sẵn (không phải gõ từng chữ qua remote)
+            from urllib.parse import quote
+
+            q = quote(str(params["search"]))
+            self._send(remote, lambda r: r.send_launch_app_command(
+                f"https://www.youtube.com/results?search_query={q}"))
+            return {"state": "on", "app": "YouTube"}
+
         if command == "key" and params.get("key"):
             # gửi phím bất kỳ (test/admin): chỉ nhận tên KEYCODE_ hợp lệ
             key = str(params["key"]).upper()
@@ -307,6 +317,17 @@ class AndroidTVDriver(Driver):
     def get_state(self, entity: Row, device: Row) -> dict:
         remote = self._remote(device)
         return self._state_of(remote)
+
+    def refresh(self, device: Row) -> None:
+        """Đồng bộ trạng thái TV vào DB — scheduler gọi định kỳ. Mất kết nối
+        (TV tắt/restart server) là nối lại rồi ghi; thất bại thì _remote đã
+        chốt 'off' sẵn. Không có cái này thì DB treo trạng thái cũ mãi vì
+        màn hình đọc DB, không ai chủ động hỏi driver."""
+        try:
+            remote = self._remote(device)
+        except DriverError:
+            return
+        self._write_state(device["id"], self._state_of(remote))
 
     def _send(self, remote, fn) -> None:
         async def run() -> None:

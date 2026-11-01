@@ -195,6 +195,18 @@ function meterText(state) {
   return bits.join(" · ");
 }
 function sensorText(state) {
+  // inverter điện mặt trời: nhãn 3 số như card trên màn hình treo tường
+  // (tiêu thụ / đang sản xuất / pin) — state có key riêng pv_power nên dễ nhận
+  if (state.pv_power != null || state.battery_soc != null) {
+    const w = (v) => v == null ? null
+      : v >= 1000 ? (v / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 2 }) + " kW"
+      : Math.round(v) + " W";
+    const bits = [];
+    if (w(state.load_power) != null) bits.push("⚡ " + w(state.load_power));
+    if (w(state.pv_power) != null) bits.push("☀️ " + w(state.pv_power));
+    if (state.battery_soc != null) bits.push("🔋 " + state.battery_soc + "%");
+    if (bits.length) return bits.join(" · ");
+  }
   const bits = [];
   if (state.temperature != null) bits.push("🌡 " + state.temperature + "°C");
   if (state.humidity != null) bits.push("💧 " + state.humidity + "%");
@@ -428,6 +440,12 @@ window.testTts = async () => {
 
 // --- quản lý góc quay camera (PTZ NetSDK) ---
 let ptzEntityId = null;
+let ptzHome = "";
+
+function ptzDriverData(id) {
+  const dev = (devicesCache || []).flatMap((d) => d.entities).find((e) => e.id === id);
+  try { return JSON.parse((dev && dev.driver_data) || "{}"); } catch { return {}; }
+}
 
 function openPtzModal(id) {
   ptzEntityId = id;
@@ -440,25 +458,32 @@ async function ptzAction(action, index = 0, name = "") {
     method: "POST", body: JSON.stringify({ action, index, name }),
   }).catch((e) => { alert(e.message || "Lỗi"); return null; });
   if (!d) return;
-  if (d.presets) renderPtzList(d.presets);
+  if (d.presets) renderPtzList(d.presets, d.home !== undefined ? d.home : ptzHome);
 }
 
-function renderPtzList(presets) {
-  if (!presets) {
-    const dev = (devicesCache || []).flatMap((d) => d.entities).find((e) => e.id === ptzEntityId);
-    try { presets = JSON.parse((dev && dev.driver_data) || "{}").presets || []; }
-    catch { presets = []; }
+function renderPtzList(presets, home) {
+  if (!presets || home === undefined) {
+    const dd = ptzDriverData(ptzEntityId);
+    presets = presets || dd.presets || [];
+    if (home === undefined) home = dd.home_preset || "";
   }
+  ptzHome = home;
   const el = $("#ptz-list");
-  el.innerHTML = presets.length ? presets.map((p, i) => `
+  el.innerHTML = presets.length ? presets.map((p, i) => {
+    const isHome = p.name === home;
+    return `
     <div class="entity">
-      <div style="flex:1"><div class="name">🎯 ${esc(p.name)}</div>
+      <div style="flex:1"><div class="name">${isHome ? "⭐" : "🎯"} ${esc(p.name)}
+        ${isHome ? '<span class="badge on">mặc định</span>' : ""}</div>
         <div class="sub">ngang ${Math.round(p.pan / 10)}° · dọc ${Math.round(p.tilt / 10)}°</div></div>
       <div class="row">
+        <button class="small-btn${isHome ? " primary" : ""}" onclick="ptzAction('home', ${i})"
+          title="${isHome ? "Bỏ làm góc mặc định" : "Đặt làm góc mặc định — camera tự quay về sau 1 phút"}">${isHome ? "⭐" : "☆"}</button>
         <button class="small-btn" onclick="ptzAction('goto', ${i})" title="Quay camera về góc này">Quay tới</button>
         <button class="small-btn danger" onclick="ptzAction('del', ${i})">🗑</button>
       </div>
-    </div>`).join("")
+    </div>`;
+  }).join("")
     : `<p class="muted small">Chưa có góc nào. Xoay camera tới vị trí mong muốn (app Imou) rồi bấm "Lưu góc hiện tại".</p>`;
 }
 

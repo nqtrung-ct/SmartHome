@@ -566,31 +566,52 @@ function openCam(id) {
   // popup chứa nút preset (điều khiển) nên mở cũng phải qua PIN như thiết bị khác
   if (!unlocked()) { showPin(() => openCam(id), e.name); return; }
   camEntity = e;
+  clearTimeout(camRetryTimer);
   $("cam-icon").innerHTML = VIDEO_SVG;
   $("cam-name").textContent = e.name;
   $("cam-room").textContent = r ? r.name : "";
   renderCamPresets();
   $("cam-ctrl").classList.toggle("hidden", !e.ptz);
-  const video = $("cam-video"), img = $("cam-img"), err = $("cam-error");
-  err.classList.add("hidden");
   $("cam-overlay").classList.remove("hidden");
-  const fallbackMjpeg = () => {  // không WebRTC được -> MJPEG HD (không tiếng)
+  camAttempt();
+}
+
+// Một lần thử nối video (WebRTC, dự phòng MJPEG). Camera vừa cấp nguồn là
+// state/RTSP còn chưa sẵn sàng — thay vì báo lỗi chết, hiện "Đang kết nối…"
+// rồi tự thử lại mỗi 5s cho tới khi có hình hoặc popup đóng.
+let camRetryTimer = null;
+
+function camAttempt() {
+  if (!camEntity || $("cam-overlay").classList.contains("hidden")) return;
+  const id = camEntity.id;
+  // lấy bản mới nhất từ dữ liệu refresh 30s (stream name có thể vừa được sửa)
+  const found = findEntity(id);
+  const cur = (found && found.e) || camEntity;
+  const video = $("cam-video"), img = $("cam-img"), err = $("cam-error");
+  err.textContent = "Đang kết nối với camera…";
+  err.classList.remove("hidden");
+  const fail = () => {
+    err.textContent = "Chưa lấy được video — camera đang khởi động hoặc mất kết nối, đang thử lại…";
+    err.classList.remove("hidden");
+    camRetryTimer = setTimeout(camAttempt, 5000);
+  };
+  const fallbackMjpeg = () => {  // không WebRTC được -> MJPEG (không tiếng)
     stopWebrtc();
     video.classList.add("hidden");
     $("cam-mute").classList.add("hidden");
+    img.onload = () => err.classList.add("hidden");
+    img.onerror = fail;
     img.classList.remove("hidden");
-    img.onerror = () => {
-      img.classList.add("hidden");
-      img.src = "";
-      err.classList.remove("hidden");
-    };
     img.src = `/api/display/camera/${id}/stream?ts=${Date.now()}`;
   };
-  if (e.stream && typeof RTCPeerConnection !== "undefined") {
+  if (cur.stream && typeof RTCPeerConnection !== "undefined") {
+    img.onload = img.onerror = null;
+    img.src = "";
     video.classList.remove("hidden");
     img.classList.add("hidden");
-    img.src = "";
-    startWebrtc(video, e.stream).catch(() => { stopWebrtc(); fallbackMjpeg(); });
+    startWebrtc(video, cur.stream).then(
+      () => err.classList.add("hidden"),  // có khung hình thật rồi
+      () => fallbackMjpeg());
   } else {
     fallbackMjpeg();
   }
@@ -628,6 +649,7 @@ async function sendPtz(body) {
 }
 
 function closeCam() {
+  clearTimeout(camRetryTimer);        // ngừng vòng thử lại
   stopWebrtc();                       // ngắt phiên WebRTC
   $("cam-mute").classList.add("hidden");
   $("cam-img").src = "";              // ngắt MJPEG -> server giết ffmpeg

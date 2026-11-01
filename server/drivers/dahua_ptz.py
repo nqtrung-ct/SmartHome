@@ -57,6 +57,32 @@ class _PtzLocation(C.Structure):
     ]
 
 
+# --- loa camera: phát thông báo một chiều (NetSDK talk, chế độ "喊话") -------
+# layout lấy từ NetSDKLib.java của mirror github.com/452/dahua-sdk
+
+class _TalkDecodeInfo(C.Structure):  # NETDEV_TALKDECODE_INFO
+    _fields_ = [
+        ("encodeType", C.c_int), ("nAudioBit", C.c_int),
+        ("dwSampleRate", C.c_int), ("nPacketPeriod", C.c_int),
+        ("reserved", C.c_byte * 60),
+    ]
+
+
+class _SpeakParam(C.Structure):  # NET_SPEAK_PARAM — nMode 1 = phát một chiều
+    _fields_ = [("dwSize", C.c_uint), ("nMode", C.c_int),
+                ("nSpeakerChannel", C.c_int), ("bEnableWait", C.c_int)]
+
+
+class _TalkTransferParam(C.Structure):  # NET_TALK_TRANSFER_PARAM
+    _fields_ = [("dwSize", C.c_uint), ("bTransfer", C.c_int)]
+
+
+@C.WINFUNCTYPE(C.c_longlong, C.c_longlong, C.c_void_p, C.c_uint, C.c_ubyte, C.c_void_p)
+def _talk_data_cb(handle, buf, size, flag, user):
+    # chế độ phát một chiều không có dữ liệu trả về — SDK chỉ cần có chỗ gọi
+    return 0
+
+
 class PtzError(Exception):
     pass
 
@@ -84,6 +110,14 @@ def _load():
     sdk.CLIENT_QueryDevState.argtypes = [C.c_longlong, C.c_int, C.c_void_p, C.c_int,
                                          C.POINTER(C.c_int), C.c_int]
     sdk.CLIENT_QueryDevState.restype = C.c_bool
+    sdk.CLIENT_SetDeviceMode.argtypes = [C.c_longlong, C.c_int, C.c_void_p]
+    sdk.CLIENT_SetDeviceMode.restype = C.c_bool
+    sdk.CLIENT_StartTalkEx.argtypes = [C.c_longlong, C.c_void_p, C.c_void_p]
+    sdk.CLIENT_StartTalkEx.restype = C.c_longlong
+    sdk.CLIENT_TalkSendData.argtypes = [C.c_longlong, C.c_void_p, C.c_uint]
+    sdk.CLIENT_TalkSendData.restype = C.c_longlong
+    sdk.CLIENT_StopTalkEx.argtypes = [C.c_longlong]
+    sdk.CLIENT_StopTalkEx.restype = C.c_bool
     sdk.CLIENT_Cleanup.argtypes = []
     sdk.CLIENT_Init(None, None)
     _sdk = sdk
@@ -215,3 +249,39 @@ def move(cfg, device, direction: str, speed: int = 4, stop: bool = False) -> Non
         raise PtzError(f"Hướng không hợp lệ: {direction}")
     if not _control(cfg, device, cmd, speed, stop=1 if stop else 0):
         raise PtzError("Camera không nhận lệnh xoay")
+
+
+def speak(cfg, device, pcm: bytes) -> None:
+    """Phát PCM16 mono 8kHz little-endian qua LOA camera.
+
+    Firmware Imou CHỐN chế độ phát một chiều (NET_SPEAK_PARAM.nMode=1, lỗi
+    0x80000196) nhưng nhận chế độ đàm thoại chuẩn (nMode=0): kênh vẫn phát
+    qua loa, mình không ghi mic máy chủ nên không có tiếng rò, mic camera
+    gửi về thì callback bỏ qua. Gọi tuần tự với PTZ vì dùng chung _sdk_lock."""
+    sdk = _load()
+    host, port, mac = _parts(device)
+    with _sdk_lock:
+        h = _login(cfg, host, port, mac)
+        # encodeType=0 (PCM KHÔNG đầu): đo âm học qua mic camera — chỉ enc=0@8k
+        # là loa phát thật (tone 880Hz gấp ~278 lần nền); enc=1 của demo chính
+        # hãng nghe im lặng trên firmware Imou này
+        enc = _TalkDecodeInfo(encodeType=0, nAudioBit=16,
+                              dwSampleRate=8000, nPacketPeriod=25)
+        param = _SpeakParam(C.sizeof(_SpeakParam), 0, 0, 0)  # nMode=0: đàm thoại chuẩn
+        transfer = _TalkTransferParam(C.sizeof(_TalkTransferParam), 0)
+        for em_type, val in ((2, enc), (7, param), (11, transfer)):
+            if not sdk.CLIENT_SetDeviceMode(h, em_type, C.byref(val)):
+                raise PtzError("Camera không nhận cấu hình phát loa")
+        talk = sdk.CLIENT_StartTalkEx(h, _talk_data_cb, None)
+        if talk == 0:
+            raise PtzError("Không mở được kênh phát loa camera")
+        try:
+            chunk = 8000 * 2 * 25 // 1000  # 25ms PCM16 = 400 bytes, khớp packet period
+            data = pcm + b"\x00" * (8000 * 2 // 2)  # đuôi im lặng khỏi cắt chữ cuối
+            for i in range(0, len(data), chunk):
+                part = data[i:i + chunk]
+                if sdk.CLIENT_TalkSendData(talk, part, len(part)) <= 0:
+                    raise PtzError("Camera ngắt kênh phát giữa chừng")
+                time.sleep(0.025)
+        finally:
+            sdk.CLIENT_StopTalkEx(talk)

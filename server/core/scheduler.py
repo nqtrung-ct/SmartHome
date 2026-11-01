@@ -236,6 +236,68 @@ async def _poll_cameras(app) -> None:
         )
 
 
+_ptz_away: dict[int, tuple[float, dict]] = {}  # eid -> (thấy khác góc lúc nào, vị trí lần trước)
+
+
+def _ptz_near(a: dict, b: dict) -> bool:
+    """Hai tọa độ coi là "cùng một góc"? pan wrap 3600; sai số nhỏ vì motor
+    dừng có thể lệch vài đơn vị so với tọa độ đã ra lệnh."""
+    dp = abs(int(a["pan"]) - int(b["pan"]))
+    dp = min(dp, 3600 - dp)
+    return (dp <= 20 and abs(int(a["tilt"]) - int(b["tilt"])) <= 20
+            and abs(int(a.get("zoom") or 1) - int(b.get("zoom") or 1)) <= 2)
+
+
+async def _poll_camera_home(app) -> None:
+    """Camera có góc mặc định (⭐ trong admin): rời góc quá lâu thì tự quay về.
+
+    Đọc tọa độ thay vì nhớ lệnh — bắt được cả việc xoay từ app Imou. Đồng hồ
+    đếm 60s bắt đầu từ khi camera ĐỨNG YÊN ở góc khác: vị trí còn thay đổi giữa
+    hai lần đọc là người đang điều khiển, đếm lại kẻo camera bị kéo về giữa
+    chừng (voice quét từng góc tìm người cũng không bị phá)."""
+    import server.drivers.dahua_ptz as ptz
+    from server.drivers.base import loads
+
+    db: Database = app.state.db
+    ret_secs = int(app.state.cfg.get("camera.home_return_seconds", 60))
+    if ret_secs <= 0:
+        return
+    rows = db.query(
+        """SELECT e.id AS eid, e.driver_data, d.host, d.mac, d.extra FROM entities e
+           JOIN devices d ON d.id = e.device_id
+           WHERE e.entity_type='camera' AND d.host != ''"""
+    )
+    for row in rows:
+        dd = loads(row["driver_data"])
+        home = next((p for p in dd.get("presets", [])
+                     if p.get("name") == dd.get("home_preset")), None)
+        if not home:
+            _ptz_away.pop(row["eid"], None)
+            continue
+        device = {"host": row["host"], "mac": row["mac"], "extra": row["extra"]}
+        try:
+            pos = await asyncio.to_thread(ptz.read_position, app.state.cfg, device)
+        except Exception:
+            _ptz_away.pop(row["eid"], None)  # camera ngủ/mất mạng: đếm lại khi thức dậy
+            continue
+        if _ptz_near(pos, home):
+            _ptz_away.pop(row["eid"], None)
+            continue
+        prev = _ptz_away.get(row["eid"])
+        if prev and _ptz_near(pos, prev[1]):
+            if time.time() - prev[0] >= ret_secs:
+                await asyncio.to_thread(ptz.fast_goto, app.state.cfg, device,
+                                        home["pan"], home["tilt"], home.get("zoom", 1))
+                log_event(db, "camera",
+                          f"Camera tự quay về góc '{home['name']}' (góc mặc định)")
+                _ptz_away.pop(row["eid"], None)
+        else:
+            _ptz_away[row["eid"]] = (time.time(), pos)
+
+
+_cozy_warn: dict[str, float] = {}  # lần log warn gần nhất theo host (chống spam)
+
+
 async def _poll_cozylife(app) -> None:
     """Cập nhật trạng thái công tắc CozyLife (TCP 5555, query chỉ đọc).
 
@@ -256,19 +318,51 @@ async def _poll_cozylife(app) -> None:
         device = {"id": row["did"], "host": row["host"], "extra": row["extra"]}
         try:
             state = await asyncio.to_thread(driver.get_state, entity, device)
-        except Exception:
-            if row["etype"] == "switch":
-                db.execute(
-                    "UPDATE entities SET state=?, updated_at=? WHERE id=?",
-                    ('{"state": "off"}', now_iso(), row["eid"]),
-                )
-            continue
+        except Exception as exc:
+            # firmware này hay tịt tiếng thoáng qua (chắc chỉ nhận 1 kết nối
+            # TCP cùng lúc) — thử lại sau 2 giây, vẫn im lặng mới tính là mất
+            # nguồn; ghi 'off' ngay từ lần đầu khiến DB nhấp nháy sai liên tục
+            await asyncio.sleep(2)
+            try:
+                state = await asyncio.to_thread(driver.get_state, entity, device)
+            except Exception:
+                if row["etype"] == "switch":
+                    db.execute(
+                        "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+                        ('{"state": "off"}', now_iso(), row["eid"]),
+                    )
+                # lỗi đọc từng bị nuốt im lặng — log giới hạn 10 phút/host
+                if time.time() - _cozy_warn.get(row["host"], 0) > 600:
+                    _cozy_warn[row["host"]] = time.time()
+                    log_event(db, "cozylife",
+                              f"Không đọc được {row['host']} sau 2 lần thử "
+                              f"({type(exc).__name__}: {exc})",
+                              level="warn")
+                continue
         if not any(v is not None for v in state.values()):
             continue  # có trả lời nhưng rỗng — giữ số cũ
         db.execute(
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",
             (json.dumps(state, ensure_ascii=False), now_iso(), row["eid"]),
         )
+
+
+async def _poll_androidtv(app) -> None:
+    """Giữ trạng thái TV Android trong DB luôn tươi (màn hình đọc DB, không
+    tự hỏi driver). Có kết nối thì đọc; mất kết nối thì driver nối lại —
+    TV bật lại / vào standby đều tự cập nhật đúng on/off. Side effect có
+    ích: phiên đến TV ngủ sâu được duy trì, lệnh 'bật TV' khả thi hơn."""
+    driver = app.state.drivers.get("androidtv")
+    if not driver:
+        return
+    for row in app.state.db.query(
+        "SELECT id, host FROM devices WHERE driver='androidtv' AND host != ''"
+    ):
+        try:
+            await asyncio.to_thread(driver.refresh, dict(row))
+        except Exception as exc:
+            log_event(app.state.db, "androidtv",
+                      f"Poll TV '{row['host']}' lỗi: {exc}", level="warn")
 
 
 async def scheduler_loop(app) -> None:
@@ -279,8 +373,10 @@ async def scheduler_loop(app) -> None:
     last_sensor_poll = 0.0
     last_cloud_poll = 0.0
     last_camera_poll = 0.0
+    last_ptz_home_poll = 0.0
     last_solar_poll = 0.0
     last_cozylife_poll = 0.0
+    last_androidtv_poll = 0.0
     while True:
         try:
             today = now_iso()[:10]
@@ -311,9 +407,15 @@ async def scheduler_loop(app) -> None:
                     message = await _run_timer_action(app, action)
                     log_event(db, "scheduler", f"{message} (timer #{timer['id']})")
                 else:
-                    message = f"Đã đến giờ hẹn: {timer['message']}"
+                    msg = timer["message"] or ""
+                    if msg.startswith("raw:"):
+                        # "phát câu X vào phòng Y" — đọc nguyên câu, không thêm
+                        # "Đã đến giờ hẹn" vào cho tự nhiên
+                        message = msg[4:].strip()
+                    else:
+                        message = f"Đã đến giờ hẹn: {msg}"
                     log_event(db, "scheduler",
-                              f"Hẹn giờ đến: {timer['message']} (timer #{timer['id']})")
+                              f"Hẹn giờ đến: {msg} (timer #{timer['id']})")
                 connections = getattr(app.state, "voice_connections", None)
                 pipeline = getattr(app.state, "pipeline", None)
                 if connections and message:
@@ -323,6 +425,8 @@ async def scheduler_loop(app) -> None:
                     from server.api.xiaozhi import announce_room as xiaozhi_announce
 
                     await xiaozhi_announce(app, timer["room_id"], message)
+                    # (đã thử phát qua LOA camera Imou qua NetSDK talk — firmware
+                    # chặn, xem camera_talk.py — không nối vào đây nữa)
             # battery sensors surface briefly (~seconds every 15 min): poll often
             if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 60)):
                 last_sensor_poll = time.time()
@@ -333,12 +437,18 @@ async def scheduler_loop(app) -> None:
             if time.time() - last_camera_poll >= int(app.state.cfg.get("camera.poll_seconds", 60)):
                 last_camera_poll = time.time()
                 await _poll_cameras(app)
+            if time.time() - last_ptz_home_poll >= 10:  # đủ mịn cho mốc 60s quay về
+                last_ptz_home_poll = time.time()
+                await _poll_camera_home(app)
             if time.time() - last_solar_poll >= int(app.state.cfg.get("solar.poll_seconds", 180)):
                 last_solar_poll = time.time()
                 await _poll_solar(app)
             if time.time() - last_cozylife_poll >= int(app.state.cfg.get("cozylife.poll_seconds", 60)):
                 last_cozylife_poll = time.time()
                 await _poll_cozylife(app)
+            if time.time() - last_androidtv_poll >= int(app.state.cfg.get("androidtv.poll_seconds", 45)):
+                last_androidtv_poll = time.time()
+                await _poll_androidtv(app)
         except asyncio.CancelledError:
             return
         except Exception as exc:

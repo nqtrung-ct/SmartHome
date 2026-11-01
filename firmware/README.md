@@ -31,6 +31,22 @@ python -X utf8 scripts\build.py quandong/esp32-s3-spi-2.8 --language vi-VN --wak
 
 (build thô không qua wrapper: `idf.py build` — nhưng wrapper trên đặt đúng target/board/ngôn ngữ.)
 
+**Bẫy ccache nổi lên GIỮA chừng build.py (đã gặp 01/11, board waveshare 1.54)**: build.py
+không truyền cờ qua idf.py được — khi lỗi `CreateProcess failed: ccache ...gcc` xuất hiện
+trong lúc chạy build.py, đã configure xong rồi thì **bỏ dở build.py, tiếp bằng idf.py
+thẳng** với `idf.py --no-ccache -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON reconfigure` rồi
+`build` với cùng đôi cờ. Board/language/wake-word đã nằm sẵn trong sdkconfig + CMakeCache
+sau configure của build.py — không mất.
+
+## Board đã build
+
+- `build-quandong/` — Thiết bị phòng ES3C28P (đang chạy ở phòng ngủ chính)
+- `build/` — **Waveshare ESP32-S3-Touch-LCD-1.54 bản không touch** (build 01/11 cho
+  phòng khách, chờ board về nạp): vi-VN + wn9_alexa + AEC phần cứng
+  (`CONFIG_USE_DEVICE_AEC=y` có sẵn trong config board), codec ES8311 (loa) + ES7210
+  (mic). Board không kèm loa — cần loa 8Ω 1-2W cắm cổng speaker. Nạp lần đầu dùng
+  lệnh esptool full (kể cả assets wake word 0x800000) — xem output cuối build.
+
 **Nạp (đã trả giá):** chỉ nạp **app** vào offset `0x20000` (`build\xiaozhi.bin`).
 Tuyệt đối KHÔNG nạp merged-binary vào `0x0` — image raw phủ 0xFF qua NVS (0x9000)
 làm **mất WiFi** mỗi lần nạp, phải cấu hình lại từ đầu. Đổi wake word model thì

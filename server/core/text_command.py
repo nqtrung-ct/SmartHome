@@ -352,9 +352,12 @@ def resolve_camera(db: Database, text: str, room_id=None):
 
 
 def _person_question(norm: str) -> bool:
-    """Câu hỏi có người/ai không? ("kiểm tra ... có người không", "có ai ... không")"""
-    return bool(re.search(r"\b(nguoi|ai)\b", norm)
-                and (re.search(r"\bkiem tra\b", norm) or re.search(r"\bco (nguoi|ai)\b", norm)))
+    """Câu hỏi có người/ai không? ("kiểm tra ... có người không", "có ai ... không").
+    "Kiểm tra camera X" (không nói chữ người) cũng là kiểm tra người — cách nói
+    tự nhiên nhất của chủ nhà, đừng để rơi xuống LLM."""
+    return bool((re.search(r"\b(nguoi|ai)\b", norm)
+                 and (re.search(r"\bkiem tra\b", norm) or re.search(r"\bco (nguoi|ai)\b", norm)))
+                or (re.search(r"\bkiem tra\b", norm) and re.search(r"\bcamera\b", norm)))
 
 
 def camera_multi_intent(norm: str) -> bool:
@@ -955,6 +958,7 @@ def act_timer(db, room_id, message=None, minutes=None, time_str=None,
     else:
         return {"reply": "Mình chưa rõ thời gian hẹn.", "action": {"tool": "set_timer", "ok": False}}
     message = (message or "").strip() or (action or {}).get("message") or "hẹn giờ"
+    show = message[4:].strip() if message.startswith("raw:") else message
     db.execute(
         "INSERT INTO timers(target_at, room_id, message, created_at, repeat, action) "
         "VALUES (?,?,?,?,?,?)",
@@ -964,7 +968,9 @@ def act_timer(db, room_id, message=None, minutes=None, time_str=None,
     clock = target.strftime("%H:%M")
     when = _when_label(repeat, day_offset, weekday)
     in_ = f" (sau {int(minutes)} phút nữa)" if minutes else ""
-    verb = f"mình sẽ {message}." if action else f"mình nhắc bạn: {message}."
+    verb = (f"mình sẽ phát: {show}." if message.startswith("raw:")
+            else f"mình sẽ {message}." if action
+            else f"mình nhắc bạn: {message}.")
     return {"reply": f"Ok, {when}{clock}{in_} {verb}",
             "action": {"tool": "set_timer", "ok": True, "at": clock, "repeat": repeat or None}}
 
@@ -1151,7 +1157,10 @@ def _when_short(timer_row) -> str:
 
 
 def _timers_brief(rows) -> str:
-    return "; ".join(f"{t['message'].lower()} ({_when_short(t)})" for t in rows)
+    def _msg(t) -> str:
+        m = t["message"] or ""
+        return (m[4:] if m.startswith("raw:") else m).lower()
+    return "; ".join(f"{_msg(t)} ({_when_short(t)})" for t in rows)
 
 
 def act_list_timers(db) -> dict:
@@ -1484,6 +1493,30 @@ async def act_tv_app(db, drivers, entity, app: str, mentioned_room=None) -> dict
             "action": {"tool": "tv_app", "entity": entity["name"], "app": app, "ok": True}}
 
 
+def _tv_search(norm: str):
+    """Câu muốn TV tìm gì đó? ("tìm đấu la đấu la trên YouTube") — trả về match
+    (group 1 = từ khóa bản normalized) hay None. Từ nối trong từ khóa ("Tom và
+    Jerry") vẫn là 1 lần tìm; chỉ coi là câu ghép khi sau từ nối có động từ
+    lệnh (bật/tắt/mở...) — lúc đó nhường LLM xử lý từng phần."""
+    m = re.search(r"\btim(?: kiem| giup)?\s+(.+?)\s+tren\s+(?:youtube|tv|tivi|te ve)\b", norm)
+    if not m:
+        return None
+    q = m.group(1).strip()
+    if not q:
+        return None
+    conj = re.search(r"\b(va|roi|sau do|va ca|them)\b", q)
+    if conj and re.search(r"\b(bat|tat|mo|hen|quay)\b", q[conj.end():]):
+        return None
+    return m
+
+
+async def act_tv_search(db, drivers, entity, query: str, mentioned_room=None) -> dict:
+    await _set_state(db, drivers, entity, "set", {"search": query})
+    where = _room_where(db, _entity_room(db, entity), mentioned_room)
+    return {"reply": f"Đã mở YouTube tìm '{query}' trên {entity['name'].lower()}{where}.",
+            "action": {"tool": "tv_search", "entity": entity["name"], "query": query, "ok": True}}
+
+
 def _tv_nav_button(norm: str) -> str | None:
     """Lệnh điều hướng/phát-nghỉ của TV ("tivi về màn hình chính", "quay lại tv",
     "tạm dừng tivi"). Câu PHẢI nhắc TV — "quay lại" hay "tạm dừng" trần không
@@ -1642,6 +1675,27 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             )
 
     if timerish and not multi_intent:
+        # "hãy phát câu 'đến giờ mua bánh mì' vào camera phòng khách sau 1 phút
+        # nữa" — hẹn giờ PHÁT THÔNG BÁI vào phòng nêu tên (nói camera thì lấy
+        # phòng của camera). Đến giờ trợ lý đọc NGUYÊN câu (tiền tố 'raw:' trong
+        # message báo scheduler đừng thêm "Đã đến giờ hẹn" vào).
+        phat = re.search(
+            r"\bphat\s+(?:cau|thong bao|noi)\b\s+(.+?)(?=\s+(?:vao|sau|luc|khoang)\b|$)", norm)
+        if phat:
+            parsed = _parse_timer(norm, text)
+            if parsed["minutes"] or parsed["time_str"]:
+                target_room = room_id
+                tail = re.search(r"\bvao\b\s+(.+?)(?=\s+(?:sau|luc|khoang)\b|$)", norm)
+                if tail:
+                    cam = resolve_camera(db, tail.group(1))
+                    target_room = ((cam and _entity_room(db, cam))
+                                   or _room_from_text(db, tail.group(1)) or room_id)
+                q = (text[phat.start(1):phat.end(1)].strip()
+                     if len(text) == len(norm) else phat.group(1))
+                return act_timer(db, target_room, message=f"raw:{q}",
+                                 minutes=parsed["minutes"], time_str=parsed["time_str"],
+                                 repeat=parsed["repeat"], day_offset=parsed["day_offset"],
+                                 weekday=parsed["weekday"])
         parsed = _parse_timer(norm, text)
         if parsed["minutes"] or parsed["time_str"]:
             # câu có động từ bật/tắt + tên thiết bị = hẹn giờ THAO TÁC thiết bị
@@ -1746,6 +1800,19 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
         if entity:
             return await act_button(db, drivers, entity, vol,
                                     mentioned_room=_room_from_text(db, norm))
+
+    # TV tìm kiếm trên YouTube ("tìm đấu la đấu la trên YouTube") — đặt TRƯỚC
+    # nhánh mở app vì câu cũng chứa từ "youtube". Từ khóa lấy từ bản GỐC (còn
+    # dấu, tìm đúng hơn) khi độ dài khớp bản normalized (normalize là thay ký
+    # tự 1-1, chỉ gộp khoảng trắng là lệch)
+    search_m = _tv_search(norm)
+    if search_m and not multi_intent:
+        entity = resolve_entity(db, norm, room_id, "media") or resolve_entity(db, "tv", room_id, "media")
+        if entity:
+            query = (text[search_m.start(1):search_m.end(1)].strip()
+                     if len(text) == len(norm) else search_m.group(1))
+            return await act_tv_search(db, drivers, entity, query,
+                                       mentioned_room=_room_from_text(db, norm))
 
     # mở app trên TV Android ("mở YouTube trên TV"): đặt TRƯỚC nhánh on/off vì
     # "mở" cũng là động từ bật — câu nhắc tên app là muốn mở app, không bật nguồn
