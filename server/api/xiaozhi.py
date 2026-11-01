@@ -43,9 +43,12 @@ MAX_UTTERANCE_S = 20.0
 SILENCE_S = 1.2        # im lặng bao lâu thì coi là hết câu
 TAIL_KEEP_S = 0.5
 FOLLOWUP_S = 8.0       # cửa sổ nghe câu tiếp sau khi trả lời xong
-MAX_AUTO_FOLLOWUPS = 4  # tối đa bao nhiêu lượt nối tiếp không có wake word
+MAX_AUTO_FOLLOWUPS = 5  # tối đa bao nhiêu lượt nối tiếp không có wake word
+                      # (lượt vượt ngưỡng vẫn được đáp xong mới đóng phiên)
 SEND_LEAD_S = 0.4      # packets TTS được phép dẫn trước phát tối đa chừng này
 ECHO_GUARD_S = 0.5     # bỏ qua mic chừng này sau khi loa phát xong (1 mic, không AEC)
+MIC_WARMUP_S = 0.45    # bỏ frame mic sau wake: tiếng bíp (~0.3s) + đuôi wake word khỏi lọt STT
+WAKE_LISTEN_S = 10.0   # cửa sổ nghe dự phòng sau wake (nếu không có câu nào hoàn chỉnh)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +154,11 @@ _ALEXA_PREFIX = re.compile(
     r"^(?:alexa|ale xa|a le xa|e le xa|elexa|elect|a lax a|al exa)\b[\s,.!?]*"
 )
 
+# tiếng đệm người Việt hay mở đầu câu nói ("ủa chắc tivi", "ừm để nghĩ...", STT
+# nghe 'hãy' thành 'ấy') — bỏ bớt để não lệnh không bị nhiễu; chỉ bỏ khi còn
+# lại nội dung thật
+_FILLER_PREFIX = re.compile(r"^(?:ủa|ùa|à|á|ừ|ừm|um|ơ|ấy|ay)\s*[,.\s]*", flags=re.I)
+
 
 def strip_wake_word(transcript: str, wake: str | None = None) -> str | None:
     """Câu đã bớt wake word; '' nếu chỉ toàn wake word; None nếu không có wake word.
@@ -227,6 +235,9 @@ class UtteranceEndpointer:
 class XiaozhiConnections:
     def __init__(self) -> None:
         self._live: dict[int, WebSocket] = {}
+        # thông báo chờ phát (hẹn giờ đến...): thiết bị idle đóng WS nên chỉ
+        # có thể giao qua màn hình poll GET /xiaozhi/ui (30 giây/lần)
+        self._pending: dict[int, list[tuple[str, float]]] = {}
 
     def register(self, device_row_id: int, ws: WebSocket) -> None:
         self._live[device_row_id] = ws
@@ -237,8 +248,32 @@ class XiaozhiConnections:
     def get(self, device_row_id: int) -> WebSocket | None:
         return self._live.get(device_row_id)
 
+    def enqueue_announce(self, device_row_id: int, text: str) -> None:
+        self._pending.setdefault(device_row_id, []).append((text, time.monotonic()))
+
+    def take_pending(self, device_row_id: int, max_age_s: float = 600.0) -> list[str]:
+        """Thông báo còn tươi cho thiết bị; quá cũ bỏ luôn (nói lại giờ này chỉ rối)."""
+        queue = self._pending.pop(device_row_id, [])
+        fresh = [text for text, ts in queue if time.monotonic() - ts <= max_age_s]
+        return fresh
+
 
 connections = XiaozhiConnections()
+
+
+async def announce_room(app, room_id, text: str) -> None:
+    """Đưa thông báo (hẹn giờ đến) tới các thiết bị phòng: WS chỉ mở khi người
+    dùng đang nói chuyện nên không đẩy thẳng được (loa + một mic không AEC sẽ
+    tự nghe chính mình) — để pending cho màn hình poll lượm qua audio_url.
+    Timer tạo mà không thuộc phòng nào (admin/API) thì phát mọi thiết bị."""
+    db = app.state.db
+    if room_id is None:
+        rows = db.query("SELECT id, name FROM xiaozhi_devices")
+    else:
+        rows = db.query("SELECT id, name FROM xiaozhi_devices WHERE room_id=?", (room_id,))
+    for row in rows:
+        connections.enqueue_announce(row["id"], text)
+        log_event(db, "xiaozhi", f"Thông báo chờ phát trên '{row['name']}': {text}")
 
 
 # ---------------------------------------------------------------------------
@@ -343,14 +378,14 @@ def _ui_devices(db, room_id: int) -> list[dict]:
 
 
 def _ui_timers(db, room_id: int) -> list[dict]:
-    """3 hẹn giờ sắp tới của phòng cho card trên màn hình thiết bị."""
+    """2 hẹn giờ gần nhất của phòng cho card trên màn hình thiết bị."""
     from server.util import now, parse_iso
 
     out = []
     for t in db.query(
         """SELECT target_at, message, repeat FROM timers
            WHERE done=0 AND (room_id IS NULL OR room_id=?)
-           ORDER BY target_at LIMIT 3""",
+           ORDER BY target_at LIMIT 2""",
         (room_id,),
     ):
         at = parse_iso(t["target_at"])
@@ -431,13 +466,40 @@ def _pcm_to_ogg_opus(pcm: bytes, rate: int = OUT_RATE) -> bytes:
     return buf.getvalue()
 
 
-async def _tts_ogg_url(app, text: str) -> str | None:
-    """Phát câu reply qua loa thiết bị idle: TTS -> OGG Opus -> URL tạm."""
+def _beep_preamble(rate: int = OUT_RATE) -> bytes:
+    """3 bíp 1 kHz cách nhau 0.5 giây — thu hút chú ý trước thông báo hẹn giờ."""
+    import math
+
+    beep_s, period_s, n_beeps, tail_s = 0.15, 0.5, 3, 0.25
+    total = int((period_s * (n_beeps - 1) + beep_s + tail_s) * rate)
+    pcm = bytearray(total * 2)
+    amp = 0.55 * 32767
+    for b in range(n_beeps):
+        start = int(b * period_s * rate)
+        n = int(beep_s * rate)
+        fade = max(int(0.01 * rate), 1)  # attack/decay chống tiếng 'chát' đầu cuối bíp
+        for i in range(n):
+            env = min(1.0, min(i, n - i) / fade)
+            v = int(amp * env * math.sin(2 * math.pi * 1000 * i / rate))
+            off = (start + i) * 2
+            pcm[off:off + 2] = v.to_bytes(2, "little", signed=True)
+    return bytes(pcm)
+
+
+async def _tts_ogg_url(app, text: str, attention: bool = False) -> str | None:
+    """Phát câu reply qua loa thiết bị idle: TTS -> OGG Opus -> URL tạm.
+
+    attention=True ghép 3 bíp trước giọng nói (thông báo hẹn giờ cần gây chú ý)."""
     spoken = await app.state.pipeline.tts_audio(text)
     if not spoken:
+        log_event(app.state.db, "xiaozhi",
+                  "Không tạo được tiếng thông báo (TTS không trả audio)", level="warn")
         return None
+    pcm = wav_to_pcm(spoken[0], OUT_RATE)
+    if attention:
+        pcm = _beep_preamble() + pcm
     try:
-        ogg = _pcm_to_ogg_opus(wav_to_pcm(spoken[0], OUT_RATE))
+        ogg = _pcm_to_ogg_opus(pcm)
     except Exception as exc:
         log_event(app.state.db, "xiaozhi", f"Lỗi tạo OGG phát: {exc}", level="warn")
         return None
@@ -473,7 +535,19 @@ async def xiaozhi_ui(request: Request, device_id: str):
     room_id = row["room_id"]
 
     if request.method == "GET":
-        return build_ui_state(app, room_id)
+        payload = build_ui_state(app, room_id)
+        pending = connections.take_pending(row["id"])
+        if pending:
+            text = " ".join(pending)
+            url = await _tts_ogg_url(app, text, attention=True)
+            if url:
+                # firmware phát qua NotifyPlayer (mic đang tắt ở chế độ idle)
+                payload["reply"] = text
+                payload["audio_url"] = url
+            else:
+                # TTS hỏng đúng lúc này — xếp lại chờ lần poll sau, đừng mất thông báo
+                connections.enqueue_announce(row["id"], text)
+        return payload
 
     try:
         body = await request.json()
@@ -543,6 +617,8 @@ async def xiaozhi_ws(ws: WebSocket):
     decoder = OpusDecoder()
     endpointer = UtteranceEndpointer()
     listening = False
+    last_wake = 0.0                # thời điểm wake/bắt đầu nghe — để phân biệt đuôi wake word với rác thật
+    mic_warmup_until = 0.0         # bỏ mic chừng này sau wake (thời gian bíp + đuôi wake word)
     wake_phrase: str | None = None  # wake word device vừa báo qua "listen detect"
     speaking_task: asyncio.Task | None = None
     close_at: float | None = None  # hết cửa sổ follow-up -> đóng kênh
@@ -603,9 +679,16 @@ async def xiaozhi_ws(ws: WebSocket):
             log_event(db, "xiaozhi", f"Lỗi STT: {exc}", level="warn")
             transcript = ""
         stripped = strip_wake_word(transcript, wake_phrase)
-        command = normalize(transcript).strip() if stripped is None else stripped
-        if not command:  # chỉ toàn wake word -> đáp gọn
-            await speak("Dạ, mình nghe nè.")
+        # giữ bản có dấu cho não lệnh (lời nhắc hẹn giờ, câu trả lời có dấu
+        # tiếng Việt) — handle_command tự normalize khi so khớp
+        command = transcript.strip() if stripped is None else stripped
+        # bỏ tiếng đệm mở đầu ("ủa chắc tivi" -> "chắc tivi"); toàn tiếng đệm
+        # thì giữ nguyên kẻo chào lại tiếng TV
+        cleaned = _FILLER_PREFIX.sub("", command).strip()
+        if cleaned:
+            command = cleaned
+        if not command:  # chỉ toàn wake word -> im lặng (tiếng bíp của thiết bị
+            # đã là tín hiệu sẵn sàng), chỉ giữ cửa sổ nghe cho câu tiếp theo
             auto_followups = 0  # người dùng chủ động đánh thức lại
             close_at = time.monotonic() + FOLLOWUP_S
         elif (len(command) <= 3 or " " not in command and len(command) <= 6) \
@@ -614,13 +697,16 @@ async def xiaozhi_ws(ws: WebSocket):
             # cửa sổ nghe, kẻo tiếng TV/tiếng nền tự hỏi-đáp thành chuỗi không dứt.
             # Trừ khi đang chờ xác nhận hủy hẹn giờ — 'có'/'ok' phải đi qua.
             log_event(db, "xiaozhi", f"Bỏ qua câu rác: '{transcript}'")
-            close_at = time.monotonic() + 2.0
-        elif auto_followups >= MAX_AUTO_FOLLOWUPS:
-            # quá nhiều lượt nối tiếp không có wake word -> coi như hết phiên
-            log_event(db, "xiaozhi", f"Đóng phiên sau {auto_followups} lượt không wake word")
-            await ws.close()
-            close_at = time.monotonic()
+            if time.monotonic() - last_wake < 3.0:
+                # ngay sau wake word, đuôi âm thường chỉ nghe được 'ủa...' —
+                # đó chưa phải là rác thật, giữ nguyên cửa sổ chờ lệnh chính
+                close_at = time.monotonic() + FOLLOWUP_S
+            else:
+                close_at = time.monotonic() + 2.0
         else:
+            # chạm ngưỡng lượt nối tiếp: vẫn ĐÁP lệnh này xong mới đóng phiên —
+            # vứt câu lệnh thật chỉ vì hết suất nối tiếp là trải nghiệm tệ
+            capped = auto_followups >= MAX_AUTO_FOLLOWUPS
             auto_followups += 1
             try:
                 result = await handle_command(
@@ -638,7 +724,12 @@ async def xiaozhi_ws(ws: WebSocket):
             except Exception as exc:  # không để thiết bị treo listening không phản hồi
                 log_event(db, "xiaozhi", f"Lỗi xử lý lệnh: {exc}", level="warn")
                 await speak("Xin lỗi, mình bị lỗi rồi.")
-            close_at = time.monotonic() + FOLLOWUP_S  # nghe thêm câu tiếp chừng ấy giây
+            if capped:
+                log_event(db, "xiaozhi",
+                          f"Đóng phiên sau {auto_followups} lượt không wake word")
+                close_at = time.monotonic()  # đáp xong lệnh cuối -> hết phiên
+            else:
+                close_at = time.monotonic() + FOLLOWUP_S  # nghe thêm câu tiếp chừng ấy giây
         speaking_task = None
 
     def finish_speaking() -> None:
@@ -662,7 +753,9 @@ async def xiaozhi_ws(ws: WebSocket):
                 break
 
             if message.get("bytes") is not None:
-                if listening and not speaking_task and time.monotonic() >= ignore_until:
+                if listening and not speaking_task \
+                        and time.monotonic() >= ignore_until \
+                        and time.monotonic() >= mic_warmup_until:
                     pcm = decoder.feed(message["bytes"])
                     done = endpointer.feed(pcm) if pcm else None
                     if done:
@@ -704,7 +797,12 @@ async def xiaozhi_ws(ws: WebSocket):
                 state = data.get("state")
                 if state in ("start", "detect"):
                     listening = True
-                    close_at = None
+                    last_wake = time.monotonic()
+                    # mic đã được chắn lúc đầu nên đuôi wake word không còn tạo
+                    # thành câu rác -> cần cửa sổ dự phòng để phiên tự đóng nếu
+                    # người dùng không nói gì
+                    close_at = time.monotonic() + WAKE_LISTEN_S
+                    mic_warmup_until = time.monotonic() + MIC_WARMUP_S
                     if state == "detect" and data.get("text"):
                         wake_phrase = data["text"]
                     decoder = OpusDecoder()

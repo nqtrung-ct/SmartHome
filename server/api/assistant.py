@@ -53,6 +53,7 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "engine": cfg.get("llm.engine"),
             "base_url": cfg.get("llm.base_url"),
             "model": cfg.get("llm.model"),
+            "keep_alive": str(cfg.get("llm.keep_alive", "")).strip() == "-1",
             "reachable": llm_error is None,
             "models": models or [],
             "error": llm_error,
@@ -106,6 +107,7 @@ def _tts_error_hint(cfg) -> str:
 
 class AssistantConfigIn(BaseModel):
     llm_model: str | None = None
+    llm_keep_alive: bool | None = None  # True = giữ model trong VRAM luôn
     stt_engine: str | None = None  # none | sherpa
     tts_engine: str | None = None  # none | http
     tts_http_url: str | None = None
@@ -121,6 +123,12 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         cfg._data.setdefault("llm", {})["model"] = body.llm_model
         set_yaml_value(cfg.path, "llm", "model", body.llm_model)
         changed.append(f"llm.model = {body.llm_model}")
+    if body.llm_keep_alive is not None:
+        value = "-1" if body.llm_keep_alive else "5m"
+        cfg._data.setdefault("llm", {})["keep_alive"] = value
+        set_yaml_value(cfg.path, "llm", "keep_alive", value)
+        changed.append(
+            f"llm.keep_alive = {value} ({'giữ trong VRAM luôn' if body.llm_keep_alive else 'tự dỡ sau 5 phút idle'})")
     if body.stt_engine in ("none", "sherpa"):
         cfg._data.setdefault("stt", {})["engine"] = body.stt_engine
         set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)

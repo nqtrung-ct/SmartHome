@@ -6,6 +6,7 @@ and the timer scheduler, so all entry points behave the same.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 from datetime import datetime, timedelta
@@ -767,6 +768,16 @@ def act_solar(db: Database, metric: str | None = None) -> dict:
                        "battery_soc": soc, "pv_power": pv, "load_power": load}}
 
 
+async def _room_sensor_reply(db, drivers, room_id, metric: str) -> dict:
+    """Đáp nhiệt độ/độ ẩm theo cảm biến phòng (phương án cho ask_clarify)."""
+    text = {"humidity": "độ ẩm", "temperature": "nhiệt độ"}[metric]
+    entity = resolve_entity(db, text, room_id, "sensor")
+    if not entity:
+        return {"reply": "Mình không thấy cảm biến nào trong phòng này.",
+                "action": {"tool": "get_sensor", "ok": False}}
+    return await act_sensor(db, drivers, entity, room_id, metric)
+
+
 def _solar_question(norm: str) -> str | None:
     """Câu hỏi về điện năng nhà? Trả về metric ('battery'|'pv'|'load') hoặc None.
     "pin mặt trời" là hỏi PV; "pin" không kèm "mặt trời" là hỏi pin tích trữ."""
@@ -775,6 +786,11 @@ def _solar_question(norm: str) -> str | None:
     if re.search(r"\bpin\b", norm) and re.search(
             r"\b(bao nhieu|con |phan tram|dang (sac|xa|the nao)|sac hay xa)\b", norm):
         return "battery"
+    # "còn (lại) bao nhiêu phần trăm" mà không nhắc độ ẩm/nhiệt độ — không nói
+    # rõ hỏi cái gì: hỏi lại kẻo đoán nhầm pin với độ ẩm (xem _PENDING_METRIC)
+    if re.search(r"\bphan tram\b", norm) and re.search(r"\b(bao nhieu|con)\b", norm) \
+            and not re.search(r"\b(do am|nhiet)\b", norm):
+        return "battery_ambiguous"
     if re.search(r"\b(tai nha|nha dang (dung|tieu thu)|dang tieu thu|dang dung bao nhieu dien)\b",
                  norm):
         return "load"
@@ -1076,12 +1092,18 @@ def _strip_when(text: str) -> str:
 
 
 def _timer_message(raw: str) -> str:
-    """Lời nhắc = phần sau 'nhắc/hẹn/báo [tôi]', bỏ từ chỉ giờ; không có từ
-    đó thì lấy cả câu bỏ từ chỉ giờ."""
+    """Lời nhắc = phần sau 'nhắc/hẹn/báo [tôi/em/mình/tui]', bỏ từ chỉ giờ;
+    không có từ đó thì lấy cả câu bỏ từ chỉ giờ. Ưu tiên cắt tại từ khóa kèm
+    đại từ ('nhắc tôi X') — cắt tại MỌI từ 'báo' sẽ nuốt mất từ đó trong nội
+    dung ('nhắc tôi kiểm tra thông báo' còn đúng 'thông báo')."""
     if "bao thuc" in normalize(raw):
         return "báo thức"  # tách theo 'báo' sẽ chỉ còn 'thức'
-    parts = re.split(r"(?:nhắc|hẹn|báo)\s*(?:tôi|em|mình|tui)?", raw, flags=re.I)
-    tail = parts[-1].strip() if len(parts) > 1 else raw
+    m = None
+    for hit in re.finditer(r"(?:nhắc|hẹn|báo)\s*(?:tôi|em|mình|tui)", raw, flags=re.I):
+        m = hit  # khớp cuối có đại từ
+    if m is None:
+        m = re.search(r"(?:nhắc|hẹn|báo)", raw, flags=re.I)
+    tail = raw[m.end():].strip() if m else raw
     if not tail:
         return "hẹn giờ"
     return _strip_when(tail) or "hẹn giờ"
@@ -1162,12 +1184,35 @@ def _confirm_answer(norm: str) -> str | None:
 
 
 def awaiting_confirmation(room_id) -> bool:
-    """Phòng này có lời xác nhận hủy hẹn giờ đang chờ không?
+    """Phòng này có lời xác nhận hủy hẹn giờ / câu chọn-làm-rõ đang chờ không?
 
-    Gateway thoại dùng để bỏ qua bộ lọc câu rác: khi chờ "có/không",
-    câu trả lời rất ngắn ('có', 'ok', 'ừ') là hợp lệ, không phải nhiễu."""
-    pending = _PENDING_CANCEL.get(room_id if room_id is not None else 0)
+    Gateway thoại dùng để bỏ qua bộ lọc câu rác: khi chờ "có/không" hay
+    "pin/ẩm", câu trả lời rất ngắn ('có', 'ok', 'ừ', 'pin') là hợp lệ,
+    không phải nhiễu."""
+    key = room_id if room_id is not None else 0
+    pending = _PENDING_CANCEL.get(key)
+    if pending and now() <= pending["expires"]:
+        return True
+    pending = _PENDING_CLARIFY.get(key)
     return bool(pending and now() <= pending["expires"])
+
+
+# câu hỏi làm rõ đang chờ lời chọn, theo từng phòng. Dùng khi một câu không
+# rõ ý và có thể là một trong vài câu hỏi khác nhau (vd "còn bao nhiêu phần
+# trăm" = pin hay độ ẩm): nhánh fast-path gọi ask_clarify() kèm các phương án,
+# lời chọn (khớp fullmatch trên bản normalize) được handle_command xử lý.
+_PENDING_CLARIFY: dict[int, dict] = {}
+
+
+def ask_clarify(room_id, question: str, options: list[dict], tool: str) -> dict:
+    """Đăng câu hỏi làm rõ và trả về reply để trợ lý hỏi.
+
+    options: [{"match": <regex fullmatch trên norm>, "run": <callable trả
+    {"reply","action"}, có thể async>}]. Lời đáp khớp phương án nào thì chạy
+    run() của phương án đó; không khớp phương án nào thì coi như câu mới."""
+    _PENDING_CLARIFY[room_id if room_id is not None else 0] = {
+        "options": options, "expires": now() + timedelta(seconds=60)}
+    return {"reply": question, "action": {"tool": tool, "ok": False, "choosing": True}}
 
 
 # từ đệm của câu quản lý hẹn giờ (từ lệnh + từ chỉ thời gian) — bỏ đi rồi
@@ -1482,13 +1527,15 @@ async def act_tv_status(db, drivers, entity, mentioned_room=None) -> dict:
 
 def volume_button(norm: str) -> str | None:
     """Lệnh chỉnh âm lượng loa? Trả về volume_up/volume_down/mute hay None.
-    Chỉ nhận khi câu nhắc đến loa/nhạc/âm lượng để tránh hiểu nhầm "quạt to lên".
-    Nút mute của remote là toggle nên "mở tiếng" cũng bấm mute lần nữa."""
-    if not re.search(r"\b(am luong|volume|loa|kanto|nhac|mut|mute)\b|(tat|mo|bat) tieng", norm):
+    Chỉ nhận khi câu nhắc đến loa/nhạc/âm lượng/âm thanh để tránh hiểu nhầm
+    "quạt to lên". Nút mute của remote là toggle nên "mở tiếng" cũng bấm mute
+    lần nữa. "Tắt âm thanh X" là tắt TIẾNG chứ không phải tắt nguồn X."""
+    if not re.search(r"\b(am luong|am thanh|volume|loa|kanto|nhac|mut|mute)\b"
+                     r"|(tat|mo|bat) tieng", norm):
         return None
-    if re.search(r"\b(mo|bat) tieng\b|\bunmut\b|bo mut", norm):
+    if re.search(r"\b(mo|bat) (tieng|am thanh)\b|\bunmut\b|bo mut", norm):
         return "mute"  # toggle lại
-    if re.search(r"tat tieng|\bmut\b|\bmute\b|tat am luong", norm):
+    if re.search(r"tat (tieng|am thanh)|\bmut\b|\bmute\b|tat am luong", norm):
         return "mute"
     if re.search(r"\b(tang|to len|to hon|to ra)\b|tang am luong|am luong to", norm):
         return "volume_up"
@@ -1597,10 +1644,12 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     if timerish and not multi_intent:
         parsed = _parse_timer(norm, text)
         if parsed["minutes"] or parsed["time_str"]:
-            # không có từ nhắc/hẹn/báo mà nói tên thiết bị + bật/tắt: hẹn giờ
-            # THAO TÁC thiết bị, không phải lời nhắc
+            # câu có động từ bật/tắt + tên thiết bị = hẹn giờ THAO TÁC thiết bị
+            # — kể cả khi có từ 'hẹn' ("hẹn 1 phút nữa bật quạt" là bật quạt
+            # đúng 1 phút nữa, không phải nhắc miệng). Chỉ từ nhắc/báo rõ ràng
+            # ("nhắc tôi uống thuốc", "báo thức") mới là lời nhắc.
             action = None
-            if not _timer_intent(norm):
+            if not re.search(r"\b(nhac|bao)\b(?!\s*(nhieu|gio))", norm):
                 action = _device_action_from_text(db, norm, room_id)
             return act_timer(db, room_id, message=None if action else parsed["message"],
                              minutes=parsed["minutes"], time_str=parsed["time_str"],
@@ -1626,6 +1675,20 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     # chặn câu hỏi công suất lưới dưới đây kẻo bị nuốt ("tieu thu", "kw"...)
     if not multi_intent and not (has_on or has_off):
         solar_metric = _solar_question(norm)
+        if solar_metric == "battery_ambiguous":
+            # hỏi % mà không nói rõ cái gì — hỏi lại (cơ chế chung ask_clarify)
+            return ask_clarify(
+                room_id, "Bạn muốn hỏi pin hay độ ẩm nhỉ?", tool="get_solar",
+                options=[
+                    {"match": r"pin mat troi",
+                     "run": lambda: act_solar(db, "pv")},
+                    {"match": r"pin(\s+(dien|nang luong|tich tru))?",
+                     "run": lambda: act_solar(db, "battery")},
+                    {"match": r"(do\s+)?am(\s+phong)?",
+                     "run": lambda: _room_sensor_reply(db, drivers, room_id, "humidity")},
+                    {"match": r"(do\s+)?nhiet(\s+do)?(\s+phong)?",
+                     "run": lambda: _room_sensor_reply(db, drivers, room_id, "temperature")},
+                ])
         if solar_metric:
             return act_solar(db, solar_metric)
 
@@ -1639,7 +1702,8 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
                 "action": None}
 
     # temperature/humidity question without a verb -> sensor
-    if not (has_on or has_off) and re.search(r"nhiet do|do am", norm):
+    # (câu ghép "thời tiết và độ ẩm" nhường LLM kẻo mất nửa thời tiết)
+    if not (has_on or has_off) and not multi_intent and re.search(r"nhiet do|do am", norm):
         entity = resolve_entity(db, norm, room_id, "sensor")
         if entity:
             return await act_sensor(db, drivers, entity, room_id, sensor_metric(norm))
@@ -1723,8 +1787,9 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
                 return await act_climate(db, drivers, entity, mode="cool", temperature=temp,
                                          mentioned_room=_room_from_text(db, norm))
 
-    # climate with/without temperature
-    if has_on or has_off:
+    # climate with/without temperature — câu ghép ("tắt đèn rồi cho biết thời
+    # tiết") nhường LLM để chạy đủ hai việc, không vứt mất nửa sau
+    if (has_on or has_off) and not multi_intent:
         temp = _temp_from_text(norm)
         mentioned = _room_from_text(db, norm)
         entity = resolve_entity(db, norm, room_id, "climate")
@@ -1772,6 +1837,10 @@ async def _call_ollama(cfg: Config, messages: list) -> dict:
         # coming back; older Ollama builds reject the flag, so retry without
         "think": False,
     }
+    # llm.keep_alive = -1: giữ model trong VRAM luôn (không tự dỡ sau 5 phút
+    # idle) — bật ở tab Trợ lý khi triển khai chính thức để phản hồi tức thì
+    if str(cfg.get("llm.keep_alive", "")).strip() == "-1":
+        payload["keep_alive"] = -1
     url = cfg.get("llm.base_url", "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
     async with httpx.AsyncClient(timeout=float(cfg.get("llm.timeout", 30))) as client:
         resp = await client.post(url, json=payload)
@@ -1925,15 +1994,30 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
         return {"reply": f"Lỗi khi thực hiện: {exc}", "action": {"tool": name, "ok": False}}
 
 
+def _strip_foreign(text: str) -> str:
+    """Model nhỏ (qwen 3b) thi thoảng trộn chữ Hán/dấu fullwidth vào câu Việt
+    ("...giúp gì吗？") — bỏ hết kẻo TTS đọc thành âm lạ. Câu rỗng sau khi lọc
+    thì thay bằng câu chốt."""
+    cleaned = re.sub(r"[⺀-鿿豈-﫿＀-￯　-〿]+", " ", text)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip().strip(" ,").strip()
+    return cleaned or "Mình chưa hiểu rõ, bạn nói lại giúp mình nhé."
+
+
 async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
     system = (
         "Bạn là trợ lý nhà thông minh tiếng Việt. "
+        "LUÔN nói 100% tiếng Việt tự nhiên — tuyệt đối không lẫn chữ tiếng Trung, tiếng Anh. "
         f"Thời gian hiện tại: {now().strftime('%H:%M, %d/%m/%Y')}.\n"
         f"{_llm_context(db, room_id)}\n"
         "Ưu tiên gọi công cụ để điều khiển thiết bị. Chỉ trả lời văn bản khi không có công cụ phù hợp. "
         "Khi hỏi thời tiết ngày mai/mốt, gọi get_weather với day tương ứng. "
         "Khi hỏi giờ, ngày/thứ/âm lịch, gọi get_datetime với part và day tương ứng. "
         "Nếu câu có nhiều việc, hãy gọi TẤT CẢ các công cụ cần thiết trong cùng một lượt trả lời. "
+        "Câu mập mờ, không rõ là lệnh hay hỏi (mảnh nói vụn, tiếng đệm): KHÔNG gọi công cụ "
+        "bật/tắt thiết bị và KHÔNG sáng tác nội dung — đáp đúng câu 'Mình chưa hiểu rõ, "
+        "bạn nói lại giúp mình nhé.' "
+        "Chỉ được gọi công cụ bật/tắt khi câu rõ ràng là lệnh. "
+        "Câu trò chuyện thoải mái (chào, cảm ơn, hỏi thăm): đáp MỘT câu ngắn thân thiện. "
         "Trả lời ngắn gọn, thân thiện."
     )
     messages = [
@@ -2018,7 +2102,7 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
     if replies:
         return {"reply": " ".join(replies), "actions": actions, "engine": "llm"}
     if content:
-        return {"reply": content, "actions": [], "engine": "llm"}
+        return {"reply": _strip_foreign(content), "actions": [], "engine": "llm"}
     return {"reply": "Mình chưa hiểu ý bạn.", "actions": [], "engine": "llm"}
 
 
@@ -2057,6 +2141,22 @@ async def handle_command(db: Database, drivers, cfg: Config, weather, text: str,
         if answer == "no":
             return {"reply": "Ok, mình giữ nguyên hẹn giờ.",
                     "actions": [{"tool": "cancel_timer", "ok": False}], "engine": "fast"}
+
+    # lời chọn cho câu hỏi làm rõ đang chờ ("pin hay độ ẩm?"): khớp phương án
+    # nào thì đáp theo đó, không khớp thì coi như câu mới và bỏ trạng thái chờ
+    pending = _PENDING_CLARIFY.get(key)
+    if pending:
+        norm_answer = normalize(text)
+        hit = next((o for o in pending["options"]
+                    if re.fullmatch(o["match"], norm_answer)), None)
+        if now() > pending["expires"] or hit:
+            _PENDING_CLARIFY.pop(key, None)
+        if hit:
+            outcome = hit["run"]()
+            if inspect.isawaitable(outcome):
+                outcome = await outcome
+            return {"reply": outcome["reply"], "actions": [outcome["action"]],
+                    "engine": "fast"}
 
     try:
         outcome = await fast_path(db, drivers, weather, text, room_id)

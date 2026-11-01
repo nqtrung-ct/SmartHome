@@ -309,8 +309,7 @@ async def scheduler_loop(app) -> None:
                     db.execute("UPDATE timers SET done=1 WHERE id=?", (timer["id"],))
                 if action:
                     message = await _run_timer_action(app, action)
-                    log_event(db, "scheduler",
-                              f"Hẹn giờ chạy: {action.get('message', '')} (timer #{timer['id']})")
+                    log_event(db, "scheduler", f"{message} (timer #{timer['id']})")
                 else:
                     message = f"Đã đến giờ hẹn: {timer['message']}"
                     log_event(db, "scheduler",
@@ -319,6 +318,11 @@ async def scheduler_loop(app) -> None:
                 pipeline = getattr(app.state, "pipeline", None)
                 if connections and message:
                     await connections.announce_room(timer["room_id"], message, pipeline)
+                if message:
+                    # thiết bị phòng xiaozhi: nhận qua pending + màn hình poll
+                    from server.api.xiaozhi import announce_room as xiaozhi_announce
+
+                    await xiaozhi_announce(app, timer["room_id"], message)
             # battery sensors surface briefly (~seconds every 15 min): poll often
             if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 60)):
                 last_sensor_poll = time.time()

@@ -320,6 +320,11 @@ async function renderAssistant() {
           <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
           <button class="small-btn" onclick="testLlm()">▶ Thử LLM</button>
         </div>
+        <div class="row">
+          <label class="small"><input type="checkbox" id="llm-keep-alive" ${st.llm.keep_alive ? "checked" : ""}
+            onchange="saveKeepAlive(this.checked)"> Giữ model trong VRAM luôn</label>
+          <span class="small muted">bật khi triển khai chính thức — model không tự dỡ sau 5 phút idle, phản hồi tức thì (chiếm VRAM thường trực)</span>
+        </div>
         <div id="llm-test-out" class="console-out muted small"></div>`
       : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
          <code>ollama pull qwen3:4b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
@@ -369,6 +374,13 @@ window.saveAssistantConfig = async () => {
     const res = await api("/assistant/config", { method: "POST", body: JSON.stringify(body) });
     toast(res.changed.length ? "Đã lưu: " + res.changed.join("; ") : "Không có gì thay đổi");
     setTimeout(renderAssistant, 400);
+  } catch (e) { toast("Lỗi: " + e.message); }
+};
+
+window.saveKeepAlive = async (on) => {
+  try {
+    const res = await api("/assistant/config", { method: "POST", body: JSON.stringify({ llm_keep_alive: on }) });
+    toast(res.changed.length ? "Đã lưu: " + res.changed.join("; ") : "Không có gì thay đổi");
   } catch (e) { toast("Lỗi: " + e.message); }
 };
 

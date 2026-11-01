@@ -38,6 +38,7 @@ phải flash cả partition assets `0x800000` (chỉ flash app là model không 
 
 Lưu ý:
 
+- **Bẫy đường dẫn dài sau khi move từ `F:\esp` (đã trả giá 2026-11-01)**: đường dẫn dài hơn làm dòng lệnh compile vượt giới hạn 32K của Windows — ninja chết với `CreateProcess: The parameter is incorrect. (is the command line too long?)`; qua ccache thì ccache chết trước với "CreateProcess failed" cho gcc (báo quá sớm, dễ chẩn đoán sai). Chữa (cả hai cần): (1) `idf.py --no-ccache -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON reconfigure` rồi build với **cùng đôi cờ đó** — buộc argument vào `@rsp`; (2) bỏ ccache vì idf.py mặc định tự thêm `-DCCACHE_ENABLE=True` (cờ `--no-ccache`; lưu ý chỉ hét ccache khỏi PATH KHÔNG đủ — `CCACHE_FOUND` nằm sẵn trong CMakeCache). Sau khi reconfigure với FORCE_RESPONSE_FILE thì các lần build sau nhớ mang theo cờ, kẻo configure lại mất.
 - Git không nằm trên PATH của máy — nếu idf.py phàn nàn, thêm `C:\Users\nqtga\AppData\Local\Atlassian\SourceTree\git_local\bin` vào PATH của phiên.
 - Python venv trong `esp-tools` chứa **đường dẫn tuyệt đối** — di chuyển thư mục `firmware/` là venv hỏng (lỗi `Activation script failed` khi export). Chữa: chạy lại `install.ps1` của esp-idf (đã gặp và chữa được đúng thế).
 - Giữ đường dẫn ngắn, không dấu, không khoảng trắng — hãng board cảnh báo ESP-IDF build fail nếu vi phạm.
