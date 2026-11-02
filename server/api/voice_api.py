@@ -12,6 +12,7 @@ Protocol:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -49,11 +50,25 @@ async def voice_ws(ws: WebSocket, token: str = Query("")):
     busy = False
     handsfree: HandsFreeListener | None = None
     ignore_until = 0.0  # don't listen while our own TTS plays back on this device
+    ack_sent = False
+
+    async def maybe_ack() -> None:
+        """Phát câu "Đang kiểm tra" cho lệnh chậm — mỗi lệnh một lần."""
+        nonlocal ack_sent
+        if ack_sent:
+            return
+        ack_sent = True
+        spoken = await pipeline.ack_audio()
+        if spoken:
+            await connections.send_audio(
+                ws, "reply", app.state.cfg.get("voice.ack_text", "Đang kiểm tra"), spoken
+            )
 
     async def handle_utterance(reason: str, pcm: bytes) -> None:
         """Wake-word gate -> command -> spoken reply -> back to listening."""
-        nonlocal ignore_until
-        result = await pipeline.process_audio(pcm, room_id, skip_gate=True)
+        nonlocal ignore_until, ack_sent
+        ack_sent = False
+        result = await pipeline.process_audio(pcm, room_id, skip_gate=True, stt_only=True)
         transcript = result.get("transcript", "")
         if not transcript.strip():  # debug: keep the audio that STT couldn't read
             try:
@@ -81,9 +96,15 @@ async def voice_ws(ws: WebSocket, token: str = Query("")):
         if not command:
             reply = "Dạ, mình nghe nè."
         else:
-            reply = (await handle_command(
+            task = asyncio.create_task(handle_command(
                 db, app.state.drivers, app.state.cfg, app.state.weather, command, room_id,
-            ))["reply"]
+            ))
+            done, _ = await asyncio.wait(
+                {task}, timeout=float(app.state.cfg.get("voice.ack_after", 1.2))
+            )
+            if not done:
+                await maybe_ack()
+            reply = (await task)["reply"]
         spoken = await pipeline.tts_audio(reply)
         await connections.send_audio(ws, "reply", reply, spoken)
         if spoken:
@@ -156,13 +177,14 @@ async def voice_ws(ws: WebSocket, token: str = Query("")):
             elif msg_type == "stop" and not busy:
                 capturing = False
                 busy = True
+                ack_sent = False
                 try:
                     audio = bytes(buffer)
                     buffer.clear()
                     if not audio:
                         await ws.send_json({"type": "end"})
                         continue
-                    result = await pipeline.process_audio(audio, room_id)
+                    result = await pipeline.process_audio(audio, room_id, on_ack=maybe_ack)
                     await connections.send_audio(
                         ws, "transcript", result.get("transcript", ""), None
                     )

@@ -20,7 +20,13 @@ function tickUnlock() {
     ind.innerHTML = `${UNLOCK_SVG} ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
     ind.classList.add("on");
   } else {
-    if (unlock.token) { unlock = { token: null, until: 0 }; }
+    if (unlock.token) {
+      unlock = { token: null, until: 0 };
+      // hết phiên 5 phút: đóng hết popup điều khiển đang mở — để nguyên thì
+      // bấm nút trong popup cũ sẽ hiện PIN đè lên (camera còn stream dưới nền)
+      closeCam();
+      $("ctrl-overlay").classList.add("hidden");
+    }
     ind.innerHTML = LOCK_SVG;
     ind.classList.remove("on");
   }
@@ -636,6 +642,7 @@ async function sendPtz(body) {
     });
     if (resp.status === 401) {
       unlock = { token: null, until: 0 };
+      closeCam();  // đóng popup camera kẻo PIN hiện đè lên nền còn stream
       showPin(() => sendPtz(body));
       return false;
     }

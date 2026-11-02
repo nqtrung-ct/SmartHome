@@ -47,6 +47,22 @@ async def person_present(cam: str, recent: float = 8.0) -> bool | None:
     return False
 
 
+async def person_since(cam: str, after: float, limit: int = 100) -> list[dict] | None:
+    """Sự kiện person bắt đầu SAU mốc `after` (epoch giây) — None = lỗi kết nối.
+
+    Cho câu hỏi lịch sử: "có ai xuất hiện ở bếp từ 1 tiếng trước không?"."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(
+                f"{_base_url()}/api/events",
+                params={"cameras": cam, "label": "person", "after": int(after), "limit": limit},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception:
+        return None
+
+
 async def sole_camera() -> str | None:
     """Tên camera duy nhất trong Frigate (nhà 1 camera khỏi cấu hình map tên)."""
     try:

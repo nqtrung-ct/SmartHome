@@ -340,6 +340,13 @@ def resolve_camera(db: Database, text: str, room_id=None):
             if _alias_in(alias, norm):
                 ranked.append((len(alias) + (100 if in_scope else 0), dict(entity)))
                 break
+        # góc trùng tên trong câu là tín hiệu MẠNH hơn tên chung + phòng mic:
+        # cả hai camera đều tên "Camera" nên alias "camera" khớp mọi câu, còn
+        # "kiểm tra góc bếp" nói từ phòng khách phải là camera bếp mới đúng
+        for p in loads(entity["driver_data"]).get("presets", []):
+            if p.get("name") and _alias_in(normalize(p["name"]), norm):
+                ranked.append((len(normalize(p["name"])) + 200, dict(entity)))
+                break
     if ranked:
         ranked.sort(key=lambda pair: pair[0], reverse=True)
         return ranked[0][1]
@@ -380,6 +387,15 @@ def camera_ptz_gate(db: Database, norm: str) -> bool:
         return True
     # "kiểm tra góc quay bếp có ai không" — chỉ camera mới có góc quay + người
     if ask_person and re.search(r"\bgoc\b", norm):
+        return True
+    # hỏi người theo TÊN CHỖI, không nhắc camera/góc ("giờ nhà bếp có người
+    # không", "có ai ở cầu thang không") — phòng có camera hoặc camera có góc
+    # trùng tên là đủ vào nhánh (act_camera_person tự đo góc hiện tại trước)
+    if ask_person and not re.search(r"\bgoc\b", norm) and (
+            _room_from_text(db, norm)
+            or any(p.get("name") and _alias_in(normalize(p["name"]), norm)
+                   for e in db.query("SELECT driver_data FROM entities WHERE entity_type='camera'")
+                   for p in loads(e["driver_data"]).get("presets", []))):
         return True
     return any(
         _alias_in(alias, norm)
@@ -599,9 +615,32 @@ async def act_camera_person(db: Database, entity, norm: str) -> dict | None:
         return {"reply": f"Đã kiểm tra các góc: {'; '.join(results)}. Camera quay về vị trí ban đầu.",
                 "action": {"tool": "camera_person", "entity": entity["name"], "ok": True}}
 
+    # câu hỏi theo TÊN CHỖI không nêu "góc" ("có ai ở nhà bếp không"): góc hiện
+    # tại thường đã thấy trước — camera bếp đứng home nhìn cả cầu thang lẫn bàn
+    # ăn; CÓ người là trả lời ngay, KHÔNG có mới quay tiếp góc trùng tên chỗ
+    room_ask = bool(matched) and not re.search(r"\bgoc\b", norm)
+    if room_ask:
+        seen = await _check()
+        if seen is None:
+            return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
+                    "action": {"tool": "camera_person", "ok": False}}
+        if seen:
+            where = _room_name(db, _room_from_text(db, norm) or _entity_room(db, entity))
+            tail = f" ở {where.lower()}" if where else ""
+            return {"reply": f"Có người{tail}.",
+                    "action": {"tool": "camera_person", "entity": entity["name"],
+                               "person": True, "ok": True}}
+        # chưa thấy ở góc hiện tại -> rơi xuống nhánh quay tới góc trùng tên
+
     # một góc nêu tên: quay tới rồi kiểm tra
     if matched and device and device["host"]:
         preset = max(matched, key=lambda p: len(normalize(p["name"])))
+        saved = None
+        if room_ask:  # hỏi theo chỗ: đo xong quay về ĐÚNG chỗ đang đứng
+            try:
+                saved = await asyncio.to_thread(ptz.read_position, Config(), device)
+            except ptz.PtzError:
+                saved = None
         try:
             await asyncio.to_thread(ptz.fast_goto, Config(), device,
                                     preset["pan"], preset["tilt"], preset.get("zoom", 1))
@@ -613,6 +652,18 @@ async def act_camera_person(db: Database, entity, norm: str) -> dict | None:
         if seen is None:
             return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
                     "action": {"tool": "camera_person", "ok": False}}
+        if saved:
+            try:
+                await asyncio.to_thread(ptz.fast_goto, Config(), device,
+                                        saved["pan"], saved["tilt"], saved.get("zoom", 1))
+            except ptz.PtzError:
+                pass
+        if room_ask and not seen:
+            where = _room_name(db, _room_from_text(db, norm) or _entity_room(db, entity))
+            tail = f" ở {where.lower()}" if where else ""
+            return {"reply": f"Không có ai{tail}.",
+                    "action": {"tool": "camera_person", "entity": entity["name"],
+                               "person": False, "ok": True}}
         return {"reply": f"{'Có người' if seen else 'Không có ai'} ở góc {preset['name']}.",
                 "action": {"tool": "camera_person", "entity": entity["name"],
                            "preset": preset["name"], "person": seen, "ok": True}}
@@ -622,9 +673,217 @@ async def act_camera_person(db: Database, entity, norm: str) -> dict | None:
     if seen is None:
         return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
                 "action": {"tool": "camera_person", "ok": False}}
-    return {"reply": f"{'Có người' if seen else 'Không có ai'} trong hình {cam}.",
+    where = _room_name(db, _room_from_text(db, norm) or _entity_room(db, entity))
+    tail = f" ở {where.lower()}" if where else ""
+    return {"reply": f"{'Có người' if seen else 'Không có ai trong tầm camera'}{tail}.",
             "action": {"tool": "camera_person", "entity": entity["name"],
                        "person": seen, "ok": True}}
+
+
+# --- trạng thái thị giác (cửa đóng/mở, TV bật/tắt qua classification Frigate) ---
+
+_VISION_PHRASE = {
+    "cua": {"mo": "đang mở", "dong": "đang đóng"},
+    "tivi": {"mo": "đang bật", "tat": "đang tắt", "dong": "đang tắt"},
+}
+
+
+def _vision_question(norm: str) -> str | None:
+    """Câu hỏi trạng thái nhìn qua camera? Trả 'cua'/'tivi' hoặc None.
+
+    Phải mang dấu hiệu câu hỏi (không/chưa/hay) kẻo nuốt lệnh "mở TV";
+    "cửa sổ" không phải entity thị giác nên loại ra."""
+    if not re.search(r"\bkhong\b|\bchua\b|\bhay\b", norm):
+        return None
+    if re.search(r"\bcua so\b", norm):
+        return None
+    if re.search(r"\bcua\b", norm) and re.search(r"\b(dong|mo|nat|kiem tra)\b", norm):
+        return "cua"
+    if re.search(r"\b(tv|tivi)\b", norm) and re.search(r"\b(mo|bat|chay|tat)\b", norm):
+        return "tivi"
+    return None
+
+
+def _vision_sensors(db: Database) -> list:
+    return db.query(
+        "SELECT * FROM entities WHERE entity_type='sensor' AND driver_data LIKE '%\"vision\": true%'"
+    )
+
+
+async def act_vision_state(db: Database, drivers, room_id, norm: str, kind: str) -> dict | None:
+    """Trả lời "cửa có đóng không" / "TV phòng khách có mở không" từ classification.
+
+    Quy tắc phòng: phòng nêu trong câu thắng > phòng mic; neither có ứng viên
+    thì HỎI LẠI (ask_clarify) — không tự đoán chéo phòng. TV mà phòng đó có
+    entity media thật (AndroidTV driver) thì nhường branch tv_status."""
+    from server.core import vision_states as vs_mod
+
+    word = "cửa" if kind == "cua" else "TV"
+    cands = []
+    for r in _vision_sensors(db):
+        names = [normalize(r["name"])] + [normalize(a) for a in (r["aliases"] or "").split(",")]
+        if any(_alias_in(n, norm) for n in names if n):
+            cands.append(r)
+    if not cands:
+        return None
+
+    mentioned = _room_from_text(db, norm)
+    if kind == "tivi" and not mentioned:
+        # TV thật (driver) trong phòng mic nói trước — chính xác hơn nhìn ảnh
+        media = resolve_entity(db, norm, room_id, "media")
+        if media and tv_status_question(norm):
+            return None  # để nhánh tv_status trả lời từ trạng thái driver
+        if media and mentioned is None and _entity_room(db, media) == room_id:
+            return None
+
+    scope = mentioned or room_id
+    in_scope = [r for r in cands if scope and _entity_room(db, r) == scope]
+    if not in_scope:
+        if mentioned:
+            return {"reply": f"Phòng đó không có camera kiểm tra {word.lower()}.",
+                    "action": {"tool": "vision_state", "ok": False}}
+        # không nêu phòng mà phòng mic không có: hỏi lại, không đoán chéo phòng
+        room_name = _room_name(db, _entity_room(db, cands[0]))
+        label = cands[0]
+        return ask_clarify(
+            room_id,
+            f"Bạn hỏi {word.lower()} phòng nào — {room_name.lower()} phải không?",
+            tool="vision_state",
+            options=[{"match": rf"(\w+\s+)*{normalize(room_name)}(\s+\w+)*|dung|co|vang",
+                      "run": lambda: _vision_answer(db, label, mentioned, kind)}],
+        )
+    return await _vision_answer(db, in_scope[0], mentioned, kind)
+
+
+async def _vision_answer(db: Database, entity, mentioned, kind: str) -> dict:
+    """Đọc trạng thái đã xác nhận; entity on-demand (TV) thì quay tới góc,
+    chờ đo, về góc home ngay — cửa là góc cần theo dõi liên tục."""
+    import time as _time
+
+    from server.config import Config
+    from server.core import vision_states as vs_mod
+    from server.drivers import dahua_ptz as ptz
+
+    vs = vs_mod.instance()
+    if vs is None:
+        return {"reply": "Mình chưa kết nối được hệ thống phân loại ảnh (MQTT).",
+                "action": {"tool": "vision_state", "ok": False}}
+
+    dd = loads(entity["driver_data"])
+    cam = db.one("SELECT * FROM entities WHERE id=?", (dd.get("camera_entity"),))
+    cam_dd = loads(cam["driver_data"]) if cam else {}
+    presets = {p["name"]: p for p in cam_dd.get("presets", []) if p.get("name")}
+    home = presets.get(cam_dd.get("home_preset"))
+    target = presets.get(dd.get("preset", ""))
+    device = db.one("SELECT * FROM devices WHERE id=?", (cam["device_id"],)) if cam else None
+    cfg = Config()
+
+    try:
+        if target and home and target["name"] != home["name"] and device and device["host"]:
+            # on-demand (TV): đang đúng góc rồi thì đo luôn, không phải quay
+            pos = await asyncio.to_thread(ptz.read_position, cfg, device)
+            if not vs_mod.ptz_near(pos, target):
+                await asyncio.to_thread(ptz.fast_goto, cfg, device,
+                                        target["pan"], target["tilt"], target.get("zoom", 1))
+                await asyncio.sleep(3.0)  # motor mất 2-3 giây
+            pos = await asyncio.to_thread(ptz.read_position, cfg, device)
+            vs.set_camera_position(cam["id"], pos)  # cập nhật gate ngay, khỏi chờ tick 10s
+            snap = await asyncio.to_thread(vs.wait_fresh, entity["id"],
+                                           _time.time() - 1.0, 8.0)
+            await asyncio.to_thread(ptz.fast_goto, cfg, device,
+                                    home["pan"], home["tilt"], home.get("zoom", 1))
+        else:
+            snap = vs.snapshot(entity["id"])
+            if not snap["valid"] and home and device and device["host"]:
+                # camera đang vắng góc cửa: quay về rồi đo lại mới chắc chắn
+                await asyncio.to_thread(ptz.fast_goto, cfg, device,
+                                        home["pan"], home["tilt"], home.get("zoom", 1))
+                await asyncio.sleep(3.0)
+                pos = await asyncio.to_thread(ptz.read_position, cfg, device)
+                vs.set_camera_position(cam["id"], pos)
+                snap = await asyncio.to_thread(vs.wait_fresh, entity["id"],
+                                               _time.time() - 1.0, 8.0)
+    except ptz.PtzError as exc:
+        return {"reply": f"Không quay được camera ({exc}).",
+                "action": {"tool": "vision_state", "ok": False}}
+
+    where = _room_where(db, _entity_room(db, entity), mentioned)
+    label = snap["label"] if snap["valid"] else None
+    phrase = _VISION_PHRASE.get(kind, {}).get(normalize(label or ""), "")
+    # tên viết thường cho tự nhiên ("đèn trần..."), giữ nguyên tên viết tắt ("TV")
+    display = entity["name"] if entity["name"].isupper() else entity["name"].lower()
+    if not label:
+        return {"reply": f"Mình không kiểm tra được {display}{where} lúc này.",
+                "action": {"tool": "vision_state", "entity": entity["name"], "ok": False}}
+    text = phrase or f"đang ở trạng thái {label.lower()}"
+    return {"reply": f"{display}{where} {text}.",
+            "action": {"tool": "vision_state", "entity": entity["name"],
+                       "state": label, "ok": True}}
+
+
+# --- lịch sử người xuất hiện ("có ai xuất hiện ở nhà bếp từ 1 tiếng trước") ---
+
+_NUM_VI = {"mot": 1, "hai": 2, "ba": 3, "bon": 4, "nam": 5, "sau": 6,
+           "bay": 7, "tam": 8, "chin": 9, "muoi": 10, "nua": 0.5}
+
+
+def _person_history_question(norm: str) -> float | None:
+    """Câu tra LỊCH SỰ người -> số giây cần tra; None = không phải.
+
+    Phải có từ "xuất hiện / đi qua / đã đến / đến nhà" + mốc thời gian — câu
+    hỏi người đang có mặt (không mốc) đi nhánh live như cũ."""
+    if not re.search(r"\b(xuat hien|di qua|da den|den nha)\b", norm):
+        return None
+    unit = {"phut": 60, "gio": 3600, "tieng": 3600}
+    m = re.search(
+        r"\b(?:tu|trong vong|trong)\s+(\d+|" + "|".join(_NUM_VI) + r")\s*(phut|gio|tieng)\b", norm)
+    if m:
+        try:
+            n = float(m.group(1))
+        except ValueError:
+            n = _NUM_VI[m.group(1)]
+        return n * unit[m.group(2)]
+    if re.search(r"\btrong (gio|tieng) qua\b", norm):
+        return 3600.0
+    return None
+
+
+async def act_person_history(db: Database, room_id, norm: str, secs: float) -> dict | None:
+    """Đếm sự kiện person trong khoảng `secs` qua Frigate rồi tóm tắt.
+
+    None = không tìm được camera cho chỗ hỏi (để nhánh khác xử lý)."""
+    import time as _time
+    from datetime import datetime
+
+    from server.core import frigate as frg
+    from server.util import TZ
+
+    cam = resolve_camera(db, norm, room_id)
+    if not cam:
+        return None
+    fname = loads(cam["driver_data"]).get("frigate") or await frg.sole_camera()
+    if not fname:
+        return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
+                "action": {"tool": "camera_person", "ok": False}}
+    events = await frg.person_since(fname, _time.time() - secs)
+    if events is None:
+        return {"reply": "Mình không kết nối được hệ thống ghi hình (Frigate).",
+                "action": {"tool": "camera_person", "ok": False}}
+    times = sorted(float(e["start_time"]) for e in events if e.get("start_time"))
+    where = _room_name(db, _room_from_text(db, norm) or _entity_room(db, cam))
+    at = f" ở {where.lower()}" if where else ""
+    span = f"{int(secs // 60)} phút qua" if secs < 3600 else f"{secs / 3600:g} tiếng qua"
+    if not times:
+        reply = f"Không có ai xuất hiện{at} trong {span}."
+    else:
+        hhmm = [datetime.fromtimestamp(t, TZ).strftime("%H:%M") for t in times]
+        if len(hhmm) == 1:
+            reply = f"Có 1 lần người xuất hiện{at} trong {span}, lúc {hhmm[0]}."
+        else:
+            reply = f"Có {len(hhmm)} lần người xuất hiện{at} trong {span}, gần nhất {hhmm[-1]}."
+    return {"reply": reply,
+            "action": {"tool": "camera_person", "entity": cam["name"],
+                       "history": len(times), "ok": True}}
 
 
 async def act_climate(db, drivers, entity, mode=None, temperature=None, mentioned_room=None) -> dict:
@@ -1637,6 +1896,15 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             re.search(r"\broi\b", norm) and (has_on or has_off)):
         return None
 
+    # "có ai xuất hiện ở nhà bếp từ 1 tiếng trước" — tra LỊCH SỰ person qua
+    # Frigate. Phải đứng TRƯỚC nhánh hẹn giờ: "1 tiếng" trong câu khớp khuôn
+    # hẹn giờ và bị đọc thành lời nhắc mất.
+    hist_secs = _person_history_question(norm)
+    if hist_secs and not re.search(r"\broi\b|\bsau do\b|\bva\b|\bva ca\b|\bthem\b|\bngoai ra\b", norm):
+        answered = await act_person_history(db, room_id, norm, hist_secs)
+        if answered:
+            return answered
+
     # dời hẹn giờ ("dời tắt máy lạnh thêm 1 tiếng") — phải đứng TRƯỚC mọi nhánh
     # khác vì câu chứa động từ bật/tắt + giờ, lọt xuống nhánh thường sẽ tắt
     # nhầm thiết bị ngay lập tức
@@ -1777,6 +2045,15 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             return await act_camera_ptz(db, cam, norm)
         return {"reply": "Mình không tìm thấy camera nào.",
                 "action": {"tool": "camera_preset", "ok": False}}
+
+    # hỏi trạng thái THỊ GIÁC ("cửa có đóng không", "TV phòng khách có mở không")
+    # — entity cảm biến do vision_states sinh từ classification Frigate; đặt
+    # trước tv_status kẻo câu hỏi TV phòng không có media entity rơi xuống LLM
+    vision_q = _vision_question(norm)
+    if vision_q and not multi_intent:
+        answered = await act_vision_state(db, drivers, room_id, norm, vision_q)
+        if answered:
+            return answered
 
     # hỏi trạng thái TV ("TV đang xem gì", "tivi đang bật không") — đặt TRƯỚC
     # nhánh liệt kê "cái gì đang bật" kẻo "TV đang bật gì" bị nuốt thành danh sách

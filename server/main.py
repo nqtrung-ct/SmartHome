@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from server.api import admin, assistant, command_api, devices, discovery_api, voice_api, xiaozhi
 from server.config import Config
 from server.core.scheduler import start_scheduler
+from server.core.vision_states import start_vision
 from server.core.weather import Weather
 from server.db import Database, log_event
 from server.drivers import load_drivers
@@ -46,6 +47,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.voice_connections = VoiceConnections(db)
         app.state.scheduler_task = start_scheduler(app)
         app.state.learn_jobs = {}
+        start_vision(app)
 
         for driver in drivers.values():
             try:

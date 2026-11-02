@@ -280,6 +280,11 @@ async def _poll_camera_home(app) -> None:
         except Exception:
             _ptz_away.pop(row["eid"], None)  # camera ngủ/mất mạng: đếm lại khi thức dậy
             continue
+        # position gate cho trạng thái thị giác (cửa/ti vi): entity chỉ hợp lệ
+        # khi camera đứng đúng góc đã vẽ crop
+        vision = getattr(app.state, "vision", None)
+        if vision:
+            vision.set_camera_position(row["eid"], pos)
         if _ptz_near(pos, home):
             _ptz_away.pop(row["eid"], None)
             continue

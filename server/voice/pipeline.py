@@ -26,6 +26,7 @@ class VoicePipeline:
         self.db = db
         self.drivers = drivers
         self.weather = weather
+        self._ack_audio: tuple[bytes, int] | None = None  # câu ACK cố định, tổng hợp 1 lần
         # a broken engine must never take the whole server down
         try:
             self.stt = make_stt(cfg)
@@ -38,8 +39,15 @@ class VoicePipeline:
             log_event(db, "tts", f"Không nạp được TTS (dùng none): {exc}", level="warn")
             self.tts = TtsNone()
 
-    async def process_audio(self, pcm16: bytes, room_id, skip_gate: bool = False) -> dict:
-        """16 kHz mono PCM16 -> {transcript, reply, actions, engine}."""
+    async def process_audio(self, pcm16: bytes, room_id, skip_gate: bool = False,
+                            on_ack=None, stt_only: bool = False) -> dict:
+        """16 kHz mono PCM16 -> {transcript, reply, actions, engine}.
+
+        Lệnh chậm (quay camera đo, LLM tool-calls) thì gọi `on_ack` sau
+        `voice.ack_after` giây để máy nói "Đang kiểm tra" — người dùng biết
+        lệnh đã nhận, không tưởng máy chết. `stt_only` chỉ nghe chữ (hands-free
+        gọi handle_command riêng sau khi tách từ đánh thức — chạy lệnh ở đây
+        nữa thì mọi lệnh PTZ/classification bị thi hành 2 lần)."""
         # energy gate: near-silent audio makes small STT models hallucinate
         # single words ("Đúng") and then waste a slow LLM round-trip
         if not skip_gate and not _has_speech_energy(pcm16):
@@ -60,9 +68,29 @@ class VoicePipeline:
                 "actions": [],
                 "engine": "stt",
             }
-        result = await handle_command(self.db, self.drivers, self.cfg, self.weather, transcript, room_id)
+        if stt_only:
+            return {"transcript": transcript, "reply": "", "actions": [], "engine": "stt"}
+        task = asyncio.create_task(
+            handle_command(self.db, self.drivers, self.cfg, self.weather, transcript, room_id)
+        )
+        done, _ = await asyncio.wait({task}, timeout=float(self.cfg.get("voice.ack_after", 1.2)))
+        if not done and on_ack:
+            try:
+                await on_ack()
+            except Exception:
+                pass  # ACK chỉ là nuột lời — lỗi chỗ khác không được ăn mất câu trả lời
+        result = await task
         result["transcript"] = transcript
         return result
+
+    async def ack_audio(self) -> tuple[bytes, int] | None:
+        """Audio câu ACK (voice.ack_text) — synthesize đúng 1 lần rồi dùng lại."""
+        if self._ack_audio is None:
+            try:
+                self._ack_audio = await self.tts_audio(self.cfg.get("voice.ack_text", "Đang kiểm tra"))
+            except Exception:
+                return None
+        return self._ack_audio
 
     async def tts_audio(self, text: str) -> tuple[bytes, int] | None:
         try:

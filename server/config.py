@@ -41,6 +41,8 @@ DEFAULTS: dict[str, Any] = {
     "cozylife": {"poll_seconds": 60},  # chu kỳ đọc trạng thái công tắc CozyLife (TCP 5555, chỉ đọc)
     "solar": {"poll_seconds": 180},  # chu kỳ đọc inverter Senergy (Modbus TCP) - đừng nhanh hơn 30s
     "frigate": {"base_url": "http://127.0.0.1:5000"},  # API nội bộ của NVR Docker (map 127.0.0.1)
+    "voice": {"ack_text": "Đang kiểm tra",  # câu nói báo nhận lệnh khi xử lý chậm (PTZ/classification)
+              "ack_after": 1.2},  # sau bao nhiêu giây mà chưa xong mới nói ACK
     "display": {"pin": ""},  # mã 4 số mở khóa điều khiển trên màn hình treo tường
     "xiaozhi": {"volume": 100},  # âm lượng loa thiết bị phòng (0-100), áp dụng mỗi phiên
     "retention": {"days": 30},
