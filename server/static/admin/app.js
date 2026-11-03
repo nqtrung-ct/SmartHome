@@ -398,6 +398,21 @@ async function renderAssistant() {
         </select>
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
       </div>
+      <div class="row">
+        <label class="small muted">Model</label>
+        <select id="stt-model-dir" style="min-width:220px">
+          ${st.stt.models.length
+            ? st.stt.models.map((m) => `<option value="${esc(m.dir)}" ${m.dir === st.stt.model_dir_rel ? "selected" : ""}>${esc(m.dir)} (${m.size_mb} MB${m.hotwords ? ", hotwords" : ""})</option>`).join("")
+            : `<option value="${esc(st.stt.model_dir_rel || "")}">${esc(st.stt.model_dir_rel || "data/models/stt")}</option>`}
+        </select>
+        <button class="small-btn" onclick="saveAssistantConfig()">💾 Lưu model</button>
+      </div>
+      <div class="row">
+        <label class="small muted">Câu thử</label>
+        <input id="stt-test-text" value="Hãy hẹn giờ 15 phút nữa nhắc tôi tắt bếp." style="width:300px">
+        <button class="small-btn" onclick="testStt()">▶ Thử STT</button>
+      </div>
+      <div id="stt-test-out" class="console-out muted small"></div>
       ${!st.stt.loaded ? `<p class="small">Cài đặt: <code>pip install -r optional-requirements.txt</code>, tải model Zipformer-vi (mục Vietnamese) từ
         <a href="https://k2-fsa.github.io/sherpa/onnx/pretrained_models/index.html" target="_blank" rel="noopener">sherpa-onnx</a>,
         giải nén vào <code>data/models/stt/</code> (tokens.txt + encoder/decoder/joiner .onnx), chọn engine sherpa rồi Lưu.</p>` : ""}
@@ -439,6 +454,7 @@ window.saveAssistantConfig = async () => {
     llm_local_model: engine === "openai" ? ($("#llm-local-model")?.value.trim() || null) : null,
     llm_ollama_url: engine === "openai" ? ($("#llm-ollama-url")?.value.trim() || null) : null,
     stt_engine: $("#stt-engine")?.value || null,
+    stt_model_dir: $("#stt-model-dir")?.value || null,
     tts_engine: $("#tts-engine")?.value || null,
     tts_http_url: $("#tts-url")?.value ?? null,
   };
@@ -454,6 +470,20 @@ window.saveKeepAlive = async (on) => {
     const res = await api("/assistant/config", { method: "POST", body: JSON.stringify({ llm_keep_alive: on }) });
     toast(res.changed.length ? "Đã lưu: " + res.changed.join("; ") : "Không có gì thay đổi");
   } catch (e) { toast("Lỗi: " + e.message); }
+};
+
+window.testStt = async () => {
+  const out = $("#stt-test-out");
+  out.classList.remove("muted");
+  out.textContent = "…";
+  try {
+    const res = await api("/assistant/test-stt", {
+      method: "POST",
+      body: JSON.stringify({ text: $("#stt-test-text")?.value.trim() || "Hãy hẹn giờ 15 phút nữa nhắc tôi tắt bếp." }),
+    });
+    out.textContent = `Nghe: ${res.transcript}\n` +
+      `STT ${res.stt_ms} ms · piper ${res.synth_ms} ms · ${res.model_dir}`;
+  } catch (e) { out.textContent = "Lỗi: " + e.message; }
 };
 
 window.testLlm = async () => {

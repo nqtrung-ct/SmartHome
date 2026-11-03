@@ -51,6 +51,23 @@ def _cloud_models(cfg):
         return None, str(exc)
 
 
+def _stt_models() -> list[dict]:
+    """Các thư mục model STT khả dụng trong data/models (có tokens.txt)."""
+    root = Path("data/models")
+    if not root.exists():
+        return []
+    out = []
+    for d in sorted(root.iterdir()):
+        if d.is_dir() and (d / "tokens.txt").exists():
+            mb = sum(f.stat().st_size for f in d.glob("*.onnx")) / 1e6
+            out.append({
+                "dir": d.as_posix(),  # dạng tương đối, dùng luôn làm stt.model_dir
+                "size_mb": round(mb, 1),
+                "hotwords": (d / "hotwords.txt").exists(),
+            })
+    return out
+
+
 @router.get("/assistant/status")
 def assistant_status(request: Request, _: None = Depends(require_admin)):
     app = request.app.state
@@ -86,6 +103,8 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
         "stt": {
             "engine": cfg.get("stt.engine"),
             "model_dir": str(model_dir),
+            "model_dir_rel": str(cfg.get("stt.model_dir", "")),
+            "models": _stt_models(),
             "has_tokens": (model_dir / "tokens.txt").exists(),
             "onnx_files": onnx_files,
             "loaded": type(pipeline.stt).__name__ == "SttSherpa",
@@ -138,6 +157,7 @@ class AssistantConfigIn(BaseModel):
     llm_model: str | None = None
     llm_keep_alive: bool | None = None  # True = giữ model trong VRAM luôn
     stt_engine: str | None = None  # none | sherpa
+    stt_model_dir: str | None = None  # thư mục model trong data/models (đổi là nạp lại ngay)
     tts_engine: str | None = None  # none | http
     tts_http_url: str | None = None
 
@@ -203,6 +223,13 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         cfg._data.setdefault("stt", {})["engine"] = body.stt_engine
         set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)
         changed.append(f"stt.engine = {body.stt_engine}")
+    if body.stt_model_dir:
+        if (Path(body.stt_model_dir) / "tokens.txt").exists():
+            cfg._data.setdefault("stt", {})["model_dir"] = body.stt_model_dir
+            set_yaml_value(cfg.path, "stt", "model_dir", body.stt_model_dir)
+            changed.append(f"stt.model_dir = {body.stt_model_dir} (nạp lại ngay)")
+        else:
+            changed.append(f"bỏ qua stt.model_dir — không có model trong {body.stt_model_dir}")
     if body.tts_engine in ("none", "http"):
         cfg._data.setdefault("tts", {})["engine"] = body.tts_engine
         set_yaml_value(cfg.path, "tts", "engine", body.tts_engine)
@@ -255,6 +282,67 @@ async def test_tts(request: Request, body: TtsTestIn, _: None = Depends(require_
         media_type="audio/wav",
         headers={"X-Latency-Ms": str(latency_ms), "X-Sample-Rate": str(rate)},
     )
+
+
+class SttTestIn(BaseModel):
+    text: str = "Hãy hẹn giờ 15 phút nữa nhắc tôi tắt bếp."
+
+
+_PIPER_VOICE = None  # cache giữa các lần test — piper load model mất ~1s
+
+
+def _piper_synth(text: str) -> bytes:
+    """PCM16 16 kHz của câu text do piper đọc — test STT không cần mic thật."""
+    global _PIPER_VOICE
+    import piper
+
+    if _PIPER_VOICE is None:
+        models = sorted(Path("data/models/tts").glob("**/*.onnx"))
+        if not models:
+            raise RuntimeError("Không thấy model TTS trong data/models/tts (piper cần để sinh audio test)")
+        _PIPER_VOICE = piper.PiperVoice.load(str(models[0]))
+    try:
+        from piper import PiperSynthesisConfig
+
+        chunks = _PIPER_VOICE.synthesize(text, PiperSynthesisConfig(length_scale=1.0))
+    except (ImportError, TypeError):
+        chunks = _PIPER_VOICE.synthesize(text)
+    pcm = b"".join(c.audio_int16_bytes for c in chunks)
+    src = _PIPER_VOICE.config.sample_rate
+    if src != 16000:
+        import numpy as np
+
+        x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+        n = int(len(x) * 16000 / src)
+        pcm = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+        pcm = pcm.astype(np.int16).tobytes()
+    return pcm
+
+
+@router.post("/assistant/test-stt")
+def test_stt(request: Request, body: SttTestIn, _: None = Depends(require_admin)):
+    """Cho model STT đang nạp nghe lại câu do piper đọc (chính là đường
+    stt_eval.py chạy tay) — so model nào nghe chuẩn hơn mà không cần mic."""
+    pipeline = request.app.state.pipeline
+    try:
+        t0 = time.perf_counter()
+        pcm = _piper_synth(body.text)
+        synth_ms = int((time.perf_counter() - t0) * 1000)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Sinh audio test lỗi: {exc}")
+    t0 = time.perf_counter()
+    try:
+        transcript = pipeline.stt.transcribe(pcm)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"STT lỗi: {exc}")
+    stt_ms = int((time.perf_counter() - t0) * 1000)
+    return {
+        "text": body.text,
+        "transcript": transcript,
+        "synth_ms": synth_ms,
+        "stt_ms": stt_ms,
+        "model_dir": str(request.app.state.cfg.get("stt.model_dir", "")),
+    }
 
 
 class AnnounceIn(BaseModel):
