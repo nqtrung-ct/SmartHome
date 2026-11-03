@@ -1,4 +1,8 @@
-"""Text command understanding: fast path (regex table) then LLM (Ollama tools).
+"""Text command understanding: fast path (regex table) then LLM tool calls.
+
+LLM chạy qua 2 adapter: Ollama local (llm.engine "ollama") hoặc mọi dịch vụ
+tương thích OpenAI (llm.engine "openai" — OpenAI/OpenRouter/DeepSeek/Groq),
+cloud lỗi thì tự fallback về Ollama (llm.fallback).
 
 handle_command() is shared by the admin console, the WebSocket voice gateway
 and the timer scheduler, so all entry points behave the same.
@@ -202,7 +206,8 @@ TOOLS = [
                                "description": "none=một lần; daily=mỗi ngày; weekdays=thứ Hai đến thứ Sáu; "
                                               "weekend=thứ Bảy và Chủ Nhật; mon..sun=mỗi tuần vào thứ đó"},
                     "day": {"type": "string", "enum": ["today", "tomorrow", "day_after"],
-                            "description": "today=hôm nay, tomorrow=ngày mai, day_after=ngày mốt"},
+                            "description": "today=hôm nay, tomorrow=ngày mai, day_after=ngày mốt. "
+                                           "Lặp lại phải dùng repeat, KHÔNG dùng day"},
                     "entity": {"type": "string", "description": "Thiết bị cần bật/tắt khi đến giờ (nếu hẹn thao tác, không phải nhắc)"},
                     "state": {"type": "string", "enum": ["on", "off"]},
                     "temperature": {"type": "integer", "minimum": 16, "maximum": 30,
@@ -2152,7 +2157,7 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
 
 
 # ---------------------------------------------------------------------------
-# LLM path (Ollama)
+# LLM path (Ollama local + adapter OpenAI-compatible, xem _call_llm)
 
 
 def _llm_context(db: Database, room_id) -> str:
@@ -2171,12 +2176,55 @@ def _llm_context(db: Database, room_id) -> str:
     return "\n".join(lines)
 
 
-async def _call_ollama(cfg: Config, messages: list) -> dict:
+# Thông điệp trong vòng lặp tool dùng format trung lập (canonical):
+#   {"role": "system"|"user", "content": str}
+#   {"role": "assistant", "content": str, "tool_calls": [{"id","name","arguments"}]}
+#   {"role": "tool", "name": str, "id": str, "content": str}
+# Mỗi adapter (_ollama_chat/_openai_chat) tự đổi sang/gỡ từ format của hãng.
+# Cả hai trả về {"content": str, "tool_calls": [{"id","name","arguments"(dict)}]}.
+
+
+def _ollama_messages(messages: list) -> list:
+    out = []
+    for m in messages:
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            out.append({"role": "assistant", "content": m.get("content") or "",
+                        "tool_calls": [{"function": {"name": c["name"],
+                                                     "arguments": c["arguments"]}}
+                                       for c in m["tool_calls"]]})
+        elif m["role"] == "tool":
+            # ollama builds vary on the field name -> gửi cả hai
+            out.append({"role": "tool", "name": m["name"], "tool_name": m["name"],
+                        "content": m["content"]})
+        else:
+            out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
+async def _ollama_chat(cfg: Config, messages: list) -> dict:
+    model = cfg.get("llm.model", "qwen3:4b")
+    if cfg.get("llm.engine", "ollama") == "openai":
+        # đang là fallback cho engine cloud: model Ollama là local_model,
+        # URL là ollama_url (base_url lúc này là URL của dịch vụ cloud)
+        model = cfg.get("llm.local_model", "") or cfg.get("llm.model", "qwen3:4b")
+        base = str(cfg.get("llm.ollama_url", "") or "http://127.0.0.1:11434")
+    else:
+        base = str(cfg.get("llm.base_url", "http://127.0.0.1:11434"))
     payload = {
-        "model": cfg.get("llm.model", "qwen3:4b"),
-        "messages": messages,
+        "model": model,
+        "messages": _ollama_messages(messages),
         "tools": TOOLS,
         "stream": False,
+        # sampling khuyến nghị của Qwen (top_k/min_p/num_ctx phải truyền thẳng,
+        # không ăn theo default của Ollama); num_ctx 4096 trở lên kẻo tools bị
+        # cắt mất ở đầu context
+        "options": {
+            "temperature": float(cfg.get("llm.temperature", 0.7)),
+            "top_p": float(cfg.get("llm.top_p", 0.8)),
+            "top_k": int(cfg.get("llm.top_k", 20)),
+            "min_p": float(cfg.get("llm.min_p", 0.0)),
+            "num_ctx": int(cfg.get("llm.num_ctx", 4096)),
+        },
         # qwen3 "thinks" by default: slow on small GPUs and tool calls stop
         # coming back; older Ollama builds reject the flag, so retry without
         "think": False,
@@ -2185,14 +2233,97 @@ async def _call_ollama(cfg: Config, messages: list) -> dict:
     # idle) — bật ở tab Trợ lý khi triển khai chính thức để phản hồi tức thì
     if str(cfg.get("llm.keep_alive", "")).strip() == "-1":
         payload["keep_alive"] = -1
-    url = cfg.get("llm.base_url", "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
+    url = base.rstrip("/") + "/api/chat"
     async with httpx.AsyncClient(timeout=float(cfg.get("llm.timeout", 30))) as client:
         resp = await client.post(url, json=payload)
         if resp.status_code == 400:
             payload.pop("think", None)
             resp = await client.post(url, json=payload)
         resp.raise_for_status()
-        return resp.json()
+        message = resp.json().get("message", {})
+    calls = []
+    for i, call in enumerate(message.get("tool_calls") or []):
+        fn = call.get("function", {})
+        args = fn.get("arguments", {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
+        calls.append({"id": call.get("id") or f"call_o{i}", "name": fn.get("name", ""),
+                      "arguments": args})
+    return {"content": (message.get("content") or "").strip(), "tool_calls": calls}
+
+
+def _openai_messages(messages: list) -> list:
+    out = []
+    for m in messages:
+        if m["role"] == "assistant" and m.get("tool_calls"):
+            out.append({
+                "role": "assistant",
+                "content": m.get("content") or None,
+                "tool_calls": [{
+                    "id": c["id"], "type": "function",
+                    "function": {"name": c["name"],
+                                 "arguments": json.dumps(c["arguments"], ensure_ascii=False)},
+                } for c in m["tool_calls"]],
+            })
+        elif m["role"] == "tool":
+            out.append({"role": "tool", "tool_call_id": m["id"], "content": m["content"]})
+        else:
+            out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
+async def _openai_chat(cfg: Config, messages: list) -> dict:
+    url = cfg.get("llm.base_url", "").rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {cfg.get('llm.api_key', '')}"}
+    payload = {
+        "model": cfg.get("llm.model", ""),
+        "messages": _openai_messages(messages),
+        "tools": TOOLS,
+        "tool_choice": "auto",
+        "stream": False,
+        # OpenAI-compatible chỉ nhận temperature/top_p trong bộ Qwen khuyến nghị
+        "temperature": float(cfg.get("llm.temperature", 0.7)),
+        "top_p": float(cfg.get("llm.top_p", 0.8)),
+    }
+    async with httpx.AsyncClient(timeout=float(cfg.get("llm.timeout", 30))) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        if not resp.is_success:
+            try:  # hiện message thật của provider (sai key, hết tiền...)
+                detail = resp.json().get("error", {}).get("message", "")
+            except Exception:
+                detail = resp.text[:200]
+            raise RuntimeError(f"HTTP {resp.status_code}: {detail or resp.reason_phrase}")
+        message = resp.json()["choices"][0]["message"]
+    calls = []
+    for i, call in enumerate(message.get("tool_calls") or []):
+        fn = call.get("function", {})
+        args = fn.get("arguments", {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
+        calls.append({"id": call.get("id") or f"call_c{i}", "name": fn.get("name", ""),
+                      "arguments": args})
+    return {"content": (message.get("content") or "").strip(), "tool_calls": calls}
+
+
+async def _call_llm(cfg: Config, messages: list) -> tuple[dict, str]:
+    """Chạy theo llm.engine; engine cloud lỗi thì chuyển xuống Ollama local
+    (llm.fallback) để nhà vẫn hoạt động khi mất mạng. Trả về (kết quả
+    normalized, engine đã dùng)."""
+    engine = str(cfg.get("llm.engine", "ollama")).lower()
+    if engine == "openai":
+        try:
+            return await _openai_chat(cfg, messages), "openai"
+        except Exception:
+            if not cfg.get("llm.fallback", True):
+                raise
+            return await _ollama_chat(cfg, messages), "ollama-fallback"
+    return await _ollama_chat(cfg, messages), "ollama"
 
 
 async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
@@ -2290,6 +2421,12 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             return act_datetime(ask_date=True, ask_lunar=part == "lunar", day=day)
 
         if name == "set_timer":
+            # model nhỏ hay nhét giá trị lặp ("daily"...) vào param day — chữa
+            # phòng thủ kẻo "mỗi ngày" thành hẹn 1 lần
+            day_raw = str(args.get("day") or "").lower()
+            if day_raw in ("daily", "weekdays", "weekend",
+                           "mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+                args = {**args, "repeat": args.get("repeat") or day_raw, "day": None}
             rep = {"none": "", "daily": "daily", "weekdays": "0,1,2,3,4",
                    "weekend": "5,6", "mon": "0", "tue": "1", "wed": "2",
                    "thu": "3", "fri": "4", "sat": "5", "sun": "6"}.get(
@@ -2357,10 +2494,16 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         "Khi hỏi thời tiết ngày mai/mốt, gọi get_weather với day tương ứng. "
         "Khi hỏi giờ, ngày/thứ/âm lịch, gọi get_datetime với part và day tương ứng. "
         "Nếu câu có nhiều việc, hãy gọi TẤT CẢ các công cụ cần thiết trong cùng một lượt trả lời. "
+        "Sau khi nhận kết quả công cụ, viết MỘT câu trả lời ngắn tự nhiên tổng hợp từ kết quả "
+        "(không đọc lại nguyên văn, không bịa số liệu ngoài kết quả). "
+        "KHÔNG tự bịa tham số người dùng không nhắc tới (nhiệt độ, giờ, phòng) — "
+        "chỉ truyền tham số có trong câu. "
         "Câu mập mờ, không rõ là lệnh hay hỏi (mảnh nói vụn, tiếng đệm): KHÔNG gọi công cụ "
         "bật/tắt thiết bị và KHÔNG sáng tác nội dung — đáp đúng câu 'Mình chưa hiểu rõ, "
         "bạn nói lại giúp mình nhé.' "
         "Chỉ được gọi công cụ bật/tắt khi câu rõ ràng là lệnh. "
+        "Lệnh ngắn gọn như 'tắt đèn', 'bật quạt', 'bật điều hòa' là lệnh RÕ RÀNG — "
+        "gọi công cụ ngay, không cần hỏi lại; thiết bị mặc định là phòng hiện tại. "
         "Câu trò chuyện thoải mái (chào, cảm ơn, hỏi thăm): đáp MỘT câu ngắn thân thiện. "
         "Trả lời ngắn gọn, thân thiện."
     )
@@ -2371,12 +2514,15 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
 
     # Tool-calling loop: execute each round of calls, feed the results back and
     # let the model continue ("mở máy lạnh VÀ cho tôi biết thời tiết" often
-    # arrives as one call per turn). Replies from every round are combined.
+    # arrives as one call per turn). When the model stops calling tools, its
+    # final text is the synthesized answer (llm.synthesize).
     replies, actions = [], []
     content = ""
+    model_final = False  # vòng cuối model ĐÃ hết gọi tool (= content là câu chốt)
+    llm_engine = ""
     for _round in range(4):
         try:
-            result = await _call_ollama(cfg, messages)
+            result, llm_engine = await _call_llm(cfg, messages)
         except Exception as exc:
             if replies:
                 break  # already did something useful; answer with what we have
@@ -2385,24 +2531,18 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
                 "actions": [], "engine": "llm-error",
             }
 
-        message = result.get("message", {})
-        content = (message.get("content") or "").strip()
-        tool_calls = message.get("tool_calls") or []
+        content = result["content"]
+        tool_calls = result["tool_calls"]
         if not tool_calls:
+            model_final = True
             break
 
         # echo the assistant turn so the tool results pair up correctly
-        messages.append({"role": "assistant", "content": message.get("content") or "",
+        messages.append({"role": "assistant", "content": content,
                          "tool_calls": tool_calls})
         for call in tool_calls:
-            fn = call.get("function", {})
-            name = fn.get("name", "")
-            args = fn.get("arguments", {})
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except ValueError:
-                    args = {}
+            name = call["name"]
+            args = call["arguments"] if isinstance(call["arguments"], dict) else {}
             outcome = await execute_tool(db, drivers, weather, name, args, room_id,
                                          day_hint=weather_day(normalize(text)))
             replies.append(outcome["reply"])
@@ -2410,7 +2550,7 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
             messages.append({
                 "role": "tool",
                 "name": name,
-                "tool_name": name,  # ollama builds vary on the field name
+                "id": call["id"],
                 "content": json.dumps(
                     {"reply": outcome["reply"], "ok": outcome.get("action", {}).get("ok", True)},
                     ensure_ascii=False,
@@ -2420,6 +2560,7 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
     # Deterministic safety net: small models sometimes answer only the first
     # half of a multi-part sentence. If the text asked about weather/sensors
     # and nothing answered that part yet, do it here.
+    before_net = len(replies)  # lưới bổ sung gì thì mất quyền tổng hợp (thiếu dữ kiện)
     norm = normalize(text)
     executed = {a.get("tool") for a in actions if isinstance(a, dict)}
     if re.search(r"thoi tiet|du bao|kha nang mua|mua (khong|hay khong|roi|nhieu)", norm) \
@@ -2443,11 +2584,22 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         replies.append(extra["reply"])
         actions.append(extra["action"])
 
+    # llm.synthesize: model đã thấy kết quả TẤT CẢ tool (vòng cuối hết gọi
+    # tool) và lưới an toàn không phải tự bổ sung gì -> tin câu model tự viết.
+    # Chỉ chạm đến đây khi câu hỏi/viền tổng hợp phức tạp; lệnh đơn đã ra từ
+    # fast-path. Model nói rỗng/lạc chữ thì rơi về ghép reply khuôn mẫu dưới.
+    if replies and model_final and content and len(replies) == before_net \
+            and cfg.get("llm.synthesize", True):
+        return {"reply": _strip_foreign(content), "actions": actions, "engine": "llm",
+                "llm_engine": llm_engine}
     if replies:
-        return {"reply": " ".join(replies), "actions": actions, "engine": "llm"}
+        return {"reply": " ".join(replies), "actions": actions, "engine": "llm",
+                "llm_engine": llm_engine}
     if content:
-        return {"reply": _strip_foreign(content), "actions": [], "engine": "llm"}
-    return {"reply": "Mình chưa hiểu ý bạn.", "actions": [], "engine": "llm"}
+        return {"reply": _strip_foreign(content), "actions": [], "engine": "llm",
+                "llm_engine": llm_engine}
+    return {"reply": "Mình chưa hiểu ý bạn.", "actions": [], "engine": "llm",
+            "llm_engine": llm_engine}
 
 
 # ---------------------------------------------------------------------------

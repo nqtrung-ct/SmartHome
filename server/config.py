@@ -23,7 +23,22 @@ DEFAULTS: dict[str, Any] = {
             "decoding_method": "", "max_active_paths": 4,
             "hotwords_file": "hotwords.txt", "hotwords_score": 2.0},
     "tts": {"engine": "none", "http_url": "", "length_scale": 1.15},
-    "llm": {"engine": "ollama", "base_url": "http://127.0.0.1:11434", "model": "qwen3:4b", "timeout": 30},
+    # engine "openai" = mọi dịch vụ tương thích OpenAI (OpenAI, OpenRouter,
+    # DeepSeek, Groq...): base_url trỏ /v1, model là tên model cloud, api_key
+    # bắt buộc. Lỗi/mất mạng thì fallback về Ollama (ollama_url + local_model;
+    # rỗng = http://127.0.0.1:11434 / llm.model). Khi engine là "ollama" thì
+    # base_url/base URL Ollama là một (llm.base_url), ollama_url bỏ qua.
+    "llm": {"engine": "ollama", "base_url": "http://127.0.0.1:11434", "model": "qwen3:4b",
+            "timeout": 30, "api_key": "", "local_model": "", "fallback": True,
+            "ollama_url": "",
+            # khuyến nghị của Qwen3 (docs): không bao giờ temperature 0 —
+            # greedy decoding gây lặp vô hạn; num_ctx 4096 vì prompt hệ thống
+            # + TOOLS dài, Ollama cắt ĐẦU im lặng khi vượt ctx (mất luôn tools)
+            "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0,
+            "num_ctx": 4096,
+            # True: sau khi chạy tools, model tự viết câu tổng hợp từ kết quả;
+            # False: ghép các câu reply khuôn mẫu như cũ
+            "synthesize": True},
     "weather": {"latitude": 21.0285, "longitude": 105.8542},
     "discovery": {
         "network_scan": True,
