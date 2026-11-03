@@ -318,28 +318,73 @@ async function renderAssistant() {
   const st = await api("/assistant/status").catch(() => null);
   if (!st) { el.innerHTML = `<div class="card muted">Không tải được trạng thái trợ lý.</div>`; return; }
 
-  // --- LLM ---
+  // --- LLM (Ollama local hoặc dịch vụ OpenAI-compatible) ---
+  const cloud = st.llm.engine === "openai";
   const llmModels = st.llm.models.length
-    ? st.llm.models.map((m) => `<option value="${esc(m.name)}" ${m.name === st.llm.model ? "selected" : ""}>${esc(m.name)} (${m.size_gb} GB)</option>`).join("")
+    ? st.llm.models.map((m) => `<option value="${esc(m.name)}" ${m.name === st.llm.model ? "selected" : ""}>${esc(m.name)}${m.size_gb ? ` (${m.size_gb} GB)` : ""}</option>`).join("")
     : `<option value="${esc(st.llm.model)}">${esc(st.llm.model)}</option>`;
   el.innerHTML = `
     <div class="card">
-      <h2>🧠 Mô hình ngôn ngữ (Ollama) ${dot(st.llm.reachable, "đang chạy", "không kết nối được")}</h2>
-      ${st.llm.reachable ? `
+      <h2>🧠 Mô hình ngôn ngữ ${dot(st.llm.reachable, cloud ? "kết nối được" : "đang chạy", "không kết nối được")}</h2>
+      <div class="row">
+        <label class="small muted">Engine</label>
+        <select id="llm-engine" style="min-width:220px" onchange="toggleLlmEngine(this.value)">
+          <option value="ollama" ${!cloud ? "selected" : ""}>Ollama (local, miễn phí)</option>
+          <option value="openai" ${cloud ? "selected" : ""}>Đám mây (OpenAI-compatible)</option>
+        </select>
+        <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
+        <button class="small-btn" onclick="testLlm()">▶ Thử LLM</button>
+      </div>
+      <div id="llm-ollama-fields" style="display:${cloud ? "none" : "block"}">
+        ${st.llm.reachable ? `
         <div class="row">
           <label class="small muted">Model</label>
-          <select id="llm-model" style="min-width:220px">${llmModels}</select>
-          <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
-          <button class="small-btn" onclick="testLlm()">▶ Thử LLM</button>
+          <select id="llm-model-ollama" style="min-width:220px">${llmModels}</select>
         </div>
         <div class="row">
           <label class="small"><input type="checkbox" id="llm-keep-alive" ${st.llm.keep_alive ? "checked" : ""}
             onchange="saveKeepAlive(this.checked)"> Giữ model trong VRAM luôn</label>
           <span class="small muted">bật khi triển khai chính thức — model không tự dỡ sau 5 phút idle, phản hồi tức thì (chiếm VRAM thường trực)</span>
+        </div>`
+        : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
+           <code>ollama pull qwen3:4b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
+      </div>
+      <div id="llm-cloud-fields" style="display:${cloud ? "block" : "none"}">
+        <div class="row">
+          <label class="small muted">Base URL</label>
+          <input id="llm-base-url" value="${esc(st.llm.base_url || "")}" placeholder="https://api.openai.com/v1" style="width:260px">
         </div>
-        <div id="llm-test-out" class="console-out muted small"></div>`
-      : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
-         <code>ollama pull qwen3:4b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
+        <div class="row">
+          <label class="small muted">API key</label>
+          <input id="llm-api-key" type="password" style="width:260px"
+            placeholder="${st.llm.api_key_set ? "đã lưu — nhập giá trị mới nếu muốn đổi" : "sk-..."}">
+        </div>
+        <div class="row">
+          <label class="small muted">Model</label>
+          <input id="llm-model-cloud" list="llm-model-list" value="${esc(st.llm.model || "")}"
+            placeholder="gpt-4o-mini / deepseek-chat / ..." style="min-width:220px">
+          <datalist id="llm-model-list">${st.llm.models.map((m) => `<option value="${esc(m.name)}">`).join("")}</datalist>
+        </div>
+        <div class="row">
+          <label class="small"><input type="checkbox" id="llm-fallback" ${st.llm.fallback ? "checked" : ""}>
+            Lỗi/mất mạng → tự chuyển Ollama local</label>
+        </div>
+        <div class="row">
+          <label class="small muted">Model dự phòng</label>
+          <input id="llm-local-model" value="${esc(st.llm.local_model || "")}"
+            placeholder="${esc(st.llm.model || "qwen3:4b")}" style="min-width:220px">
+        </div>
+        <div class="row">
+          <label class="small muted">Ollama URL</label>
+          <input id="llm-ollama-url" value="${esc(st.llm.ollama_url || "")}"
+            placeholder="http://127.0.0.1:11434" style="width:260px">
+        </div>
+        <p class="small muted">Hỗ trợ mọi dịch vụ tương thích OpenAI: <code>api.openai.com/v1</code>,
+          <code>openrouter.ai/api/v1</code>, <code>api.deepseek.com/v1</code>, <code>api.groq.com/openai/v1</code>…
+          Key lưu trong <code>config.yaml</code> (đã git-ignore).</p>
+        ${st.llm.error ? `<p class="small error">Lỗi kết nối: ${esc(st.llm.error)}</p>` : ""}
+      </div>
+      <div id="llm-test-out" class="console-out muted small"></div>
     </div>
 
     <div class="card">
@@ -375,9 +420,24 @@ async function renderAssistant() {
     </div>`;
 }
 
+window.toggleLlmEngine = (engine) => {
+  // xem trước fields của engine mới ngay khi đổi select (chưa lưu)
+  $("#llm-ollama-fields").style.display = engine === "openai" ? "none" : "block";
+  $("#llm-cloud-fields").style.display = engine === "openai" ? "block" : "none";
+};
+
 window.saveAssistantConfig = async () => {
+  const engine = $("#llm-engine")?.value || "ollama";
   const body = {
-    llm_model: $("#llm-model")?.value || null,
+    llm_engine: engine,
+    llm_model: engine === "openai"
+      ? ($("#llm-model-cloud")?.value.trim() || null)
+      : ($("#llm-model-ollama")?.value || null),
+    llm_base_url: engine === "openai" ? ($("#llm-base-url")?.value.trim() || null) : null,
+    llm_api_key: engine === "openai" ? ($("#llm-api-key")?.value.trim() || null) : null,
+    llm_fallback: engine === "openai" ? ($("#llm-fallback")?.checked ?? null) : null,
+    llm_local_model: engine === "openai" ? ($("#llm-local-model")?.value.trim() || null) : null,
+    llm_ollama_url: engine === "openai" ? ($("#llm-ollama-url")?.value.trim() || null) : null,
     stt_engine: $("#stt-engine")?.value || null,
     tts_engine: $("#tts-engine")?.value || null,
     tts_http_url: $("#tts-url")?.value ?? null,
@@ -407,7 +467,7 @@ window.testLlm = async () => {
       body: JSON.stringify({ text: "tắt tất cả đèn rồi cho mình biết thời tiết hôm nay" }),
     });
     const ms = Math.round(performance.now() - t0);
-    out.textContent = `Đường dẫn: ${res.engine} · ${ms} ms\nTrả lời: ${res.reply}` +
+    out.textContent = `Đường dẫn: ${res.engine}${res.llm_engine ? ` (${res.llm_engine})` : ""} · ${ms} ms\nTrả lời: ${res.reply}` +
       (res.actions?.length ? `\nHành động: ${res.actions.map((a) => JSON.stringify(a)).join(" | ")}` : "");
   } catch (e) { out.textContent = "Lỗi: " + e.message; }
 };

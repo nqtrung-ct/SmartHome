@@ -35,13 +35,32 @@ def _ollama_models(cfg):
         return None, str(exc)
 
 
+def _cloud_models(cfg):
+    """Model list của dịch vụ OpenAI-compatible (GET /models), or (None, error)."""
+    base = str(cfg.get("llm.base_url", "")).rstrip("/")
+    try:
+        resp = httpx.get(
+            base + "/models",
+            headers={"Authorization": f"Bearer {cfg.get('llm.api_key', '')}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        models = [{"name": str(m.get("id", ""))} for m in resp.json().get("data", [])]
+        return models, None
+    except Exception as exc:
+        return None, str(exc)
+
+
 @router.get("/assistant/status")
 def assistant_status(request: Request, _: None = Depends(require_admin)):
     app = request.app.state
     cfg = app.cfg
     pipeline = app.pipeline
 
-    models, llm_error = _ollama_models(cfg)
+    if cfg.get("llm.engine") == "openai":
+        models, llm_error = _cloud_models(cfg)
+    else:
+        models, llm_error = _ollama_models(cfg)
 
     model_dir = Path(str(cfg.get("stt.model_dir", "data/models/stt")))
     if not model_dir.is_absolute():
@@ -53,11 +72,15 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "engine": cfg.get("llm.engine"),
             "base_url": cfg.get("llm.base_url"),
             "model": cfg.get("llm.model"),
+            "api_key_set": bool(str(cfg.get("llm.api_key", "")).strip()),
+            "fallback": bool(cfg.get("llm.fallback", True)),
+            "local_model": cfg.get("llm.local_model", ""),
+            "ollama_url": cfg.get("llm.ollama_url", ""),
             "keep_alive": str(cfg.get("llm.keep_alive", "")).strip() == "-1",
             "reachable": llm_error is None,
             "models": models or [],
             "error": llm_error,
-            # friendly name of the currently running Ollama model, if any
+            # friendly name of the currently running model, if any
             "loaded": next((m["name"] for m in (models or []) if m["name"] == cfg.get("llm.model")), None),
         },
         "stt": {
@@ -106,6 +129,12 @@ def _tts_error_hint(cfg) -> str:
 
 
 class AssistantConfigIn(BaseModel):
+    llm_engine: str | None = None  # ollama | openai (OpenAI-compatible)
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None  # không bao giờ đọc ngược lại; rỗng = giữ nguyên
+    llm_fallback: bool | None = None  # engine openai lỗi -> chạy qua Ollama local
+    llm_local_model: str | None = None  # model Ollama dùng khi fallback
+    llm_ollama_url: str | None = None  # URL Ollama khi fallback (rỗng = 127.0.0.1:11434)
     llm_model: str | None = None
     llm_keep_alive: bool | None = None  # True = giữ model trong VRAM luôn
     stt_engine: str | None = None  # none | sherpa
@@ -119,6 +148,47 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
     cfg = app.cfg
     changed = []
 
+    if body.llm_engine in ("ollama", "openai") and body.llm_engine != cfg.get("llm.engine"):
+        new_engine = body.llm_engine
+        old_model = str(cfg.get("llm.model", ""))
+        if new_engine == "openai":
+            # giữ lại model Ollama cũ làm model dự phòng khi fallback
+            if not str(cfg.get("llm.local_model", "")).strip() and old_model:
+                cfg._data.setdefault("llm", {})["local_model"] = old_model
+                set_yaml_value(cfg.path, "llm", "local_model", old_model)
+        elif str(cfg.get("llm.local_model", "")).strip():
+            # về lại Ollama: phục hồi model local đã cất (llm.model đang là tên model cloud)
+            restored = str(cfg.get("llm.local_model")).strip()
+            cfg._data.setdefault("llm", {})["model"] = restored
+            set_yaml_value(cfg.path, "llm", "model", restored)
+            # xóa local_model: lần chuyển cloud sau cất đúng model đang dùng
+            cfg._data["llm"]["local_model"] = ""
+            set_yaml_value(cfg.path, "llm", "local_model", "")
+            changed.append(f"llm.model = {restored} (phục hồi từ local_model)")
+        cfg._data.setdefault("llm", {})["engine"] = new_engine
+        set_yaml_value(cfg.path, "llm", "engine", new_engine)
+        changed.append(f"llm.engine = {new_engine}")
+    if body.llm_base_url:
+        cfg._data.setdefault("llm", {})["base_url"] = body.llm_base_url
+        set_yaml_value(cfg.path, "llm", "base_url", body.llm_base_url)
+        changed.append(f"llm.base_url = {body.llm_base_url}")
+    if body.llm_api_key:
+        cfg._data.setdefault("llm", {})["api_key"] = body.llm_api_key
+        set_yaml_value(cfg.path, "llm", "api_key", body.llm_api_key)
+        changed.append("llm.api_key = ***")
+    if body.llm_fallback is not None:
+        cfg._data.setdefault("llm", {})["fallback"] = body.llm_fallback
+        set_yaml_value(cfg.path, "llm", "fallback", body.llm_fallback)
+        changed.append(f"llm.fallback = {body.llm_fallback} "
+                       f"({'cloud lỗi tự chuyển Ollama local' if body.llm_fallback else 'báo lỗi thẳng'})")
+    if body.llm_local_model:  # rỗng = giữ nguyên (engine-switch đã tự cất model cũ)
+        cfg._data.setdefault("llm", {})["local_model"] = body.llm_local_model
+        set_yaml_value(cfg.path, "llm", "local_model", body.llm_local_model)
+        changed.append(f"llm.local_model = {body.llm_local_model}")
+    if body.llm_ollama_url:  # rỗng = mặc định http://127.0.0.1:11434
+        cfg._data.setdefault("llm", {})["ollama_url"] = body.llm_ollama_url
+        set_yaml_value(cfg.path, "llm", "ollama_url", body.llm_ollama_url)
+        changed.append(f"llm.ollama_url = {body.llm_ollama_url}")
     if body.llm_model:
         cfg._data.setdefault("llm", {})["model"] = body.llm_model
         set_yaml_value(cfg.path, "llm", "model", body.llm_model)
