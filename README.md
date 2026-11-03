@@ -71,7 +71,7 @@ instructions/      tài liệu định hướng dự án
 | 4 | Frigate cho camera + hỏi sự kiện ("chiều qua phòng khách có gì?") | 🔶 một phần: **Frigate đang chạy** (Docker, chỉ ghi sự kiện có người — alerts 30 ngày), xem video trực tiếp, trạng thái online; ✅ kiểm tra người bằng giọng ("camera có người không", quét từng góc) + PTZ preset (NetSDK); chưa: hỏi lại **lịch sử** sự kiện, cảnh báo người qua loa |
 | 5 | Nhận diện người nói + quyền giới hạn trẻ em | ⏳ chưa — hiện dùng PIN 4 số trên wall display làm lớp chặn đơn giản |
 
-Công nghệ đang chạy so với gợi ý trong kế hoạch: STT **Zipformer** (phương án nhỏ 75 MB trong kế hoạch — nhanh; PhoWhisper-medium là hướng nâng cấp khi cần chính xác hơn), TTS **piper vi_VN-vais1000** (kế hoạch gợi ý VieNeu-TTS để clone giọng), LLM **qwen2.5:3b** chạy CPU (kế hoạch gợi ý 7–14B khi có GPU). Kế hoạch cũng xác nhận hai điểm đã sống với thật: **không đọc được trạng thái thật của điều hòa qua IR** (nên hệ thống nhớ lần gửi cuối) và **Imou = thương hiệu tiêu dùng của Dahua** (ONVIF + RTSP :554, phải bật trong app).
+Công nghệ đang chạy so với gợi ý trong kế hoạch: STT **Zipformer** (phương án nhỏ 75 MB trong kế hoạch — nhanh; PhoWhisper-medium là hướng nâng cấp khi cần chính xác hơn), TTS **piper vi_VN-vais1000** (kế hoạch gợi ý VieNeu-TTS để clone giọng), LLM **qwen3:8b** chạy GPU (kế hoạch gợi ý 7–14B khi có GPU; qwen3:4b đã loại — rò reasoning tiếng Anh trên Ollama). Kế hoạch cũng xác nhận hai điểm đã sống với thật: **không đọc được trạng thái thật của điều hòa qua IR** (nên hệ thống nhớ lần gửi cuối) và **Imou = thương hiệu tiêu dùng của Dahua** (ONVIF + RTSP :554, phải bật trong app).
 
 ## Tiến độ chi tiết (cập nhật 2026-10-31)
 

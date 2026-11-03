@@ -31,7 +31,7 @@ variants = {
 
 for label, tool_msg in variants.items():
     try:
-        r = httpx.post(url, json={"model": "qwen2.5:3b-instruct",
+        r = httpx.post(url, json={"model": "qwen3:8b",
                                   "messages": messages + [tool_msg],
                                   "tools": TOOLS, "stream": False, "think": False},
                        timeout=45)

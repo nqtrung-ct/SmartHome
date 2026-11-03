@@ -28,7 +28,7 @@ tts:                        # text-to-speech
 llm:                        # command understanding (tool calls)
   engine: ollama            # "ollama" (local, miễn phí) | "openai" (dịch vụ đám mây)
   base_url: http://127.0.0.1:11434
-  model: qwen3:4b           # alternatives: gemma3:4b, qwen2.5:3b-instruct
+  model: qwen3:8b           # qwen3:4b hỏng trên Ollama (rò reasoning tiếng Anh); GPU 6GB dùng bản IQ4_XS
   timeout: 30
   # ---- engine "openai": mọi dịch vụ tương thích OpenAI ----
   # base_url: https://api.openai.com/v1     (hoặc https://openrouter.ai/api/v1,

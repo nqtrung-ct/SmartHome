@@ -347,7 +347,7 @@ async function renderAssistant() {
           <span class="small muted">bật khi triển khai chính thức — model không tự dỡ sau 5 phút idle, phản hồi tức thì (chiếm VRAM thường trực)</span>
         </div>`
         : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
-           <code>ollama pull qwen3:4b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
+           <code>ollama pull qwen3:8b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
       </div>
       <div id="llm-cloud-fields" style="display:${cloud ? "block" : "none"}">
         <div class="row">
@@ -372,7 +372,7 @@ async function renderAssistant() {
         <div class="row">
           <label class="small muted">Model dự phòng</label>
           <input id="llm-local-model" value="${esc(st.llm.local_model || "")}"
-            placeholder="${esc(st.llm.model || "qwen3:4b")}" style="min-width:220px">
+            placeholder="${esc(st.llm.model || "qwen3:8b")}" style="min-width:220px">
         </div>
         <div class="row">
           <label class="small muted">Ollama URL</label>

@@ -6,7 +6,7 @@ thiết bị thật, KHÔNG tạo hẹn giờ thật. Kết quả tool giả l�
 giả (nhiệt độ 31.5°C, pin 82%...) để đo chất lượng câu tổng hợp của model.
 
 Chạy:
-    .venv\\Scripts\\python.exe -X utf8 scripts\\llm_eval.py --models qwen2.5:7b-instruct qwen3:4b
+    .venv\\Scripts\\python.exe -X utf8 scripts\\llm_eval.py --models qwen3:8b qwen2.5:7b-instruct
     .venv\\Scripts\\python.exe -X utf8 scripts\\llm_eval.py --models qwen3:8b --room khach
 
 Chi tiết từng câu (tools gọi + args + câu trả lời tổng hợp) ghi ra
@@ -200,7 +200,7 @@ async def run_model(model: str, cfg, db, room_id) -> list[dict]:
 
 async def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--models", nargs="+", default=["qwen2.5:7b-instruct", "qwen3:4b"])
+    ap.add_argument("--models", nargs="+", default=["qwen3:8b", "qwen2.5:7b-instruct"])
     ap.add_argument("--room", default="khach", help="từ khóa tên phòng đứng theo mic")
     args = ap.parse_args()
 

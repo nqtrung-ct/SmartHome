@@ -2202,11 +2202,11 @@ def _ollama_messages(messages: list) -> list:
 
 
 async def _ollama_chat(cfg: Config, messages: list) -> dict:
-    model = cfg.get("llm.model", "qwen3:4b")
+    model = cfg.get("llm.model", "qwen3:8b")
     if cfg.get("llm.engine", "ollama") == "openai":
         # đang là fallback cho engine cloud: model Ollama là local_model,
         # URL là ollama_url (base_url lúc này là URL của dịch vụ cloud)
-        model = cfg.get("llm.local_model", "") or cfg.get("llm.model", "qwen3:4b")
+        model = cfg.get("llm.local_model", "") or cfg.get("llm.model", "qwen3:8b")
         base = str(cfg.get("llm.ollama_url", "") or "http://127.0.0.1:11434")
     else:
         base = str(cfg.get("llm.base_url", "http://127.0.0.1:11434"))

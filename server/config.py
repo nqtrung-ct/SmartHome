@@ -28,7 +28,7 @@ DEFAULTS: dict[str, Any] = {
     # bắt buộc. Lỗi/mất mạng thì fallback về Ollama (ollama_url + local_model;
     # rỗng = http://127.0.0.1:11434 / llm.model). Khi engine là "ollama" thì
     # base_url/base URL Ollama là một (llm.base_url), ollama_url bỏ qua.
-    "llm": {"engine": "ollama", "base_url": "http://127.0.0.1:11434", "model": "qwen3:4b",
+    "llm": {"engine": "ollama", "base_url": "http://127.0.0.1:11434", "model": "qwen3:8b",
             "timeout": 30, "api_key": "", "local_model": "", "fallback": True,
             "ollama_url": "",
             # khuyến nghị của Qwen3 (docs): không bao giờ temperature 0 —
