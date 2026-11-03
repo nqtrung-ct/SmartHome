@@ -26,6 +26,7 @@ from server.voice.stt import SttSherpa
 MODELS = {
     "cũ 30M/6k giờ (data/models/stt)": "data/models/stt",
     "mới 70k giờ + hotwords (data/models/stt-vi70k)": "data/models/stt-vi70k",
+    "gipformer-68M-rnnt int8 (data/models/stt-gipformer)": "data/models/stt-gipformer",
 }
 
 PHRASES = [
