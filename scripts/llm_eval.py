@@ -48,6 +48,11 @@ CASES = [
     ("phòng khách bao nhiêu độ", ["get_sensor"], {"get_sensor.metric": "temperature"}),
     ("độ ẩm bây giờ bao nhiêu phần trăm", ["get_sensor"], {"get_sensor.metric": "humidity"}),
     ("hôm nay thời tiết thế nào", ["get_weather"], {"get_weather.day": "today"}),
+    ("tin tức hôm nay có gì mới", ["get_news"], {}),
+    ("tin giải trí mới nhất hôm nay", ["get_news"], {"get_news.topic": "giải trí"}),
+    ("có tin thế giới gì mới không", ["get_news"], {"get_news.topic": "thế giới"}),
+    ("đọc giúp tôi tin về nữ tỷ phú lừa đảo", ["read_article"],
+     {"read_article.query": "tỷ phú"}),
     ("ngày mai có mưa không", ["get_weather"], {"get_weather.day": "tomorrow"}),
     ("mấy giờ rồi", ["get_datetime"], {"get_datetime.part": "time"}),
     ("hôm nay thứ mấy rồi", ["get_datetime"], {"get_datetime.part": "date"}),
@@ -85,6 +90,17 @@ def sim_reply(name: str, args: dict) -> str:
         when = {"today": "Hôm nay", "tomorrow": "Ngày mai",
                 "day_after": "Ngày mốt"}.get(a.get("day", "today"), "Hôm nay")
         return f"{when} Cần Thơ trời nắng nóng 33°C, chiều tối có mưa rào rải rác, khả năng mưa 40%."
+    if name == "get_news":
+        head = {"giai tri": "Giải trí", "the gioi": "Thế giới"}.get(
+            a.get("topic", ""), "Tin mới nhất")
+        return (f"{head} hiện có: (VNExpress) Thủ tướng Thái Lan trấn an người dân; "
+                "(Tuổi Trẻ) IMAX báo lãi tăng 400% nhờ bom tấn mới; "
+                "(Dân Trí) Miền Bắc mưa to do không khí lạnh.")
+    if name == "read_article":
+        return ("Bài 'Phim về nữ tỷ phú lừa đảo', nội dung: Phim kể về Elizabeth "
+                "Holmes sau khi được tại ngoại. Tác phẩm dẫn đầu phòng vé Bắc Mỹ "
+                "thu 11,4 triệu USD, tổng doanh thu 64,7 triệu USD. Giới phê bình "
+                "khen cách kể của đạo diễn Nathan Fielder.")
     if name == "get_sensor":
         return "Độ ẩm trong phòng 68%." if a.get("metric") == "humidity" \
             else "Nhiệt độ trong phòng 31.5°C."

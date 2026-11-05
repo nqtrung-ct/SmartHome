@@ -177,6 +177,39 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_news",
+            "description": "LIỆT KÊ tiêu đề tin tức mới nhất hôm nay (VNExpress, Tuổi Trẻ, "
+                           "Dân Trí) theo chủ đề. KHÔNG tự bịa tin — người dùng hỏi tin tức/"
+                           "tin gì mới thì gọi này. Người dùng muốn ĐỌC SÂU một tin cụ thể "
+                           "(nêu tên/từ khóa bài) thì dùng read_article.",
+            "parameters": {"type": "object", "properties": {
+                "topic": {"type": "string",
+                          "enum": ["mới nhất", "thời sự", "thế giới", "kinh doanh",
+                                   "công nghệ", "thể thao", "giải trí"],
+                          "description": "mới nhất=tổng hợp mọi chủ đề (mặc định); "
+                                         "thời sự=chính trị trong nước; thế giới=quốc tế. "
+                                         "Chọn theo chủ đề người dùng nhắc"},
+            }},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_article",
+            "description": "ĐỌC SÂU MỘT bài báo cụ thể (người dùng nói 'đọc tin/chi tiết "
+                           "tin/kể cho tôi nghe về <tên bài/từ khóa>' — không phải liệt kê). "
+                           "query = vài từ trong tiêu đề bài cần đọc, dùng nguyên văn tiêu "
+                           "đề từ kết quả get_news nếu có. "
+                           "VD: 'đọc giúp tôi tin về nữ tỷ phú lừa đảo' → query 'nữ tỷ phú lừa đảo'.",
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string",
+                          "description": "Từ khóa trong tiêu đề bài cần đọc (VD: 'IMAX báo lãi')"},
+            }, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_datetime",
             "description": "CHỈ dùng khi người dùng HỎI xem giờ hiện tại, thứ/ngày dương lịch, "
                            "hoặc ngày âm lịch (câu phải có từ 'ngày'). KHÔNG dùng cho câu ĐẶT "
@@ -2413,6 +2446,21 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             day = day_hint or {"tomorrow": 1, "day_after": 2}.get(str(args.get("day", "")), 0)
             return act_weather(weather, day)
 
+        if name == "get_news":
+            from server.core.news import act_news
+
+            topic = normalize(str(args.get("topic") or "mới nhất"))
+            return await act_news(topic)
+
+        if name == "read_article":
+            from server.core.news import act_article
+
+            query = str(args.get("query") or "").strip()
+            if not query:
+                return {"reply": "Mình cần biết bạn muốn đọc tin nào.",
+                        "action": {"tool": name, "ok": False}}
+            return await act_article(query)
+
         if name == "get_datetime":
             part = str(args.get("part", "date"))
             day = day_hint or {"tomorrow": 1, "day_after": 2}.get(str(args.get("day", "")), 0)
@@ -2503,6 +2551,8 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         f"{_llm_context(db, room_id)}\n"
         "Ưu tiên gọi công cụ để điều khiển thiết bị. Chỉ trả lời văn bản khi không có công cụ phù hợp. "
         "Khi hỏi thời tiết ngày mai/mốt, gọi get_weather với day tương ứng. "
+        "Tin tức: 'tin gì mới/tin tức hôm nay' = get_news (liệt kê theo chủ đề); "
+        "'đọc/chi tiết/kể cho tôi nghe tin về <tên bài>' = read_article với query là tên bài. "
         "Khi hỏi giờ, ngày/thứ/âm lịch, gọi get_datetime với part và day tương ứng. "
         "Nếu câu có nhiều việc, hãy gọi TẤT CẢ các công cụ cần thiết trong cùng một lượt trả lời. "
         "Sau khi nhận kết quả công cụ, viết MỘT câu trả lời ngắn tự nhiên tổng hợp từ kết quả "
@@ -2516,7 +2566,8 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         "Lệnh ngắn gọn như 'tắt đèn', 'bật quạt', 'bật điều hòa' là lệnh RÕ RÀNG — "
         "gọi công cụ ngay, không cần hỏi lại; thiết bị mặc định là phòng hiện tại. "
         "Câu trò chuyện thoải mái (chào, cảm ơn, hỏi thăm): đáp MỘT câu ngắn thân thiện. "
-        "Trả lời ngắn gọn, thân thiện."
+        "Với kết quả read_article: TÓM TẮT bài báo thành tối đa 250 từ, nêu đủ ý chính, "
+        "văn phong tự nhiên như bản tin đài — không đọc nguyên văn bài."
     )
     messages = [
         {"role": "system", "content": system},
