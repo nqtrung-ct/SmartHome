@@ -125,7 +125,8 @@ def sim_reply(name: str, args: dict) -> str:
 CALLS: list[dict] = []
 
 
-async def sim_execute_tool(db, drivers, weather, name, args, room_id, day_hint=0):
+async def sim_execute_tool(db, drivers, weather, name, args, room_id, day_hint=0,
+                           source_text=""):
     CALLS.append({"tool": name, "args": args or {}})
     return {"reply": sim_reply(name, args), "action": {"tool": name, "ok": True}}
 

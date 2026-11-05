@@ -2327,7 +2327,7 @@ async def _call_llm(cfg: Config, messages: list) -> tuple[dict, str]:
 
 
 async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
-                       day_hint: int = 0) -> dict:
+                       day_hint: int = 0, source_text: str = "") -> dict:
     try:
         if name == "switch":
             entity = resolve_entity(db, args.get("entity", ""), room_id)
@@ -2441,6 +2441,17 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
                         db, normalize(f"{args['entity']} {args.get('room') or ''}"))
                     action = _timer_action(db, ent, args["state"] == "on",
                                            args.get("temperature"), mentioned)
+            elif source_text:
+                # Model hay ghi "bật quạt" vào message thay vì entity + state.
+                # Xét theo CÂU GỐC (message đã bị model nén — "nhắc tôi tắt bếp"
+                # thành "tắt bếp"), cùng quy tắc fast-path: câu hẹn giờ có động từ
+                # bật/tắt + thiết bị, KHÔNG có nhắc/báo/phát câu = hẹn THAO TÁC.
+                norm = normalize(source_text)
+                if not re.search(r"\b(nhac|bao)\b(?!\s*(nhieu|gio))", norm) \
+                        and not re.search(r"\bphat\s+(?:cau|thong bao|noi)\b", norm):
+                    action = _device_action_from_text(db, norm, room_id)
+                    if action:
+                        args = {**args, "message": None}
             return act_timer(db, room_id, args.get("message"),
                              minutes=args.get("minutes"), time_str=args.get("time"),
                              repeat=rep, day_offset=day_off, action=action)
@@ -2544,7 +2555,8 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
             name = call["name"]
             args = call["arguments"] if isinstance(call["arguments"], dict) else {}
             outcome = await execute_tool(db, drivers, weather, name, args, room_id,
-                                         day_hint=weather_day(normalize(text)))
+                                         day_hint=weather_day(normalize(text)),
+                                         source_text=text)
             replies.append(outcome["reply"])
             actions.append(outcome.get("action", {"tool": name}))
             messages.append({
