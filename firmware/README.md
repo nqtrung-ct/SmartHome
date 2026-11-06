@@ -49,6 +49,16 @@ python -X utf8 scripts\build.py quandong/esp32-s3-spi-2.8 --language vi-VN --wak
 
 (build thô không qua wrapper: `idf.py build` — nhưng wrapper trên đặt đúng target/board/ngôn ngữ.)
 
+**Bẫy `idf.py -B build-quandong` (đã trả giá 06/11)**: cache trong `build-quandong/`
+ghi đường dẫn tuyệt đối từ lúc thư mục còn TÊN `build/` — chạy `idf.py -B build-quandong`
+khiến ninja reconfigure lạc về `build/` với `sdkconfig` gốc (đang là Waveshare) →
+build ra firmware SAI BOARD mà không báo lỗi. **Luôn build lại qua `build.py`** (nó sinh
+sdkconfig tươi vào `build/`); muốn giữ riêng từng board thì đổi tên `build/` SAU khi build.
+
+- `build/` — **quandong** từ 06/11 (build lại font có glyph ư/U+01AF-01B0, nạp cho thiết bị phòng ngủ chính)
+- `build-waveshare-154/` — backup 4 file bin của bản Waveshare 1.54 build 01/11 (board phòng khách chờ về; nạp thì dùng bin này hoặc build.py lại đường waveshare)
+- `build-quandong/` — bản quandong cũ 01/11 (xiaozhi.bin 13:38 giữ làm rollback)
+
 **Bẫy ccache nổi lên GIỮA chừng build.py (đã gặp 01/11, board waveshare 1.54)**: build.py
 không truyền cờ qua idf.py được — khi lỗi `CreateProcess failed: ccache ...gcc` xuất hiện
 trong lúc chạy build.py, đã configure xong rồi thì **bỏ dở build.py, tiếp bằng idf.py

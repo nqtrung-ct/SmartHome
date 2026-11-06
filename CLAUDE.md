@@ -6,7 +6,8 @@ Ghi chú làm việc trong repo này (cho Claude Code và lập trình viên). C
 
 - Python venv: gọi thẳng `.venv\Scripts\python.exe` (không cần activate).
 - Server: `.venv\Scripts\python.exe -m server` → `http://127.0.0.1:8124`. Admin token nằm trong `config.yaml` (khóa `admin_token`); API dùng header `Authorization: Bearer <token>`.
-- TTS sidecar (bắt buộc khi test giọng nói): `.venv\Scripts\python.exe scripts\tts_http_example.py` → port 8125 (piper vi_VN-vais1000).
+- **Một lệnh cho cả cụm**: `.venv\Scripts\python.exe -X utf8 server.py` — đảm bảo Ollama (11434) + nạp sẵn model cấu hình + TTS sidecar rồi mới chạy server. KHÔNG đụng Docker (Frigate/go2rtc tự quản).
+- TTS sidecar: piper vi_VN-vais1000, port 8125. Server **tự sinh khi thiếu và tự hồi sinh khi chết giữa chừng** (`ensure_sidecar` trong `server/voice/tts.py`, gọi lúc khởi động lẫn khi synthesize đụng lỗi kết nối) — không còn phải nhớ chạy `scripts\tts_http_example.py` tay.
 - LLM: Ollama (`qwen3:8b`, `think:false` + sampling Qwen trong `_ollama_chat`) phải đang chạy. Có thể chuyển sang dịch vụ AI đám mây (OpenAI/OpenRouter/DeepSeek/Groq — mọi API tương thích OpenAI) qua tab Trợ lý hoặc `llm.engine: openai` + `api_key` trong `config.yaml`; lỗi/mất mạng tự fallback về Ollama (`llm.fallback`). So sánh model: `scripts/llm_eval.py` (mô phỏng tool, không đụng thiết bị thật). **qwen3:4b hỏng trên Ollama** (rò reasoning tiếng Anh vào content + nhả tool_calls trùng) — đừng quay lại; máy 6GB dùng qwen3:8b bản IQ4_XS (~4.7GB) hoặc Linux headless.
 - Smoke test sau mọi thay đổi server:
   `.venv\Scripts\python.exe -X utf8 scripts\smoke_test.py http://127.0.0.1:8124 <admin_token>` — phải đạt 35/35.
