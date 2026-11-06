@@ -75,14 +75,44 @@ class TtsNone:
         return None
 
 
+def _wav_to_pcm(wav: bytes) -> tuple[bytes, int]:
+    """PCM16 bytes + sample rate từ WAV (giả định mono; parse chunk thật)."""
+    rate = wav_sample_rate(wav)
+    pos = 12  # sau 'RIFF<size>WAVE'
+    while pos + 8 <= len(wav):
+        cid = wav[pos:pos + 4]
+        size = struct.unpack_from("<I", wav, pos + 4)[0]
+        pos += 8
+        if cid == b"data":
+            return wav[pos:pos + size], rate
+        pos += size + (size & 1)
+    return b"", rate
+
+
+def _pcm_to_wav(pcm: bytes, rate: int) -> bytes:
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
 class TtsHttp:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.url = cfg.get("tts.http_url", "")
         # length_scale piper: càng lớn đọc càng chậm (1.0 = tốc gốc)
         self.length_scale = cfg.get("tts.length_scale")
+        # khoảng lặng giữa các DÒNG (giây) — bản tin nhiều tin đọc dễ nghe hơn
+        self.pause_seconds = float(cfg.get("tts.pause_seconds", 1.0) or 0)
 
-    def synthesize(self, text: str) -> tuple[bytes, int] | None:
+    def _one(self, text: str) -> bytes:
+        """Đọc MỘT câu, tự sinh lại sidecar nếu nó vừa chết."""
         payload = {"text": text}
         if self.length_scale:
             payload["length_scale"] = float(self.length_scale)
@@ -96,7 +126,21 @@ class TtsHttp:
                 raise
             resp = httpx.post(self.url, json=payload, timeout=60)
             resp.raise_for_status()
-        audio = resp.content
+        return resp.content
+
+    def synthesize(self, text: str) -> tuple[bytes, int] | None:
+        # nhiều dòng = bản tin nhiều tin: đọc từng dòng, chèn khoảng lặng
+        # giữa các dòng (model được dặn xuống dòng sau mỗi tin)
+        lines = [re.sub(r"^[\s\-–•*]+", "", ln).strip()
+                 for ln in (text or "").split("\n")]
+        lines = [ln for ln in lines if ln]
+        if len(lines) > 1 and self.pause_seconds > 0:
+            wavs = [self._one(ln) for ln in lines]
+            rate = min(wav_sample_rate(w) for w in wavs)
+            sil = b"\x00\x00" * int(rate * self.pause_seconds)
+            pcm = sil.join(_wav_to_pcm(w)[0] for w in wavs)
+            return _pcm_to_wav(pcm, rate), rate
+        audio = self._one(text)
         return audio, wav_sample_rate(audio)
 
 

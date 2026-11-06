@@ -22,7 +22,8 @@ DEFAULTS: dict[str, Any] = {
     "stt": {"engine": "none", "model_dir": "data/models/stt", "num_threads": 2,
             "decoding_method": "", "max_active_paths": 4,
             "hotwords_file": "hotwords.txt", "hotwords_score": 2.0},
-    "tts": {"engine": "none", "http_url": "", "length_scale": 1.15},
+    "tts": {"engine": "none", "http_url": "", "length_scale": 1.15,
+            "pause_seconds": 1.0},
     # engine "openai" = mọi dịch vụ tương thích OpenAI (OpenAI, OpenRouter,
     # DeepSeek, Groq...): base_url trỏ /v1, model là tên model cloud, api_key
     # bắt buộc. Lỗi/mất mạng thì fallback về Ollama (ollama_url + local_model;
