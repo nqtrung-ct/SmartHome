@@ -22,7 +22,10 @@ router = APIRouter()
 
 def _ollama_models(cfg):
     """Installed Ollama models [{name, size_gb}], or (None, error)."""
-    base = str(cfg.get("llm.base_url", "http://127.0.0.1:11434")).rstrip("/")
+    # Ollama luôn ở llm.ollama_url — llm.base_url là URL cloud (đã trả giá:
+    # dùng base_url lúc cấu hình cloud là hỏi /api/tags lên endpoint cloud)
+    base = str(cfg.get("llm.ollama_url", "") or
+               "http://127.0.0.1:11434").rstrip("/")
     try:
         resp = httpx.get(base + "/api/tags", timeout=5)
         resp.raise_for_status()
@@ -78,6 +81,14 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
         models, llm_error = _cloud_models(cfg)
     else:
         models, llm_error = _ollama_models(cfg)
+    # Danh sách model local LUÔN trả kèm: đang cấu hình cloud mà người dùng
+    # đổi select về Ollama trong UI phải thấy ngay model local (bẫy đã trả
+    # giá: model list chỉ lấy theo engine hiện tại → dropdown local toàn
+    # tên model cloud). Ngược lại, có api_key thì gợi ý cả list cloud.
+    ollama_models, _ = _ollama_models(cfg)
+    cloud_models, _ = (None, None)
+    if str(cfg.get("llm.api_key", "")).strip():
+        cloud_models, _ = _cloud_models(cfg)
 
     model_dir = Path(str(cfg.get("stt.model_dir", "data/models/stt")))
     if not model_dir.is_absolute():
@@ -96,6 +107,8 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "keep_alive": str(cfg.get("llm.keep_alive", "")).strip() == "-1",
             "reachable": llm_error is None,
             "models": models or [],
+            "ollama_models": ollama_models or [],
+            "cloud_models": cloud_models or [],
             "error": llm_error,
             # friendly name of the currently running model, if any
             "loaded": next((m["name"] for m in (models or []) if m["name"] == cfg.get("llm.model")), None),

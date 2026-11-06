@@ -320,9 +320,14 @@ async function renderAssistant() {
 
   // --- LLM (Ollama local hoặc dịch vụ OpenAI-compatible) ---
   const cloud = st.llm.engine === "openai";
-  const llmModels = st.llm.models.length
-    ? st.llm.models.map((m) => `<option value="${esc(m.name)}" ${m.name === st.llm.model ? "selected" : ""}>${esc(m.name)}${m.size_gb ? ` (${m.size_gb} GB)` : ""}</option>`).join("")
+  // dropdown local dùng danh sách OLLAMA riêng (models theo engine hiện tại
+  // — đang cấu hình cloud thì toàn tên cloud, đổi select về local là trượt)
+  const ollamaList = (st.llm.ollama_models?.length ? st.llm.ollama_models : st.llm.models);
+  const llmModels = ollamaList.length
+    ? ollamaList.map((m) => `<option value="${esc(m.name)}" ${m.name === st.llm.model ? "selected" : ""}>${esc(m.name)}${m.size_gb ? ` (${m.size_gb} GB)` : ""}</option>`).join("")
     : `<option value="${esc(st.llm.model)}">${esc(st.llm.model)}</option>`;
+  const cloudList = (st.llm.cloud_models?.length ? st.llm.cloud_models
+    : (cloud ? st.llm.models : []));
   el.innerHTML = `
     <div class="card">
       <h2>🧠 Mô hình ngôn ngữ ${dot(st.llm.reachable, cloud ? "kết nối được" : "đang chạy", "không kết nối được")}</h2>
@@ -363,7 +368,7 @@ async function renderAssistant() {
           <label class="small muted">Model</label>
           <input id="llm-model-cloud" list="llm-model-list" value="${esc(st.llm.model || "")}"
             placeholder="gpt-4o-mini / deepseek-chat / ..." style="min-width:220px">
-          <datalist id="llm-model-list">${st.llm.models.map((m) => `<option value="${esc(m.name)}">`).join("")}</datalist>
+          <datalist id="llm-model-list">${cloudList.map((m) => `<option value="${esc(m.name)}">`).join("")}</datalist>
         </div>
         <div class="row">
           <label class="small"><input type="checkbox" id="llm-fallback" ${st.llm.fallback ? "checked" : ""}>
