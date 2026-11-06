@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import socket
+import subprocess
+import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -32,6 +36,52 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
+def _port_open(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
+def _ensure_tts_sidecar(cfg: Config, db) -> None:
+    """TTS sidecar là tiến trình RIÊNG (scripts/tts_http_example.py) — chạy lại
+    server mà quên nó là mọi câu trả lời giọng nói im lặng (lệnh vẫn xử lý đúng,
+    đã trả giá). tts.engine=http trỏ về máy này mà cổng chưa mở thì tự sinh,
+    chờ cổng lên cho kịp piper nạp model."""
+    if cfg.get("tts.engine") != "http":
+        return
+    url = str(cfg.get("tts.http_url") or "")
+    m = re.match(r"http://(127\.0\.0\.1|localhost)(:\d+)?(/|$)", url)
+    if not m:
+        return  # sidecar máy khác / dịch vụ ngoài — không đụng
+    port = int(m.group(2)[1:]) if m.group(2) else 80
+    if port <= 0 or _port_open(port):
+        return
+    script = Path(__file__).resolve().parents[1] / "scripts" / "tts_http_example.py"
+    if not script.exists():
+        return
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                   | subprocess.DETACHED_PROCESS)
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(  # tách hẳn khỏi vòng đời server
+            [sys.executable, "-X", "utf8", str(script), str(port)],
+            cwd=str(script.parents[1]), stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs,
+        )
+    except Exception as exc:
+        log_event(db, "tts", f"Tự khởi động sidecar thất bại: {exc}", level="warn")
+        return
+    for _ in range(30):  # piper nạp model mất vài giây
+        if _port_open(port):
+            log_event(db, "tts", f"Đã tự khởi động TTS sidecar (port {port})")
+            return
+        time.sleep(0.5)
+    log_event(db, "tts", "TTS sidecar không lên cổng sau 15 giây", level="warn")
+
+
 def create_app(cfg: Config | None = None) -> FastAPI:
     cfg = cfg or Config()
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
@@ -42,6 +92,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        await asyncio.to_thread(_ensure_tts_sidecar, cfg, db)
         app.state.weather = Weather(cfg)
         app.state.pipeline = VoicePipeline(cfg, db, drivers, app.state.weather)
         app.state.voice_connections = VoiceConnections(db)

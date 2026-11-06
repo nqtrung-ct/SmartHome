@@ -15,6 +15,24 @@
 - `main/boards/quandong/esp32-s3-spi-2.8/` — board Thiết bị phòng ES3C28P:
   - **file mới**: `room_display.cc` / `room_display.h` (màn hình phòng), `font_vn_20.c`, `font_vn_30.c` (font tiếng Việt)
   - **file sửa**: `config.h`, `config.json`, `quandong_s3_dev_board.cc`
+
+### Sinh lại font tiếng Việt (đã trả giá: "Mưa rào nhẹ" hiện "Ma rào nhẹ")
+
+Font gen bằng `lv_font_conv` với range `-r 0x20-0x7F,0xA1-0xFF,0x101-0x17F,0x1AF-0x1B0,0x1EA0-0x1EF9,0x2013-0x2026`.
+**Bẫy**: "ư/Ư" là U+01B0/U+01AF — nằm NGOÀI 0x101-0x17F và 0x1EA0-0x1EF9; thiếu range
+`0x1AF-0x1B0` là LVGL lặng lẽ bỏ glyph đó → "Mưa" hiện "Ma" (mọi chữ khác vẫn đúng). Nguồn font:
+`firmware/fonts/NotoSans-Regular.ttf` (đã copy vào repo). Sinh lại (PowerShell, phải **quote**
+range kẻo bóc phẩy thành mảng):
+
+```powershell
+npx lv_font_conv --font firmware\fonts\NotoSans-Regular.ttf --size 20 --bpp 4 `
+  --format lvgl --lv-include lvgl.h --lv-font-name font_vn_20 `
+  -r "0x20-0x7F,0xA1-0xFF,0x101-0x17F,0x1AF-0x1B0,0x1EA0-0x1EF9,0x2013-0x2026" `
+  -o firmware\xiaozhi-esp32\main\boards\quandong\esp32-s3-spi-2.8\font_vn_20.c --no-compress --no-prefilter
+```
+
+(đổi `--size 20`/`font_vn_20` thành 30 cho font to)
+
 - **file sửa** ở ngoài board: `main/application.cc` / `.h`, `main/display/display.h`, `main/audio/codecs/es8311_audio_codec.cc` / `.h`, `main/audio/engines/afe_audio_engine.cc`
 
 Xem danh sách mới nhất bất cứ lúc nào: `git -C firmware/xiaozhi-esp32 status --short`.
