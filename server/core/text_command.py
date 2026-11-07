@@ -2543,8 +2543,10 @@ def _strip_foreign(text: str) -> str:
     return cleaned or "Mình chưa hiểu rõ, bạn nói lại giúp mình nhé."
 
 
-async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
-    system = (
+def build_system_prompt(db: Database, room_id) -> str:
+    """System prompt cho vòng tool-calls (v1). Tách hàm riêng để test A/B
+    ghi đè (llm_eval/test script monkeypatch hàm này)."""
+    return (
         "Bạn là trợ lý nhà thông minh tiếng Việt. "
         "LUÔN nói 100% tiếng Việt tự nhiên — tuyệt đối không lẫn chữ tiếng Trung, tiếng Anh. "
         f"Thời gian hiện tại: {now().strftime('%H:%M, %d/%m/%Y')}.\n"
@@ -2575,8 +2577,11 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
         "Với kết quả read_article: TÓM TẮT bài báo thành tối đa 250 từ, nêu đủ ý chính, "
         "văn phong tự nhiên như bản tin đài — không đọc nguyên văn bài."
     )
+
+
+async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
     messages = [
-        {"role": "system", "content": system},
+        {"role": "system", "content": build_system_prompt(db, room_id)},
         {"role": "user", "content": text},
     ]
 

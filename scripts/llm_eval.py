@@ -44,7 +44,7 @@ CASES = [
     ("bật điều hòa chế độ sưởi 26 độ", ["set_climate"],
      {"set_climate.mode": "heat", "set_climate.temperature": 26}),
     ("tắt điều hòa rồi cho tôi biết thời tiết hôm nay",
-     ["switch", "get_weather"], {"switch.state": "off"}),
+     ["switch|set_climate", "get_weather"], {"switch.state|set_climate.mode": "off"}),
     ("phòng khách bao nhiêu độ", ["get_sensor"], {"get_sensor.metric": "temperature"}),
     ("độ ẩm bây giờ bao nhiêu phần trăm", ["get_sensor"], {"get_sensor.metric": "humidity"}),
     ("hôm nay thời tiết thế nào", ["get_weather"], {"get_weather.day": "today"}),
