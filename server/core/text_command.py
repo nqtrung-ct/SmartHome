@@ -2698,6 +2698,12 @@ async def handle_command(db: Database, drivers, cfg: Config, weather, text: str,
     # sửa lại cho fast-path lẫn LLM trước khi xử lý
     text = _fix_hen_gio(text)
 
+    # "bây giờ" (ngay lúc này) normalize thành "bay gio" — đụng cứng "bảy
+    # giờ" (7:00) ở mọi regex từ-số: "bây giờ có mưa không" từng bị hiểu
+    # thành hẹn 420 phút sau kèm lời nhắc "có mưa không" (đã trả giá).
+    # Đổi thành "hiện tại" từ cửa vào để không nhánh hẹn giờ nào thấy số.
+    text = re.sub(r"bây giờ", "hiện tại", text, flags=re.I)
+
     # lời đáp xác nhận hủy hẹn giờ đang chờ (theo phòng; hết hạn hoặc câu
     # chuyện khác = tự bỏ, câu mới xử lý bình thường)
     key = room_id if room_id is not None else 0
