@@ -30,3 +30,5 @@ Thumbs.db
 firmware/xiaozhi-esp32/
 firmware/esp-idf/
 firmware/esp-tools/
+
+openrouter_key.txt
