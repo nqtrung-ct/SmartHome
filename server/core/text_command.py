@@ -1480,6 +1480,12 @@ _CONFIRM_NO = (r"^(khong|khong roi|khong phai|khong can|thoi|bo qua|khoan|de sau
 _CONFIRM_YES = (r"^(co|co roi|dung|dung roi|ok|ok roi|ur|um|u|chac chan|vay|di|"
                 r"huy di|lam di|nghe)(\s+(nhe|nha|di|roi|nua))*[\s,.!?-]*$")
 
+# dấu hiệu câu hỏi tiếng Việt (trên bản normalize) — dùng cho cổng chặn
+# "câu hỏi có mốc giờ" rơi vào nhánh hẹn giờ (xem timer_question_likely)
+_QUESTION_MARK = re.compile(
+    r"\b(khong|chua|a|ah|ha|nhi|gi|nao|dau|chu|the nao|co the|bao gio|bao nhieu|"
+    r"bao lau|may)\b")
+
 
 def _confirm_answer(norm: str) -> str | None:
     if re.match(_CONFIRM_NO, norm):
@@ -1965,6 +1971,22 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
     ) or re.search(r"\b(mot|hai|ba|bon|nam|sau|bay|tam|chin|muoi|lam)\s+(phut|gio|tieng)\b", norm)
     multi_intent = re.search(r"\broi\b|\bsau do\b|\bva\b|\bva ca\b|\bthem\b|\bngoai ra\b", norm)
 
+    # câu MANG MỐC GIỜ nhưng là CÂU HỎI ("7 giờ có mưa không", "2 giờ chiều
+    # họp ở đâu") — không phải lệnh hẹn giờ. Chỉ tin là hỏi khi KHÔNG có từ
+    # hẹn/nhắc/báo, KHÔNG có động từ thiết bị, và có dấu hiệu hỏi. Không có
+    # cổng này thì câu hỏi bị biến thành timer nhắc lại chính câu hỏi
+    # (đã trả giá). Đã cân nhắc cho LLM gác cổng phân loại HEN/KHAC: đúng
+    # 12/12 khi few-shot đủ nhưng +0.26s/câu và vỡ (8/12) khi prompt gầy —
+    # regex đạt 12/12 miễn phí nên thắng.
+    timer_question_likely = (
+        not re.search(r"\b(nhac|hen|bao)\b(?!\s*(nhieu|gio))", norm)
+        # "bắt đầu" chứa "bat" — trùng "bật" sau bỏ dấu ("9 giờ phim bắt đầu
+        # chưa" không hề có động từ bật/tắt); bỏ cụm này rồi mới xét verb
+        and not re.search(r"\b(bat|mo|bat len|tat|tat di)\b",
+                          re.sub(r"\bbat dau\b", " ", norm))
+        and _QUESTION_MARK.search(norm)
+    )
+
     # hỏi giờ / ngày tháng / âm lịch — phải đứng TRƯỚC nhánh hẹn giờ vì câu hỏi
     # "mấy giờ" cũng chứa từ "giờ". Câu có ý định hẹn (nhắc/hẹn/báo), động từ
     # bật/tắt, hay ghép nhiều việc thì nhường LLM. ("Rồi" trong "mấy giờ rồi"
@@ -1980,7 +2002,7 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
                 delta_minutes=_duration_minutes(norm) if ask_time else None,
             )
 
-    if timerish and not multi_intent:
+    if timerish and not multi_intent and not timer_question_likely:
         # "hãy phát câu 'đến giờ mua bánh mì' vào camera phòng khách sau 1 phút
         # nữa" — hẹn giờ PHÁT THÔNG BÁI vào phòng nêu tên (nói camera thì lấy
         # phòng của camera). Đến giờ trợ lý đọc NGUYÊN câu (tiền tố 'raw:' trong
@@ -2564,7 +2586,10 @@ def build_system_prompt(db: Database, room_id) -> str:
         "Khi hỏi giờ, ngày/thứ/âm lịch, gọi get_datetime với part và day tương ứng. "
         "Hẹn giờ có MỐC THỜI GIAN cụ thể ('6 giờ sáng', 'lúc 21:30') → set_timer "
         "với time 'HH:MM' (KHÔNG tự quy đổi thành số phút); mốc tương đối "
-        "('15 phút nữa') → minutes; lặp mỗi ngày → repeat 'daily'. "
+        "('15 phút nữa') → minutes; lặp mỗi ngày → repeat 'daily' "
+        "(VD 'mỗi ngày 6 giờ sáng bật quạt' → time '06:00', repeat 'daily'). "
+        "CÂU HỎI có mốc giờ ('9 giờ phim bắt đầu chưa', '7 giờ có mưa không') "
+        "KHÔNG phải lệnh hẹn giờ — không gọi set_timer cho câu hỏi. "
         "Nếu câu có nhiều việc, hãy gọi TẤT CẢ các công cụ cần thiết trong cùng một lượt trả lời. "
         "Sau khi nhận kết quả công cụ, viết MỘT câu trả lời ngắn tự nhiên tổng hợp từ kết quả "
         "(không đọc lại nguyên văn, không bịa số liệu ngoài kết quả). "

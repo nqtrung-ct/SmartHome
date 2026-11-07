@@ -65,6 +65,8 @@ CASES = [
     ("mỗi ngày 6 giờ sáng bật quạt", ["set_timer"],
      {"set_timer.time": "06:00", "set_timer.repeat": "daily"}),
     ("hẹn giờ nào đang chờ", ["list_timers"], {}),
+    ("9 giờ phim bắt đầu chưa", [], {}),   # câu hỏi, KHÔNG phải lệnh hẹn giờ
+    ("7 giờ có mưa không", ["get_weather"], {}),  # hỏi mưa, không set_timer
     ("quay camera về góc bếp", ["camera_preset"], {"camera_preset.preset": "bep"}),
     ("kiểm tra camera có người không", ["camera_person"], {}),
     ("chào buổi sáng", [], {}),          # KHÔNG gọi tool
