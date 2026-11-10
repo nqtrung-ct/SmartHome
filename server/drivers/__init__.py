@@ -17,9 +17,9 @@ def load_drivers(cfg: Config, db: Database) -> dict[str, Driver]:
     drivers: dict[str, Driver] = {
         DummyDriver.name: DummyDriver(),
         BroadlinkDriver.name: BroadlinkDriver(cfg),
-        TuyaDriver.name: TuyaDriver(db),
+        TuyaDriver.name: TuyaDriver(db, cfg),
         ZigbeeDriver.name: ZigbeeDriver(cfg, db),
-        SenergyDriver.name: SenergyDriver(),
+        SenergyDriver.name: SenergyDriver(cfg),
         AndroidTVDriver.name: AndroidTVDriver(cfg, db),
         CozyLifeDriver.name: CozyLifeDriver(db),
     }

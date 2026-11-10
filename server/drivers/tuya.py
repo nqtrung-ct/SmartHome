@@ -9,6 +9,7 @@ import json
 
 from server.db import Database
 from server.drivers.base import Driver, DriverError, Row, loads
+from server.drivers.network import tcp_target
 
 # Most temp/humidity sensors expose: dps 1 temperature, 2 humidity, 3 battery.
 FALLBACK_SENSOR_DPS = {
@@ -73,8 +74,9 @@ def decode_phase(data) -> dict:
 class TuyaDriver(Driver):
     name = "tuya"
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, cfg=None):
         self.db = db
+        self.cfg = cfg
 
     def _device(self, device: Row):
         try:
@@ -83,7 +85,8 @@ class TuyaDriver(Driver):
             raise DriverError("Chưa cài tinytuya (pip install tinytuya)") from exc
         extra = loads(device["extra"])
         try:
-            dev = tinytuya.Device(extra["id"], device["host"], extra["key"])
+            host, port = tcp_target(self.cfg, device["host"], 6668)
+            dev = tinytuya.Device(extra["id"], host, extra["key"], port=port)
             dev.set_version(float(extra.get("ver", "3.3")))
             if hasattr(dev, "set_socketTimeout"):
                 dev.set_socketTimeout(3)
@@ -93,7 +96,10 @@ class TuyaDriver(Driver):
 
     def _status_dps(self, device: Row) -> dict:
         try:
-            return self._device(device).status().get("dps", {}) or {}
+            response = self._device(device).status()
+            if not isinstance(response, dict) or not isinstance(response.get("dps"), dict) or not response["dps"]:
+                raise DriverError("Thiết bị Tuya không trả dữ liệu trạng thái hợp lệ")
+            return response["dps"]
         except DriverError:
             raise
         except Exception as exc:
@@ -209,4 +215,7 @@ class TuyaDriver(Driver):
                 out[metric] = value
             return out
         # switch entity: report the on/off channel in the common {"state"} shape
-        return {"state": "on" if dps.get(str(data.get("dps", 1))) else "off"}
+        value = dps.get(str(data.get("dps", 1)))
+        if not isinstance(value, bool):
+            raise DriverError("Thiết bị Tuya thiếu trạng thái bật/tắt của kênh công tắc")
+        return {"state": "on" if value else "off"}

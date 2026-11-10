@@ -359,8 +359,50 @@ def resolve_entity(db: Database, text: str, room_id=None, entity_type=None):
                 break
     if not ranked:
         return None
+    # Lệnh từ mic phòng (room_id có, câu KHÔNG nêu phòng): mic ở phòng nào thì
+    # thiết bị phòng đó là mặc định — phòng không có thì KHÔNG tự mò sang phòng
+    # khác bấm đồ (đã trả giá: nói "chỉnh máy lạnh" ở phòng sinh hoạt chung mà
+    # tắt điều hòa phòng ngủ chính). Câu nêu rõ phòng hoặc app/admin
+    # (room_id=None) giữ hành vi cũ; thiết bị chưa gán phòng vẫn dùng được.
+    # THIẾT BỊ CỦA CHUNG: tầng "Ngoài nhà" (hông nhà — cầu dao, điện năng, điện
+    # mặt trời...) hỏi được từ mọi phòng, khỏi phải nói "hông nhà".
+    if room_id is not None and scope_room == room_id:
+        outdoor = {r["id"] for r in db.query("SELECT id, floor FROM rooms")
+                   if normalize(r["floor"] or "") == "ngoai nha"}
+        allowed = [(score, ent) for score, ent in ranked
+                   if _entity_room(db, ent) in (None, room_id)
+                   or _entity_room(db, ent) in outdoor]
+        if not allowed:
+            return None
+        ranked = allowed
     ranked.sort(key=lambda pair: pair[0], reverse=True)
     return ranked[0][1]
+
+
+def _miss_reply(db: Database, scope_room, what: str) -> str:
+    """Không tìm thấy thiết bị: nêu tên phòng đang xét nếu có, gợi ý nói tên phòng
+    khác thay vì im lặng bỏ qua hay tự chọn phòng khác."""
+    if scope_room:
+        room = db.one("SELECT name FROM rooms WHERE id=?", (scope_room,))
+        if room:
+            return (f"Hiện {room['name']} không có {what}. "
+                    "Bạn muốn dùng ở phòng khác thì cho mình tên phòng nhé.")
+    return f"Mình không tìm thấy {what}."
+
+
+def _cross_room_miss(db: Database, norm: str, room_id, mentioned) -> str | None:
+    """Câu lệnh thiết bị từ mic phòng mà phòng đó không có thiết bị khớp, nhưng
+    phòng KHÁC có (resolve_entity strict đã chặn) — câu trả lời gợi ý nêu tên
+    phòng. None = không phải trường hợp này (để nhánh cũ xử lý)."""
+    if room_id is None or mentioned:
+        return None
+    glob = resolve_entity(db, norm, None)
+    if not glob or glob["entity_type"] == "controller" \
+            or loads(glob["driver_data"]).get("readonly"):
+        return None
+    what = {"climate": "máy lạnh", "fan": "quạt", "light": "đèn",
+            "media": "tivi"}.get(glob["entity_type"], glob["name"])
+    return _miss_reply(db, room_id, what)
 
 
 def resolve_camera(db: Database, text: str, room_id=None):
@@ -447,6 +489,10 @@ def camera_ptz_gate(db: Database, norm: str) -> bool:
 
 
 async def _set_stateless_read(db, drivers, entity, device) -> dict:
+    if device["driver"] == "senergy":
+        # A spoken query must not open another dongle connection or freshen
+        # the timestamp of cached inverter data.
+        return loads(entity["state"])
     driver = drivers.get(device["driver"])
     if not driver:
         raise DriverError(f"Không có driver '{device['driver']}'")
@@ -1080,12 +1126,17 @@ async def _room_sensor_reply(db, drivers, room_id, metric: str) -> dict:
 
 def _solar_question(norm: str) -> str | None:
     """Câu hỏi về điện năng nhà? Trả về metric ('battery'|'pv'|'load') hoặc None.
-    "pin mặt trời" là hỏi PV; "pin" không kèm "mặt trời" là hỏi pin tích trữ."""
-    if re.search(r"\b(dien mat troi|pin mat troi)\b", norm):
+    "pin ... còn bao nhiêu %" = hỏi PIN TÍCH TRŨ kể cả khi nói "pin mặt trời"
+    (đã trả giá: "pin mặt trời còn bao nhiêu phần trăm" bị đáp công suất PV);
+    chỉ "đang sản xuất" hoặc "điện mặt trời/pin mặt trời" không kèm chữ pin
+    mới là hỏi PV."""
+    if re.search(r"\bsan xuat\b", norm):
         return "pv"
     if re.search(r"\bpin\b", norm) and re.search(
             r"\b(bao nhieu|con |phan tram|dang (sac|xa|the nao)|sac hay xa)\b", norm):
         return "battery"
+    if re.search(r"\b(dien mat troi|pin mat troi)\b", norm):
+        return "pv"
     # "còn (lại) bao nhiêu phần trăm" mà không nhắc độ ẩm/nhiệt độ — không nói
     # rõ hỏi cái gì: hỏi lại kẻo đoán nhầm pin với độ ẩm (xem _PENDING_METRIC)
     if re.search(r"\bphan tram\b", norm) and re.search(r"\b(bao nhieu|con)\b", norm) \
@@ -1683,11 +1734,13 @@ def _timer_action(db, ent, on: bool, temperature=None, mentioned=None) -> dict:
 
 def _device_action_from_text(db, norm, room_id):
     """Câu 'lúc X giờ bật/tắt Y' không có từ nhắc/hẹn → lệnh thiết bị cho timer.
-    None = không ra thiết bị nào (coi như nhắc nhở thường)."""
+    Trả về (action, miss): action=None & miss=None = không ra thiết bị nào (coi
+    như nhắc nhở thường); miss khác None = phòng mic không có thiết bị đó (bị
+    resolve_entity chặn sang phòng khác) — trả lời gợi ý nêu tên phòng."""
     has_on = bool(re.search(r"\b(bat|mo|bat len)\b", norm))
     has_off = bool(re.search(r"\b(tat|tat di)\b", norm))
     if not (has_on or has_off):
-        return None
+        return None, None
     mentioned = _room_from_text(db, norm)
     temp = _temp_from_text(norm)
     ent = resolve_entity(db, norm, room_id, "climate")
@@ -1698,10 +1751,10 @@ def _device_action_from_text(db, norm, room_id):
                 ent = cand
                 break
     if not ent:
-        return None
+        return None, _cross_room_miss(db, norm, room_id, mentioned)
     if ent["entity_type"] == "controller" or loads(ent["driver_data"]).get("readonly"):
-        return None
-    return _timer_action(db, ent, on=has_on, temperature=temp, mentioned=mentioned)
+        return None, None
+    return _timer_action(db, ent, on=has_on, temperature=temp, mentioned=mentioned), None
 
 
 # ---------------------------------------------------------------------------
@@ -2032,7 +2085,11 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             # ("nhắc tôi uống thuốc", "báo thức") mới là lời nhắc.
             action = None
             if not re.search(r"\b(nhac|bao)\b(?!\s*(nhieu|gio))", norm):
-                action = _device_action_from_text(db, norm, room_id)
+                action, miss = _device_action_from_text(db, norm, room_id)
+                if miss:
+                    # "hẹn 10 phút tắt điều hòa" mà phòng không có điều hòa — nói
+                    # rõ, đừng âm thầm biến thành lời nhắc
+                    return {"reply": miss, "action": {"tool": "set_timer", "ok": False}}
             return act_timer(db, room_id, message=None if action else parsed["message"],
                              minutes=parsed["minutes"], time_str=parsed["time_str"],
                              repeat=parsed["repeat"], day_offset=parsed["day_offset"],
@@ -2206,6 +2263,11 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             entity = resolve_entity(db, norm, room_id, etype)
             if entity:
                 return await act_switch(db, drivers, entity, on=has_on, mentioned_room=mentioned)
+        # phòng mic không có thiết bị này nhưng phòng khác có — trả lời luôn,
+        # khỏi vòng qua LLM (nhanh hơn và chốt câu theo khuôn)
+        miss = _cross_room_miss(db, norm, room_id, mentioned)
+        if miss:
+            return {"reply": miss, "action": {"tool": "switch", "ok": False}}
         return None
 
     return None
@@ -2386,19 +2448,21 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
     try:
         if name == "switch":
             entity = resolve_entity(db, args.get("entity", ""), room_id)
-            if not entity:
-                return {"reply": f"Mình không tìm thấy thiết bị '{args.get('entity')}'.",
-                        "action": {"tool": name, "ok": False}}
             # LLM nêu phòng (param room hoặc lồng trong entity) = người nói nói rõ phòng
             mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
+            if not entity:
+                return {"reply": _miss_reply(db, mentioned or room_id,
+                                             f"thiết bị '{args.get('entity')}'"),
+                        "action": {"tool": name, "ok": False}}
             return await act_switch(db, drivers, entity, args.get("state") == "on", mentioned_room=mentioned)
 
         if name == "press_button":
             entity = resolve_entity(db, args.get("entity", ""), room_id)
-            if not entity:
-                return {"reply": f"Mình không tìm thấy thiết bị '{args.get('entity')}'.",
-                        "action": {"tool": name, "ok": False}}
             mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
+            if not entity:
+                return {"reply": _miss_reply(db, mentioned or room_id,
+                                             f"thiết bị '{args.get('entity')}'"),
+                        "action": {"tool": name, "ok": False}}
             return await act_button(db, drivers, entity, args.get("button", ""), mentioned_room=mentioned)
 
         if name == "set_climate":
@@ -2406,7 +2470,9 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             if not entity:
                 entity = resolve_entity(db, args.get("entity") or "điều hòa", room_id)
             if not entity:
-                return {"reply": "Mình không tìm thấy điều hòa nào.", "action": {"tool": name, "ok": False}}
+                mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
+                return {"reply": _miss_reply(db, mentioned or room_id, "máy lạnh"),
+                        "action": {"tool": name, "ok": False}}
             mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
             return await act_climate(
                 db, drivers, entity,
@@ -2457,7 +2523,9 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             entity = resolve_entity(db, metric_arg or "cảm biến", room_id, "sensor") \
                 or resolve_entity(db, "cảm biến", room_id, "sensor")
             if not entity:
-                return {"reply": "Phòng này chưa có cảm biến.", "action": {"tool": name, "ok": False}}
+                mentioned = _room_from_text(db, normalize(f"{args.get('entity', '')} {args.get('room') or ''}"))
+                return {"reply": _miss_reply(db, mentioned or room_id, "cảm biến"),
+                        "action": {"tool": name, "ok": False}}
             return await act_sensor(db, drivers, entity, room_id, metric)
 
         if name == "get_solar":
@@ -2505,7 +2573,16 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
             action = None
             if args.get("entity") and args.get("state"):
                 ent = resolve_entity(db, str(args["entity"]), room_id)
-                if ent and ent["entity_type"] != "controller" \
+                if ent is None:
+                    # model nêu rõ thiết bị mà không resolve được (thường là phòng
+                    # mic không có — resolve_entity strict) — đừng âm thầm biến
+                    # thành lời nhắc, nói rõ cho người dùng biết
+                    mentioned = _room_from_text(
+                        db, normalize(f"{args['entity']} {args.get('room') or ''}"))
+                    return {"reply": _miss_reply(db, mentioned or room_id,
+                                                 f"thiết bị '{args['entity']}'"),
+                            "action": {"tool": name, "ok": False}}
+                if ent["entity_type"] != "controller" \
                         and not loads(ent["driver_data"]).get("readonly"):
                     mentioned = _room_from_text(
                         db, normalize(f"{args['entity']} {args.get('room') or ''}"))
@@ -2519,7 +2596,9 @@ async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
                 norm = normalize(source_text)
                 if not re.search(r"\b(nhac|bao)\b(?!\s*(nhieu|gio))", norm) \
                         and not re.search(r"\bphat\s+(?:cau|thong bao|noi)\b", norm):
-                    action = _device_action_from_text(db, norm, room_id)
+                    action, miss = _device_action_from_text(db, norm, room_id)
+                    if miss:
+                        return {"reply": miss, "action": {"tool": name, "ok": False}}
                     if action:
                         args = {**args, "message": None}
             return act_timer(db, room_id, args.get("message"),

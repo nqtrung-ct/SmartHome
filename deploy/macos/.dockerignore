@@ -1,0 +1,4 @@
+*
+!model-build-src/
+!model-build-src/**
+!model-build.Dockerfile

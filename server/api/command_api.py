@@ -1,6 +1,8 @@
 """Console + shared read endpoints: overview, text command, timers, events."""
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
@@ -15,7 +17,7 @@ router = APIRouter()
 
 
 @router.get("/overview")
-def overview(request: Request, _: None = Depends(require_admin)):
+async def overview(request: Request, _: None = Depends(require_admin)):
     db = request.app.state.db
     rooms = []
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
@@ -26,13 +28,45 @@ def overview(request: Request, _: None = Depends(require_admin)):
                ORDER BY e.id""",
             (room["id"],),
         )
+        live_states = {}
+        live_entities = [
+            e for e in entities
+            if e["entity_type"] == "switch" and e["driver"] in ("tuya", "cozylife")
+        ]
+
+        async def read_live_state(e):
+            device = db.one("SELECT * FROM devices WHERE id=?", (e["device_id"],))
+            driver = request.app.state.drivers.get(e["driver"])
+            if not device or not driver:
+                return e["id"], None
+            try:
+                state = await asyncio.wait_for(
+                    asyncio.to_thread(driver.get_state, e, device), timeout=5
+                )
+            except Exception:
+                return e["id"], None
+            if state and any(v is not None for v in state.values()):
+                return e["id"], state
+            return e["id"], None
+
+        for eid, state in await asyncio.gather(
+            *(read_live_state(e) for e in live_entities)
+        ):
+            if state:
+                live_states[eid] = state
+                db.execute(
+                    "UPDATE entities SET state=?, updated_at=? WHERE id=?",
+                    (json.dumps(state, ensure_ascii=False), datetime.now().isoformat(timespec="seconds"), eid),
+                )
         rooms.append({
             **dict(room),
             "entities": [
                 {
                     "id": e["id"], "name": e["name"], "entity_type": e["entity_type"],
                     "device_id": e["device_id"],
-                    "state": e["state"], "device_name": e["device_name"], "driver": e["driver"],
+                    "state": json.dumps(live_states[e["id"]], ensure_ascii=False)
+                    if e["id"] in live_states else e["state"],
+                    "device_name": e["device_name"], "driver": e["driver"],
                     "updated_at": e["updated_at"],
                     "readonly": "readonly" in loads(e["driver_data"]),
                 }

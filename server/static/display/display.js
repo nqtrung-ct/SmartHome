@@ -202,7 +202,7 @@ let lastData = { rooms: [] };
 async function refresh() {
   let data;
   try {
-    const resp = await fetch("/api/display");
+    const resp = await fetch("/api/display", { cache: "no-store" });
     if (!resp.ok) throw new Error(resp.status);
     data = await resp.json();
     lastData = data;
@@ -236,7 +236,10 @@ async function refresh() {
 
   // cảnh báo điện lưới: tắt = đỏ; bật mà Vol < 200 = vàng
   const gw = $("grid-warn"), gt = $("grid-warn-text"), g = data.grid;
-  if (g && g.on === false) {
+  if (g && g.on == null) {
+    gt.textContent = "Chưa có dữ liệu điện lưới";
+    gw.className = "grid-warn yellow";
+  } else if (g && g.on === false) {
     gt.textContent = "Mất điện lưới";
     gw.className = "grid-warn red";
   } else if (g && g.on && g.low_voltage) {

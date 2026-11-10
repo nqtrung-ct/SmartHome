@@ -51,8 +51,10 @@ def ensure_sidecar(cfg: Config) -> bool:
         return False
     kwargs = {}
     if sys.platform == "win32":
+        # CREATE_NO_WINDOW thay cho DETACHED_PROCESS: thư viện trong sidecar
+        # (piper/onnxruntime) AllocConsole khi thiếu console → cửa sổ cmd trống.
         kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
-                                   | subprocess.DETACHED_PROCESS)
+                                   | subprocess.CREATE_NO_WINDOW)
     else:
         kwargs["start_new_session"] = True
     try:

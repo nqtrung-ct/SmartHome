@@ -28,6 +28,7 @@ import socket
 import struct
 
 from server.drivers.base import Driver, DriverError, Row
+from server.drivers.network import tcp_target
 
 HOST_DEFAULT_PORT = 502
 # các khối nhỏ, mỗi lần poll đúng 2 yêu cầu đọc - nhẹ cho CPU yếu của dongle
@@ -42,6 +43,9 @@ def _s16(v: int) -> int:
 
 class SenergyDriver(Driver):
     name = "senergy"
+
+    def __init__(self, cfg=None):
+        self.cfg = cfg
 
     def adopt(self, device: Row, body: dict) -> list[dict]:
         return [{
@@ -76,8 +80,9 @@ class SenergyDriver(Driver):
         host = device["host"] or ""
         if not host:
             raise DriverError("Thiết bị inverter chưa có địa chỉ IP")
+        target = tcp_target(self.cfg, host, HOST_DEFAULT_PORT)
         try:
-            with socket.create_connection((host, HOST_DEFAULT_PORT), timeout=TIMEOUT) as sock:
+            with socket.create_connection(target, timeout=TIMEOUT) as sock:
                 sock.settimeout(TIMEOUT)
                 pv = self._read(sock, REG_PV, 16)
                 bat = self._read(sock, REG_BATTERY, 16)

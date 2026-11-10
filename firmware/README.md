@@ -68,12 +68,42 @@ sau configure của build.py — không mất.
 
 ## Board đã build
 
-- `build-quandong/` — Thiết bị phòng ES3C28P (đang chạy ở phòng ngủ chính)
-- `build/` — **Waveshare ESP32-S3-Touch-LCD-1.54 bản không touch** (build 01/11 cho
-  phòng khách, chờ board về nạp): vi-VN + wn9_alexa + AEC phần cứng
-  (`CONFIG_USE_DEVICE_AEC=y` có sẵn trong config board), codec ES8311 (loa) + ES7210
-  (mic). Board không kèm loa — cần loa 8Ω 1-2W cắm cổng speaker. Nạp lần đầu dùng
-  lệnh esptool full (kể cả assets wake word 0x800000) — xem output cuối build.
+- `build-quandong/` — Thiết bị phòng ES3C28P (đang chạy ở phòng ngủ chính);
+  `build-quandong/backup-0611/` — artifact bản 06/11 (font có ư) trước khi `build/`
+  bị dùng cho waveshare
+- `build/` — **Waveshare ESP32-S3-Touch-LCD-1.54 bản không touch** (build lại 08/11
+  **ghim OTA URL nhà** trong `config.json` board; bản 01/11 cũ trỏ `api.tenclass.net`
+  — KHÔNG dùng). **Đã nạp 08/11 cho board Phòng sinh hoạt chung tầng 1** (COM10,
+  IP .23, DB `xiaozhi_devices` id 2 / room 9): vi-VN + wake word **Sophia**
+  (`CONFIG_SR_WN_WN9_SOPHIA_TTS` trong config board; Alexa compile kèm dự phòng —
+  chọn qua NVS `audio`/`wake_word`, xem CLAUDE.md) + AEC phần cứng, codec ES8311
+  (loa) + ES7210 (mic). Board không kèm loa — cần loa 8Ω 1-2W cắm cổng speaker.
+  **UI = `RoomDisplay154`** (kế thừa `room_display.cc` của quandong cho màn 240×240
+  không cảm ứng: header xanh đổi đỏ khi lắng nghe + đồng hồ + card thời tiết/pin mặt
+  trời, KHÔNG card hẹn giờ + KHÔNG nút thiết bị). **Bẫy build**: GLOB chỉ compile
+  file trong thư mục board — CMakeLists.txt của main đã append
+  `boards/quandong/esp32-s3-spi-2.8/room_display.cc` khi build waveshare (thiếu là
+  lỗi linker undefined `RoomDisplay::SetupUI`); font_vn_20/30.c đã copy vào thư
+  mục board waveshare (không dùng của quandong kẻo trùng symbol).
+- `build-waveshare-154/` — artifact bản 08/11 + `wifi_nvs.bin/csv` (WiFi mặc định).
+
+## WiFi mặc định — nạp sẵn NVS khỏi cấu hình SoftAP (board không touch)
+
+SsidManager (`managed_components/78__esp-wifi-connect/ssid_manager.cc`) đọc NVS
+namespace `wifi`, key `ssid`/`password` (index 0) — có sẵn là board **bỏ qua SoftAP
+tự nối luôn**. Không sửa firmware; sinh NVS 16KB (đúng size partition, offset 0x9000):
+
+```powershell
+# wifi_nvs.csv: key,type,encoding,value / wifi,namespace,, / ssid,data,string,<ten> / password,data,string,<pass>
+& firmware\esp-tools\python_env\idf6.1_py3.12_env\Scripts\python.exe `
+  firmware\esp-idf\components\nvs_flash\nvs_partition_generator\nvs_partition_gen.py `
+  generate firmware\xiaozhi-esp32\build\wifi_nvs.csv firmware\xiaozhi-esp32\build\wifi_nvs.bin 0x4000
+```
+
+Nạp: thêm `0x9000 build\wifi_nvs.bin` vào lệnh esptool full (xem output cuối build).
+**Lưu ý**: mọi lần nạp merged-binary vào `0x0` là mất WiFi (0xFF phủ NVS) — nạp lại
+`wifi_nvs.bin` vào `0x9000` sau đó. File csv/bin chứa mật khẩu — chỉ nằm trong
+`build/` (git-ignore), không copy ra chỗ khác.
 
 **Nạp (đã trả giá):** chỉ nạp **app** vào offset `0x20000` (`build\xiaozhi.bin`).
 Tuyệt đối KHÔNG nạp merged-binary vào `0x0` — image raw phủ 0xFF qua NVS (0x9000)

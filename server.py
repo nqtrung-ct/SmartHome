@@ -38,8 +38,12 @@ def _port_open(port: int, host: str = "127.0.0.1") -> bool:
 def _spawn(args: list[str]) -> bool:
     kwargs = {}
     if sys.platform == "win32":
+        # CREATE_NO_WINDOW (console ẩn) thay cho DETACHED_PROCESS: ollama.exe
+        # thấy mình không có console là tự AllocConsole → bật cửa sổ cmd TRỐNG
+        # lên desktop (đóng cửa sổ = kill ollama). Có sẵn console ẩn là nó
+        # chịu, không mở gì cả. Sidecar TTS cũng vậy (piper AllocConsole).
         kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
-                                   | subprocess.DETACHED_PROCESS)
+                                   | subprocess.CREATE_NO_WINDOW)
     else:
         kwargs["start_new_session"] = True
     try:

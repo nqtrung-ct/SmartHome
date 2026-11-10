@@ -5,14 +5,15 @@ binary Dahua vẫn chạy: NetSDK login bằng user 'admin' + mã bảo mật th
 (cùng tài khoản RTSP, lưu trong secret nhóm 'rtsp'). Preset tạo trong app
 Imou Life nằm trên cloud — preset hệ thống dùng phải tự lưu qua SET_PRESET.
 
-DLL chính hãng Dahua nằm ở data/netsdk/win64 (git-ignored, ~35MB, nguồn
-github.com/452/dahua-sdk — mirror bản SDK tải từ trang chủ Dahua).
+Windows: data/netsdk/win64/dhnetsdk.dll. macOS ARM64: NetSDK trong bộ
+SmartPSS ARM64 của Dahua (Mach-O, tên libdhnetsdk.so).
 """
 from __future__ import annotations
 
 import ctypes as C
 import json
 import os
+import sys
 import threading
 import time
 
@@ -25,6 +26,7 @@ FASTGOTO = 0x33            # quay tới tọa độ tuyệt đối (thang 0-3600
 NET_DEVSTATE_PTZ_LOCATION = 0x36  # đọc tọa độ hiện tại
 
 _sdk = None
+_dll_dir = None
 _sdk_lock = threading.RLock()  # NetSDK không đảm bảo thread-safe: gọi tuần tự như IR.
 # RLock để fast_goto giữ khóa xuyên suốt cả thời gian chờ đợi giữa 2 lệnh goto
 _sessions: dict[str, int] = {}  # "host:port" -> handle login còn hạn
@@ -77,7 +79,11 @@ class _TalkTransferParam(C.Structure):  # NET_TALK_TRANSFER_PARAM
     _fields_ = [("dwSize", C.c_uint), ("bTransfer", C.c_int)]
 
 
-@C.WINFUNCTYPE(C.c_longlong, C.c_longlong, C.c_void_p, C.c_uint, C.c_ubyte, C.c_void_p)
+# WINFUNCTYPE chỉ có trên Windows; macOS dùng CFUNCTYPE.
+_CBFUNC = getattr(C, "WINFUNCTYPE", C.CFUNCTYPE)
+
+
+@_CBFUNC(C.c_longlong, C.c_longlong, C.c_void_p, C.c_uint, C.c_ubyte, C.c_void_p)
 def _talk_data_cb(handle, buf, size, flag, user):
     # chế độ phát một chiều không có dữ liệu trả về — SDK chỉ cần có chỗ gọi
     return 0
@@ -88,16 +94,42 @@ class PtzError(Exception):
 
 
 def _load():
-    global _sdk
+    with _sdk_lock:
+        return _load_unlocked()
+
+
+def _load_unlocked():
+    global _sdk, _dll_dir
     if _sdk is not None:
         return _sdk
     from server.config import Config
-    lib_dir = Config().data_path("netsdk/win64")
-    dll = os.path.join(str(lib_dir), "dhnetsdk.dll")
-    if not os.path.exists(dll):
-        raise PtzError("Chưa có NetSDK DLL trong data/netsdk/win64")
-    os.add_dll_directory(str(lib_dir))
-    sdk = C.WinDLL(dll)
+    if sys.platform == "win32":
+        lib_dir = Config().data_path("netsdk/win64")
+        lib = os.path.join(str(lib_dir), "dhnetsdk.dll")
+        if not os.path.exists(lib):
+            raise PtzError("Chưa có NetSDK DLL trong data/netsdk/win64")
+        _dll_dir = os.add_dll_directory(str(lib_dir))
+        sdk = C.WinDLL(lib)
+    elif sys.platform == "darwin":
+        candidates = [
+            os.environ.get("DAHUA_NETSDK_DIR", ""),
+            str(Config().data_path("netsdk/macos-arm64")),
+            os.path.expanduser("~/Library/SmartHome/SmartPSS.app/Contents/Frameworks"),
+            "/Applications/SmartPSS.app/Contents/Frameworks",
+        ]
+        lib_dir = next((p for p in candidates if p and os.path.isfile(
+            os.path.join(p, "libdhnetsdk.so"))), None)
+        if lib_dir is None:
+            raise PtzError("Chưa có NetSDK macOS ARM64 (libdhnetsdk.so)")
+        try:
+            config_lib = os.path.join(lib_dir, "libdhconfigsdk.so")
+            if os.path.isfile(config_lib):
+                C.CDLL(config_lib, mode=C.RTLD_GLOBAL)
+            sdk = C.CDLL(os.path.join(lib_dir, "libdhnetsdk.so"), mode=C.RTLD_GLOBAL)
+        except OSError as exc:
+            raise PtzError(f"Không nạp được NetSDK macOS: {exc}") from exc
+    else:
+        raise PtzError(f"NetSDK chưa hỗ trợ {sys.platform}")
     sdk.CLIENT_Init.argtypes = [C.c_void_p, C.c_void_p]
     sdk.CLIENT_LoginEx2.argtypes = [C.c_char_p, C.c_uint16, C.c_char_p, C.c_char_p,
                                     C.c_int, C.c_void_p, C.POINTER(_DeviceInfo),
@@ -157,9 +189,16 @@ def _login(cfg, host: str, port: int, mac: str) -> int:
         return h
     sdk = _load()
     user, pwd = _creds(cfg, host, mac)
+    connect_host, connect_port = host, port
+    proxy = (cfg.get("camera.ptz_proxy", {}) or {}).get(host)
+    if proxy:
+        connect_host, sep, proxy_port = str(proxy).rpartition(":")
+        if not sep or not connect_host or not proxy_port.isdecimal():
+            raise PtzError(f"Cấu hình PTZ proxy không hợp lệ cho {host}")
+        connect_port = int(proxy_port)
     err = C.c_int(0)
     info = _DeviceInfo()
-    h = sdk.CLIENT_LoginEx2(host.encode(), port, user.encode(), pwd.encode(),
+    h = sdk.CLIENT_LoginEx2(connect_host.encode(), connect_port, user.encode(), pwd.encode(),
                             0, None, C.byref(info), C.byref(err))
     if h == 0:
         raise PtzError(f"Đăng nhập PTZ thất bại (mã {err.value})")

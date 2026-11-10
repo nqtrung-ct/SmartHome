@@ -274,6 +274,9 @@ async def entity_state(request: Request, entity_id: int, _: None = Depends(requi
     if not entity:
         raise HTTPException(status_code=404, detail="Không có entity")
     device = app.db.one("SELECT * FROM devices WHERE id=?", (entity["device_id"],))
+    if device["driver"] == "senergy":
+        # The scheduler owns inverter reads; UI requests use its dated snapshot.
+        return {"state": loads(entity["state"]), "updated_at": entity["updated_at"]}
     try:
         state = await asyncio.to_thread(app.drivers[device["driver"]].get_state, entity, device)
         return {"state": state, "updated_at": entity["updated_at"]}

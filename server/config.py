@@ -55,7 +55,7 @@ DEFAULTS: dict[str, Any] = {
     "camera": {"poll_seconds": 60,  # chu kỳ kiểm tra camera online (socket RTSP)
                "home_return_seconds": 60},  # rời góc mặc định ⭐ quá lâu thì tự quay về
     "cozylife": {"poll_seconds": 60},  # chu kỳ đọc trạng thái công tắc CozyLife (TCP 5555, chỉ đọc)
-    "solar": {"poll_seconds": 180},  # chu kỳ đọc inverter Senergy (Modbus TCP) - đừng nhanh hơn 30s
+    "solar": {"poll_seconds": 300},  # inverter Senergy có Wi-Fi chập chờn; đọc tối đa mỗi 5 phút
     "frigate": {"base_url": "http://127.0.0.1:5000"},  # API nội bộ của NVR Docker (map 127.0.0.1)
     "voice": {"ack_text": "Đang kiểm tra",  # câu nói báo nhận lệnh khi xử lý chậm (PTZ/classification)
               "ack_after": 1.2},  # sau bao nhiêu giây mà chưa xong mới nói ACK

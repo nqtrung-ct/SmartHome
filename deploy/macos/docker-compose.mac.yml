@@ -1,0 +1,45 @@
+services:
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:0.18.2-standard-arm64
+    container_name: smarthome-frigate
+    restart: unless-stopped
+    shm_size: 512mb
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - /Volumes/Data/CameraData/frigate/config:/config
+      - /Volumes/Data/CameraData/frigate/media:/media/frigate
+    tmpfs:
+      - /tmp/cache:size=512m
+    ports:
+      - "8971:8971"
+      - "127.0.0.1:5001:5000"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+      - "1984:1984"
+    depends_on:
+      - mosquitto
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: smarthome-mosquitto
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1883:1883"
+    volumes:
+      - /Volumes/Data/CameraData/frigate/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  ptz_proxy:
+    image: python:3.12-alpine
+    container_name: smarthome-ptz-proxy
+    restart: unless-stopped
+    environment:
+      PTZ_TARGETS: "13778=192.168.1.28:37777,13779=192.168.1.31:37777,16668=192.168.1.5:6668,15020=192.168.1.16:502"
+    command: ["python", "-u", "/app/ptz_proxy.py"]
+    volumes:
+      - ./ptz_proxy.py:/app/ptz_proxy.py:ro
+    ports:
+      - "127.0.0.1:13778:13778"
+      - "127.0.0.1:13779:13779"
+      - "127.0.0.1:16668:16668"
+      - "127.0.0.1:15020:15020"

@@ -78,15 +78,20 @@ async def _poll_tuya_sensors(app) -> None:
         device = {"id": row["did"], "host": row["host"], "extra": row["extra"]}
         try:
             state = await asyncio.to_thread(driver.get_state, entity, device)
-        except Exception:
-            # an unreachable breaker is not powering anything -> show it off
-            if row["etype"] == "switch":
-                db.execute(
-                    "UPDATE entities SET state=?, updated_at=? WHERE id=?",
-                    ('{"state": "off"}', now_iso(), row["eid"]),
+        except Exception as first_exc:
+            # The breaker firmware occasionally drops a single local request.
+            # Do not turn a live breaker off in the UI because of one transient
+            # read failure; retry once, then retain the last known state.
+            await asyncio.sleep(1)
+            try:
+                state = await asyncio.to_thread(driver.get_state, entity, device)
+            except Exception as exc:
+                log_event(
+                    db, "tuya",
+                    f"Không đọc được {row['host']} sau 2 lần thử: {exc}",
+                    level="warn",
                 )
-                sync_meter_with_switch(db, row["eid"], on=False)
-            continue
+                continue
         if not any(v is not None for v in state.values()):
             continue  # device answered but sent nothing - keep last good values
         db.execute(
@@ -137,9 +142,14 @@ async def _poll_tuya_cloud(app) -> None:
     if not targets:
         return
     try:
-        meters = await asyncio.to_thread(
-            driver.cloud_meter, api_key, api_secret, region,
-            list(dict.fromkeys(targets.values())),
+        # tinytuya uses requests without a timeout. Keep a cloud outage from
+        # blocking every poll that follows it in the scheduler.
+        meters = await asyncio.wait_for(
+            asyncio.to_thread(
+                driver.cloud_meter, api_key, api_secret, region,
+                list(dict.fromkeys(targets.values())),
+            ),
+            timeout=15,
         )
     except Exception:
         return
@@ -175,8 +185,8 @@ async def _heal_device_ip(app, device_id: int) -> str | None:
 
 async def _poll_solar(app) -> None:
     """Inverter Senergy (Modbus TCP): PV/pin/tải cho card điện năng màn hình tường.
-    Dongle CPU yếu - chỉ 2 yêu cầu đọc mỗi nhịp, chu kỳ mặc định 3 phút.
-    Đọc thất bại (IP có thể đã đổi) -> quét mạng tự chữa theo MAC rồi thử lại."""
+    Wi-Fi dongle chập chờn - chỉ một lần kết nối mỗi nhịp, chu kỳ mặc định 5 phút.
+    Đọc thất bại thì giữ số liệu tốt gần nhất và dò IP mới cho nhịp sau."""
     driver = app.state.drivers.get("senergy")
     if not driver:
         return
@@ -188,17 +198,30 @@ async def _poll_solar(app) -> None:
     for row in rows:
         entity = {"id": row["eid"]}
         host = row["host"]
+        interval = max(180, int(app.state.cfg.get("solar.poll_seconds", 300)))
+        last = db.one("SELECT attempted_at FROM device_poll_attempts WHERE device_id=?", (row["did"],))
+        if last and time.time() - last["attempted_at"] < interval:
+            continue
+        db.execute(
+            "INSERT INTO device_poll_attempts(device_id, attempted_at) VALUES (?,?) "
+            "ON CONFLICT(device_id) DO UPDATE SET attempted_at=excluded.attempted_at",
+            (row["did"], time.time()),
+        )
         state = None
-        for _attempt in (1, 2):
-            try:
-                state = await asyncio.to_thread(
-                    driver.get_state, entity, {"id": row["did"], "host": host})
-                break
-            except Exception:
-                new_host = await _heal_device_ip(app, row["did"])
-                if not new_host:
-                    break
-                host = new_host
+        try:
+            state = await asyncio.to_thread(
+                driver.get_state, entity, {"id": row["did"], "host": host})
+        except Exception as exc:
+            log_event(
+                db, "senergy",
+                f"Không đọc được inverter {host}: {exc}",
+                level="warn",
+            )
+            # Heal a changed address for the next scheduled poll. Do not
+            # reconnect in the same cycle; the dongle is sensitive to bursts.
+            from server.drivers.network import tcp_target
+            if tcp_target(app.state.cfg, host, 502) == (host, 502):
+                await _heal_device_ip(app, row["did"])
         if not state:
             continue  # dongle nghỉ/mất WiFi: giữ số cũ, UI tự hiện "—" khi quá 1 tiếng
         db.execute(
@@ -208,16 +231,30 @@ async def _poll_solar(app) -> None:
 
 
 async def _poll_cameras(app) -> None:
-    """Camera ONVIF: online = mở được socket RTSP (:554, dự phòng :80).
-    Trạng thái này cho UI (chip 'đang bật/tắt', quyền mở popup video)."""
+    """Trạng thái camera cho UI: ưu tiên luồng Frigate, rồi thử socket RTSP.
+
+    Trên macOS tiến trình SmartHome có thể bị quyền Local Network chặn socket
+    dù Frigate trong OrbStack vẫn nhận hình; FPS của Frigate phản ánh luồng xem.
+    """
     import socket
+    import httpx
+    from server.drivers.base import loads
 
     db: Database = app.state.db
     rows = db.query(
-        """SELECT e.id AS eid, d.host FROM entities e
+        """SELECT e.id AS eid, e.driver_data, d.host FROM entities e
            JOIN devices d ON d.id=e.device_id
            WHERE d.driver='onvif' AND e.entity_type='camera'"""
     )
+    cameras: dict = {}
+    try:
+        base = str(app.state.cfg.get("frigate.base_url", "http://127.0.0.1:5000")).rstrip("/")
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{base}/api/stats")
+            resp.raise_for_status()
+            cameras = resp.json().get("cameras", {})
+    except (httpx.HTTPError, ValueError, TypeError):
+        pass
     for row in rows:
 
         def probe(host: str) -> bool:
@@ -229,7 +266,15 @@ async def _poll_cameras(app) -> None:
                     continue
             return False
 
-        on = await asyncio.to_thread(probe, row["host"])
+        name = loads(row["driver_data"]).get("frigate")
+        stats = cameras.get(name) if name else None
+        if isinstance(stats, dict):
+            try:
+                on = float(stats.get("camera_fps") or 0) > 0
+            except (TypeError, ValueError):
+                on = await asyncio.to_thread(probe, row["host"])
+        else:
+            on = await asyncio.to_thread(probe, row["host"])
         db.execute(
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",
             ('{"state": "on"}' if on else '{"state": "off"}', now_iso(), row["eid"]),
@@ -237,6 +282,7 @@ async def _poll_cameras(app) -> None:
 
 
 _ptz_away: dict[int, tuple[float, dict]] = {}  # eid -> (thấy khác góc lúc nào, vị trí lần trước)
+_ptz_poll_errors: dict[int, float] = {}
 
 
 def _ptz_near(a: dict, b: dict) -> bool:
@@ -277,9 +323,16 @@ async def _poll_camera_home(app) -> None:
         device = {"host": row["host"], "mac": row["mac"], "extra": row["extra"]}
         try:
             pos = await asyncio.to_thread(ptz.read_position, app.state.cfg, device)
-        except Exception:
+        except Exception as exc:
             _ptz_away.pop(row["eid"], None)  # camera ngủ/mất mạng: đếm lại khi thức dậy
+            vision = getattr(app.state, "vision", None)
+            if vision:
+                vision.invalidate_camera_position(row["eid"])
+            if time.time() - _ptz_poll_errors.get(row["eid"], 0) >= 300:
+                _ptz_poll_errors[row["eid"]] = time.time()
+                log_event(db, "camera", f"Không đọc được góc camera #{row['eid']}: {exc}", level="warn")
             continue
+        _ptz_poll_errors.pop(row["eid"], None)
         # position gate cho trạng thái thị giác (cửa/ti vi): entity chỉ hợp lệ
         # khi camera đứng đúng góc đã vẽ crop
         vision = getattr(app.state, "vision", None)
@@ -330,18 +383,16 @@ async def _poll_cozylife(app) -> None:
             await asyncio.sleep(2)
             try:
                 state = await asyncio.to_thread(driver.get_state, entity, device)
-            except Exception:
-                if row["etype"] == "switch":
-                    db.execute(
-                        "UPDATE entities SET state=?, updated_at=? WHERE id=?",
-                        ('{"state": "off"}', now_iso(), row["eid"]),
-                    )
+            except Exception as retry_exc:
+                # A silent/overloaded CozyLife device is not proof that the
+                # switch is off. Keep the last known state until a real reply
+                # arrives; otherwise the admin UI falsely flips to "off".
                 # lỗi đọc từng bị nuốt im lặng — log giới hạn 10 phút/host
                 if time.time() - _cozy_warn.get(row["host"], 0) > 600:
                     _cozy_warn[row["host"]] = time.time()
                     log_event(db, "cozylife",
                               f"Không đọc được {row['host']} sau 2 lần thử "
-                              f"({type(exc).__name__}: {exc})",
+                              f"({type(retry_exc).__name__}: {retry_exc})",
                               level="warn")
                 continue
         if not any(v is not None for v in state.values()):
@@ -377,8 +428,6 @@ async def scheduler_loop(app) -> None:
     last_cleanup_day = None
     last_sensor_poll = 0.0
     last_cloud_poll = 0.0
-    last_camera_poll = 0.0
-    last_ptz_home_poll = 0.0
     last_solar_poll = 0.0
     last_cozylife_poll = 0.0
     last_androidtv_poll = 0.0
@@ -436,18 +485,15 @@ async def scheduler_loop(app) -> None:
             if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 60)):
                 last_sensor_poll = time.time()
                 await _poll_tuya_sensors(app)
-            if time.time() - last_cloud_poll >= int(app.state.cfg.get("tuya.cloud_seconds", 180)):
-                last_cloud_poll = time.time()
-                await _poll_tuya_cloud(app)
-            if time.time() - last_camera_poll >= int(app.state.cfg.get("camera.poll_seconds", 60)):
-                last_camera_poll = time.time()
-                await _poll_cameras(app)
-            if time.time() - last_ptz_home_poll >= 10:  # đủ mịn cho mốc 60s quay về
-                last_ptz_home_poll = time.time()
-                await _poll_camera_home(app)
+            # Poll the inverter before the optional Tuya cloud request. The
+            # cloud library historically had no HTTP timeout and could stall
+            # this single scheduler task indefinitely.
             if time.time() - last_solar_poll >= int(app.state.cfg.get("solar.poll_seconds", 180)):
                 last_solar_poll = time.time()
                 await _poll_solar(app)
+            if time.time() - last_cloud_poll >= int(app.state.cfg.get("tuya.cloud_seconds", 180)):
+                last_cloud_poll = time.time()
+                await _poll_tuya_cloud(app)
             if time.time() - last_cozylife_poll >= int(app.state.cfg.get("cozylife.poll_seconds", 60)):
                 last_cozylife_poll = time.time()
                 await _poll_cozylife(app)
@@ -462,3 +508,26 @@ async def scheduler_loop(app) -> None:
 
 def start_scheduler(app) -> asyncio.Task:
     return asyncio.create_task(scheduler_loop(app), name="timer-scheduler")
+
+
+async def camera_monitor_loop(app) -> None:
+    """Poll camera independently of slow Tuya/inverter network requests."""
+    last_camera_poll = 0.0
+    last_ptz_poll = 0.0
+    while True:
+        try:
+            await asyncio.sleep(1)
+            if time.monotonic() - last_camera_poll >= int(app.state.cfg.get("camera.poll_seconds", 60)):
+                last_camera_poll = time.monotonic()
+                await _poll_cameras(app)
+            if time.monotonic() - last_ptz_poll >= 10:
+                last_ptz_poll = time.monotonic()
+                await _poll_camera_home(app)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log_event(app.state.db, "camera", f"Lỗi vòng kiểm tra camera: {exc}", level="warn")
+
+
+def start_camera_monitor(app) -> asyncio.Task:
+    return asyncio.create_task(camera_monitor_loop(app), name="camera-monitor")

@@ -6,12 +6,12 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from server.api.deps import require_admin, voice_identity
 from server.db import log_event
-from server.util import now as util_now, now_iso
+from server.util import now as util_now, now_iso, parse_iso
 
 router = APIRouter()
 
@@ -50,7 +50,7 @@ def health() -> dict:
 
 
 @router.get("/display")
-def display(request: Request):
+async def display(request: Request, response: Response):
     """Snapshot cho màn hình treo tường. Public (server LAN-only, không có secret).
     Chỉ trả các phòng có cảm biến nhiệt độ; kèm thiết bị điều khiển của phòng
     (sensor/công tắc không hiện — chỉ dùng để lọc phòng và lấy nhiệt độ;
@@ -59,6 +59,8 @@ def display(request: Request):
 
     app = request.app
     db = app.state.db
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
 
     weather = None
     try:
@@ -158,7 +160,7 @@ def display(request: Request):
     # có nghĩa khi cầu dao đang bật; lúc đó Vol < 200 = sụt áp (cảnh báo vàng).
     grid = None
     sw = db.one(
-        """SELECT e.state FROM entities e JOIN devices d ON d.id=e.device_id
+        """SELECT e.id AS eid, e.state, e.updated_at, d.id AS did, d.host FROM entities e JOIN devices d ON d.id=e.device_id
            WHERE d.driver='tuya' AND e.entity_type='switch' ORDER BY e.id LIMIT 1"""
     )
     if sw:
@@ -166,28 +168,42 @@ def display(request: Request):
             sw_state = _json.loads(sw["state"] or "{}")
         except ValueError:
             sw_state = {}
+
+        # Read the scheduler's confirmed snapshot. Polling here opens competing
+        # Tuya sessions for every display client and can disrupt device replies.
+        try:
+            age = (util_now() - parse_iso(sw["updated_at"])).total_seconds()
+            fresh = 0 <= age <= max(180, int(app.state.cfg.get("tuya.poll_seconds", 60)) * 3)
+        except (TypeError, ValueError):
+            fresh = False
         voltage = None
         for m in db.query(
-            """SELECT e.state, e.driver_data FROM entities e
+            """SELECT e.state, e.driver_data, e.updated_at FROM entities e
                JOIN devices d ON d.id=e.device_id
-               WHERE d.driver='tuya' AND e.entity_type='sensor' ORDER BY e.id"""
+               WHERE d.id=? AND e.entity_type='sensor' ORDER BY e.id""",
+            (sw["did"],),
         ):
             if not _json.loads(m["driver_data"] or "{}").get("cloud_meter"):
                 continue
             try:
                 mv = _json.loads(m["state"] or "{}").get("voltage")
-            except ValueError:
+                meter_age = (util_now() - parse_iso(m["updated_at"])).total_seconds()
+                if not 0 <= meter_age <= 600:
+                    mv = None
+            except (ValueError, TypeError):
                 mv = None
             if mv is not None:
                 voltage = mv
                 break
-        on = sw_state.get("state") == "on"
+        state = sw_state.get("state")
+        on = (state == "on") if fresh and state in ("on", "off") else None
         # Vol = 0 khi công tắc bật: khả năng cao vừa có điện lại, số cloud chưa
         # kịp về — không cảnh báo vàng; chỉ cảnh báo khi thật sự sụt áp (0 < Vol < 200)
         grid = {
             "on": on,
             "voltage": voltage,
             "low_voltage": on and voltage is not None and 0 < voltage < 200,
+            "updated_at": sw["updated_at"],
         }
 
     # card điện năng: inverter Senergy (PV / pin / tải) - sensor entity của driver senergy

@@ -151,9 +151,14 @@ class VisionStates:
                     ),
                 )
                 log_event(self.db, "vision", f"Đã tạo entity thị giác '{t['name']}'")
-        # mang lại label đã có trong DB (Frigate chỉ publish khi state ĐỔI, sau
-        # restart không có message nào cho tới lần đổi kế tiếp)
+        # Chưa đọc lại được góc PTZ sau restart thì không giữ trạng thái cũ.
         for row in self._vision_entities():
+            if loads(row["driver_data"]).get("preset"):
+                self._cache[row["id"]] = {"label": None, "ts": 0.0, "valid": False}
+                if (loads(row["state"]) or {}).get("state") != "unknown":
+                    self._write(row["id"], "unknown")
+                continue
+            # Frigate chỉ publish khi state đổi.
             label = (loads(row["state"]) or {}).get("state")
             if label and label != "unknown":
                 self._cache[row["id"]] = {"label": label, "ts": 0.0, "valid": False}
@@ -189,10 +194,10 @@ class VisionStates:
             return  # model trùng tên nhưng thuộc camera khác
         with self._lock:
             ent = self._cache.setdefault(row["id"], {"label": None, "ts": 0.0, "valid": False})
+            if not ent["valid"]:
+                return  # crop ngoài góc preset: không ghi đè label đúng bằng kết quả sai
             ent["label"], ent["ts"] = label, time.time()
-            valid = ent["valid"]
-        if valid:
-            self._write(row["id"], label)
+        self._write(row["id"], label)
         self._wake(row["id"])
 
     def _wake(self, entity_id: int) -> None:
@@ -202,6 +207,17 @@ class VisionStates:
                     w[2].set()
 
     # -- position gate (gọi từ scheduler mỗi 10s) ---------------------------
+
+    def invalidate_camera_position(self, cam_entity_id: int) -> None:
+        """Mất vị trí PTZ: không thể khẳng định trạng thái ở crop nào."""
+        rows = [row for row in self._vision_entities()
+                if loads(row["driver_data"]).get("camera_entity") == cam_entity_id]
+        with self._lock:
+            for row in rows:
+                self._cache[row["id"]] = {"label": None, "ts": 0.0, "valid": False}
+        for row in rows:
+            if (loads(row["state"]) or {}).get("state") != "unknown":
+                self._write(row["id"], "unknown")
 
     def set_camera_position(self, cam_entity_id: int, pos: dict) -> None:
         """Đánh dấu entity nào đang hợp lệ theo góc camera hiện tại."""
@@ -224,6 +240,9 @@ class VisionStates:
                 ent = self._cache.setdefault(eid, {"label": None, "ts": 0.0, "valid": False})
                 if ent["valid"] != ok:
                     ent["valid"] = ok
+                    if not ok:
+                        ent["label"] = None
+                        ent["ts"] = 0.0
                     changed = True
             snapshot = {eid: (ok, dict(self._cache[eid])) for eid, ok in wanted.items()}
         if changed:
