@@ -7,8 +7,8 @@ services:
     environment:
       TZ: Asia/Ho_Chi_Minh
     volumes:
-      - /Volumes/Data/CameraData/frigate/config:/config
-      - /Volumes/Data/CameraData/frigate/media:/media/frigate
+      - /Volumes/Camera/frigate/config:/config
+      - /Volumes/Camera/frigate/media:/media/frigate
     tmpfs:
       - /tmp/cache:size=512m
     ports:
@@ -27,14 +27,14 @@ services:
     ports:
       - "127.0.0.1:1883:1883"
     volumes:
-      - /Volumes/Data/CameraData/frigate/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - /Volumes/Camera/frigate/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
   ptz_proxy:
     image: python:3.12-alpine
     container_name: smarthome-ptz-proxy
     restart: unless-stopped
     environment:
-      PTZ_TARGETS: "13778=192.168.1.28:37777,13779=192.168.1.31:37777,16668=192.168.1.5:6668,15020=192.168.1.16:502"
+      PTZ_TARGETS: "13778=192.168.1.16:37777,13779=192.168.1.15:37777,16668=192.168.1.5:6668,15020=192.168.1.11:502"
     command: ["python", "-u", "/app/ptz_proxy.py"]
     volumes:
       - ./ptz_proxy.py:/app/ptz_proxy.py:ro

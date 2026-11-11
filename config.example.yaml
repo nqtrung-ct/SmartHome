@@ -62,15 +62,15 @@ camera:
   home_return_seconds: 60
   # PTZ native macOS qua proxy OrbStack (sửa IP cho đúng thiết bị):
   # ptz_proxy:
-  #   "192.168.1.28": "127.0.0.1:13778"
-  #   "192.168.1.31": "127.0.0.1:13779"
+  #   "192.168.1.16": "127.0.0.1:13778"
+  #   "192.168.1.15": "127.0.0.1:13779"
 
 # TCP proxy khi server nền trên Mac không truy cập được LAN.
 # Mẫu triển khai: deploy/macos/README.md. Chỉ mở các cổng này trên localhost.
 # network:
 #   tcp_proxies:
 #     "192.168.1.5:6668": "127.0.0.1:16668"
-#     "192.168.1.16:502": "127.0.0.1:15020"
+#     "192.168.1.11:502": "127.0.0.1:15020"
 
 # Frigate trên Mac: đổi API mặc định Windows :5000 sang :5001.
 # frigate:

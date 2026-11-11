@@ -653,6 +653,15 @@ def _arp_table() -> dict[str, str]:
     return table
 
 
+def _tcp_open(ip: str, port: int, timeout: float = 0.5) -> bool:
+    """Return whether a TCP service is reachable without leaving a socket open."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _vendor(mac: str) -> str:
     if not mac:
         return ""
@@ -687,13 +696,25 @@ def scan_network(db: Database, cfg: Config) -> None:
         for ip, ok in zip(hosts, pool.map(_ping, hosts)):
             if ok:
                 alive.append(ip)
-    arp = _arp_table()
     from server.util import norm_mac
 
     adopted = {
         norm_mac(d["mac"]): d
         for d in db.query("SELECT id, name, mac, driver FROM devices WHERE mac IS NOT NULL AND mac != ''")
     }
+    # ARP can be stale during a DHCP move: the first snapshot may still assign
+    # the old occupant's MAC to the new IP. Senergy has no discovery protocol,
+    # so probe Modbus as well. This also catches an inverter that does not answer
+    # ICMP ping, while the MAC check below still prevents adopting another TCP
+    # service on port 502.
+    if any(d["driver"] == "senergy" for d in adopted.values()):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
+            modbus_alive = {
+                ip for ip, ok in zip(hosts, pool.map(lambda h: _tcp_open(h, 502), hosts))
+                if ok
+            }
+        alive = sorted(set(alive) | modbus_alive)
+    arp = _arp_table()
     for ip in alive:
         mac = arp.get(ip, "")
         dev = adopted.get(norm_mac(mac))
