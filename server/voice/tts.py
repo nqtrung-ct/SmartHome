@@ -108,6 +108,7 @@ class TtsHttp:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.url = cfg.get("tts.http_url", "")
+        self.model = cfg.get("tts.model", "piper")
         # length_scale piper: càng lớn đọc càng chậm (1.0 = tốc gốc)
         self.length_scale = cfg.get("tts.length_scale")
         # khoảng lặng giữa các DÒNG (giây) — bản tin nhiều tin đọc dễ nghe hơn
@@ -116,18 +117,28 @@ class TtsHttp:
     def _one(self, text: str) -> bytes:
         """Đọc MỘT câu, tự sinh lại sidecar nếu nó vừa chết."""
         payload = {"text": text}
+        if self.model == "vieneu":
+            payload["model"] = "vieneu"
         if self.length_scale:
             payload["length_scale"] = float(self.length_scale)
         try:
-            resp = httpx.post(self.url, json=payload, timeout=60)
+            resp = httpx.post(self.url, json=payload, timeout=300 if self.model == "vieneu" else 60)
             resp.raise_for_status()
         except httpx.TransportError:
             # sidecar vừa chết → tự sinh lại rồi thử đúng câu này lần nữa,
             # kẻo người dùng chịu im lặng tới lần restart server kế tiếp
             if not ensure_sidecar(self.cfg):
                 raise
-            resp = httpx.post(self.url, json=payload, timeout=60)
+            resp = httpx.post(self.url, json=payload, timeout=300 if self.model == "vieneu" else 60)
             resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", str(exc))
+            except (ValueError, AttributeError):
+                detail = str(exc)
+            raise RuntimeError(f"Dịch vụ TTS: {detail}") from exc
+        if self.model == "vieneu" and resp.headers.get("X-TTS-Model") != "vieneu":
+            raise RuntimeError("Dịch vụ TTS chưa hỗ trợ VieNeu; hãy khởi động lại TTS sidecar.")
         return resp.content
 
     def synthesize(self, text: str) -> tuple[bytes, int] | None:

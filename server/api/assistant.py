@@ -126,6 +126,7 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
         },
         "tts": {
             "engine": cfg.get("tts.engine"),
+            "model": cfg.get("tts.model", "piper"),
             "http_url": cfg.get("tts.http_url", ""),
             "loaded": type(pipeline.tts).__name__ == "TtsHttp",
             "error": None if type(pipeline.tts).__name__ == "TtsHttp" else _tts_error_hint(cfg),
@@ -173,6 +174,7 @@ class AssistantConfigIn(BaseModel):
     stt_model_dir: str | None = None  # thư mục model trong data/models (đổi là nạp lại ngay)
     tts_engine: str | None = None  # none | http
     tts_http_url: str | None = None
+    tts_model: str | None = None
 
 
 @router.post("/assistant/config")
@@ -251,6 +253,10 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         cfg._data.setdefault("tts", {})["http_url"] = body.tts_http_url
         set_yaml_value(cfg.path, "tts", "http_url", body.tts_http_url)
         changed.append(f"tts.http_url = {body.tts_http_url}")
+    if body.tts_model in ("piper", "vieneu"):
+        cfg._data.setdefault("tts", {})["model"] = body.tts_model
+        set_yaml_value(cfg.path, "tts", "model", body.tts_model)
+        changed.append(f"tts.model = {body.tts_model}")
 
     # rebuild the engines the pipeline uses (fall back to "none" on bad settings)
     try:

@@ -434,6 +434,11 @@ async function renderAssistant() {
           <option value="http" ${st.tts.engine === "http" ? "selected" : ""}>http (POST text → wav)</option>
         </select>
         <input id="tts-url" value="${esc(st.tts.http_url)}" placeholder="http://127.0.0.1:8125/tts" style="width:230px">
+        <label class="small muted">Giọng đọc</label>
+        <select id="tts-model">
+          <option value="piper" ${st.tts.model === "piper" ? "selected" : ""}>Piper (cũ)</option>
+          <option value="vieneu" ${st.tts.model === "vieneu" ? "selected" : ""}>VieNeu v3 Turbo — Mai Anh (nữ)</option>
+        </select>
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
         <button class="small-btn" onclick="testTts()">▶ Phát thử</button>
       </div>
@@ -463,6 +468,7 @@ window.saveAssistantConfig = async () => {
     stt_model_dir: $("#stt-model-dir")?.value || null,
     tts_engine: $("#tts-engine")?.value || null,
     tts_http_url: $("#tts-url")?.value ?? null,
+    tts_model: $("#tts-model")?.value || null,
   };
   try {
     const res = await api("/assistant/config", { method: "POST", body: JSON.stringify(body) });

@@ -16,18 +16,19 @@ Sau đó trong tab Trợ lý (hoặc config.yaml):
       engine: http
       http_url: http://127.0.0.1:8125/tts
 
-Muốn đổi sang VieNeu-TTS sau này: giữ nguyên giao diện POST {"text"} -> wav này,
-chỉ thay hàm synthesize() bên dưới.
+VieNeu v3 Turbo: cài `pip install vieneu==3.8.4`, chọn trong tab Trợ lý.
+Lần đầu cần mạng để tải model; mặc định dùng giọng nữ Mai Anh.
 """
 from __future__ import annotations
 
 import io
 import os
 import sys
+import threading
 import wave
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -38,6 +39,52 @@ app = FastAPI()
 LENGTH_SCALE = float(os.environ.get("TTS_LENGTH_SCALE", "1.15"))
 
 _voice = None  # piper.PiperVoice | None (None = placeholder silence)
+_vieneu = None
+_vieneu_lock = threading.Lock()
+
+
+def synthesize_vieneu(text: str) -> bytes:
+    """Nạp v3 Turbo khi dùng lần đầu; giữ khóa vì backend CPU chạy một luồng."""
+    global _vieneu
+    with _vieneu_lock:
+        if _vieneu is None:
+            from vieneu import Vieneu
+            # ONNX Runtime từ chối dữ liệu bên ngoài khi các graph trong cache
+            # Hugging Face là symlink tới các blob ở thư mục khác. Lưu file thật
+            # cạnh nhau; áp dụng cho cả backbone lẫn codec của vieneu 3.8.4.
+            from huggingface_hub import hf_hub_download
+            from vieneu._v3_turbo_engine.onnx_runtime_lite import OnnxV3LiteEngine
+
+            def fetch_local(repo, files, subfolder):
+                base = Path("data/models/vieneu") / repo.replace("/", "--")
+                folder = base / subfolder if subfolder else base
+                required = [name for name in files if not name.endswith(".json")]
+                if subfolder:
+                    required += ["config.json", "tokenizer.json"]
+                if all((folder / name).is_file() for name in required):
+                    return folder
+                last = None
+                for name in files:
+                    try:
+                        last = hf_hub_download(repo, name, subfolder=subfolder or None,
+                                               local_dir=str(base))
+                    except Exception:
+                        if name.endswith(".json"):
+                            continue
+                        raise
+                return Path(last).parent
+
+            original_fetch = OnnxV3LiteEngine.__dict__["_fetch"]
+            OnnxV3LiteEngine._fetch = staticmethod(fetch_local)
+            try:
+                _vieneu = Vieneu(mode="v3turbo", backend="onnx")
+            finally:
+                OnnxV3LiteEngine._fetch = original_fetch
+        import numpy as np
+
+        audio = np.asarray(_vieneu.infer(text, voice="Mai Anh"), dtype=np.float32).reshape(-1)
+        pcm = (np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes()
+        return pcm_to_wav(pcm, 48000)
 
 
 def _load_piper():
@@ -91,12 +138,21 @@ def pcm_to_wav(pcm: bytes, sample_rate: int, channels: int = 1) -> bytes:
 class TtsRequest(BaseModel):
     text: str
     length_scale: float | None = None  # None = dùng mặc định LENGTH_SCALE của sidecar
+    model: str = "piper"
 
 
 @app.post("/tts")
 def tts(req: TtsRequest) -> Response:
+    if req.model == "vieneu":
+        try:
+            audio = synthesize_vieneu(req.text)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"VieNeu chưa sẵn sàng: {exc}") from exc
+        return Response(content=audio, media_type="audio/wav", headers={"X-TTS-Model": "vieneu"})
+    if req.model != "piper":
+        raise HTTPException(status_code=400, detail="Model TTS không được hỗ trợ")
     scale = req.length_scale if req.length_scale else LENGTH_SCALE
-    return Response(content=synthesize(req.text, length_scale=scale), media_type="audio/wav")
+    return Response(content=synthesize(req.text, length_scale=scale), media_type="audio/wav", headers={"X-TTS-Model": "piper"})
 
 
 if __name__ == "__main__":
