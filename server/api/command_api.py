@@ -105,7 +105,8 @@ class CommandIn(BaseModel):
 async def command(request: Request, body: CommandIn, _: None = Depends(require_admin)):
     """Admin console: send a text command as if spoken in a room."""
     app = request.app.state
-    result = await handle_command(app.db, app.drivers, app.cfg, app.weather, body.text, body.room_id)
+    result = await handle_command(app.db, app.drivers, app.cfg, app.weather, body.text, body.room_id,
+                                  app=request.app)
     log_event(
         app.db, "console",
         f"[{result.get('engine', '?')}] '{body.text}' -> {result['reply']}",

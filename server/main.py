@@ -48,7 +48,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             log_event(db, "tts", "TTS sidecar sẵn sàng")
         app.state.weather = Weather(cfg)
         app.state.pipeline = VoicePipeline(cfg, db, drivers, app.state.weather)
+        app.state.pipeline.app = app
         app.state.voice_connections = VoiceConnections(db)
+        app.state.announcement_tasks = set()
         app.state.scheduler_task = start_scheduler(app)
         app.state.ollama_keepalive = OllamaKeepAlive(cfg, db)
         app.state.camera_monitor_task = start_camera_monitor(app)
@@ -72,6 +74,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.ollama_keepalive.task.cancel()
         await asyncio.gather(app.state.ollama_keepalive.task, return_exceptions=True)
         app.state.camera_monitor_task.cancel()
+        for task in app.state.announcement_tasks:
+            task.cancel()
+        await asyncio.gather(*app.state.announcement_tasks, return_exceptions=True)
         for driver in drivers.values():
             driver.stop()
         if zc:

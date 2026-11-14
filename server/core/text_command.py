@@ -1980,9 +1980,74 @@ def swing_button(norm: str) -> str | None:
     return None
 
 
-async def fast_path(db, drivers, weather, text: str, room_id: int | None):
+async def fast_path(db, drivers, weather, text: str, room_id: int | None,
+                    app=None, source_device_id=None):
     norm = normalize(text)
     tokens = norm.split()
+    # Parse announcements before multi-intent and timer rules: the message can
+    # itself contain words such as "đến", "rồi", "bật" and a time.
+    speech = re.search(r"\bphat\s+(?:cau|thong bao|noi)\s+", norm)
+    if speech:
+        destinations = list(re.finditer(r"\b(?:vao|den|qua|toi|tren|trong)\s+(?:(?:loa|cua)\s+)*(?:camera|phong|nha bep)\b", norm[speech.end():]))
+        dest_start = speech.end() + destinations[-1].start() if destinations else None
+        timing = re.search(r"\b(?:sau|luc|vao luc)\s+(?:\d|mot\b|hai\b|ba\b|bon\b|nam\b|sau\b|bay\b|tam\b|chin\b|muoi\b)", norm[speech.end():])
+        timing_start = speech.end() + timing.start() if timing else None
+        message_end = min(i for i in (dest_start, timing_start, len(norm)) if i is not None)
+        message = (text[speech.end():message_end] if len(text) == len(norm)
+                   else norm[speech.end():message_end]).strip(" \t\r\n.,!?\"'“”‘’")
+        if not message:
+            return {"reply": "Bạn muốn mình phát câu gì?", "action": {"tool": "announce", "ok": False}}
+        room = room_id
+        camera_id = None
+        if dest_start is not None:
+            destination = norm[dest_start:timing_start] if timing_start is not None and timing_start > dest_start else norm[dest_start:]
+            destination = re.sub(r"[.,!?;]+", " ", destination).strip()
+            mentioned = _room_from_text(db, destination)
+            cameras = db.query("SELECT * FROM entities WHERE entity_type='camera'")
+            if mentioned is not None:
+                room = mentioned
+                cameras = [c for c in cameras if _entity_room(db, c) == room]
+                if len(cameras) > 1:
+                    scored = [(max((len(a) for a in _entity_aliases(c)
+                                    if len(a) > len("camera") and _alias_in(a, destination)), default=0), c)
+                              for c in cameras]
+                    best = max(score for score, _ in scored)
+                    if best:
+                        cameras = [c for score, c in scored if score == best]
+            elif re.search(r"\bcamera\b", destination):
+                named = [c for c in cameras if any(len(alias) > len("camera") and _alias_in(alias, destination)
+                                                    for alias in _entity_aliases(c))]
+                rest = re.sub(r"\b(?:vao|den|qua|toi|tren|trong|loa|cua|camera|nay)\b", " ", destination).strip()
+                cameras = named or ([c for c in cameras if room is not None and _entity_room(db, c) == room]
+                                    if not rest else [])
+            else:
+                return {"reply": "Mình chưa rõ phòng cần phát.", "action": {"tool": "announce", "ok": False}}
+            if re.search(r"\bcamera\b", destination):
+                if len(cameras) > 1:
+                    return {"reply": "Có nhiều camera phù hợp, bạn cho mình tên camera cụ thể nhé.",
+                            "action": {"tool": "announce", "ok": False}}
+                if cameras:
+                    camera_id = cameras[0]["id"]
+                    room = _entity_room(db, cameras[0])
+                elif mentioned is None:
+                    return {"reply": "Mình không tìm thấy camera đó.", "action": {"tool": "announce", "ok": False}}
+        timing_end = dest_start if dest_start is not None and timing_start is not None and dest_start > timing_start else len(norm)
+        timing_text = norm[:speech.start()] + (" " + norm[timing_start:timing_end] if timing_start is not None else "")
+        parsed = _parse_timer(timing_text, timing_text)
+        if parsed["minutes"] or parsed["time_str"]:
+            action = {"kind": "announcement", "camera_id": camera_id, "source_device_id": source_device_id}
+            return act_timer(db, room, message="raw:" + message, action=action,
+                             minutes=parsed["minutes"], time_str=parsed["time_str"],
+                             repeat=parsed["repeat"], day_offset=parsed["day_offset"], weekday=parsed["weekday"])
+        if app is None:
+            return {"reply": "Hiện không thể phát thông báo từ đây.", "action": {"tool": "announce", "ok": False}}
+        from server.core.camera_talk import announce
+
+        result = await announce(app, room, message, camera_id, source_device_id)
+        reply = {"camera": "Mình đã gửi câu nói tới camera.",
+                 "esp": "Mình đã chuyển câu nói tới thiết bị phòng.",
+                 "none": "Mình không tìm được thiết bị để phát câu nói."}[result]
+        return {"reply": reply, "action": {"tool": "announce", "ok": result != "none"}}
     has_on = bool(re.search(r"\b(bat|mo|bat len)\b", norm))
     has_off = bool(re.search(r"\b(tat|tat di)\b", norm))
 
@@ -2056,27 +2121,6 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None):
             )
 
     if timerish and not multi_intent and not timer_question_likely:
-        # "hãy phát câu 'đến giờ mua bánh mì' vào camera phòng khách sau 1 phút
-        # nữa" — hẹn giờ PHÁT THÔNG BÁI vào phòng nêu tên (nói camera thì lấy
-        # phòng của camera). Đến giờ trợ lý đọc NGUYÊN câu (tiền tố 'raw:' trong
-        # message báo scheduler đừng thêm "Đã đến giờ hẹn" vào).
-        phat = re.search(
-            r"\bphat\s+(?:cau|thong bao|noi)\b\s+(.+?)(?=\s+(?:vao|sau|luc|khoang)\b|$)", norm)
-        if phat:
-            parsed = _parse_timer(norm, text)
-            if parsed["minutes"] or parsed["time_str"]:
-                target_room = room_id
-                tail = re.search(r"\bvao\b\s+(.+?)(?=\s+(?:sau|luc|khoang)\b|$)", norm)
-                if tail:
-                    cam = resolve_camera(db, tail.group(1))
-                    target_room = ((cam and _entity_room(db, cam))
-                                   or _room_from_text(db, tail.group(1)) or room_id)
-                q = (text[phat.start(1):phat.end(1)].strip()
-                     if len(text) == len(norm) else phat.group(1))
-                return act_timer(db, target_room, message=f"raw:{q}",
-                                 minutes=parsed["minutes"], time_str=parsed["time_str"],
-                                 repeat=parsed["repeat"], day_offset=parsed["day_offset"],
-                                 weekday=parsed["weekday"])
         parsed = _parse_timer(norm, text)
         if parsed["minutes"] or parsed["time_str"]:
             # câu có động từ bật/tắt + tên thiết bị = hẹn giờ THAO TÁC thiết bị
@@ -2786,7 +2830,8 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def handle_command(db: Database, drivers, cfg: Config, weather, text: str, room_id) -> dict:
+async def handle_command(db: Database, drivers, cfg: Config, weather, text: str, room_id,
+                         app=None, source_device_id=None) -> dict:
     """Main entry: returns {reply, actions, engine}. Never raises for user mistakes."""
     text = text.strip()
     if not text:
@@ -2842,7 +2887,7 @@ async def handle_command(db: Database, drivers, cfg: Config, weather, text: str,
                     "engine": "fast"}
 
     try:
-        outcome = await fast_path(db, drivers, weather, text, room_id)
+        outcome = await fast_path(db, drivers, weather, text, room_id, app, source_device_id)
         if outcome:
             return {"reply": outcome["reply"], "actions": [outcome["action"]], "engine": "fast"}
     except DriverError as exc:

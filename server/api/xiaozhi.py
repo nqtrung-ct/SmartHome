@@ -583,7 +583,7 @@ async def xiaozhi_ui(request: Request, device_id: str):
     elif body.get("text"):
         result = await handle_command(
             db, app.state.drivers, app.state.cfg, app.state.weather,
-            normalize(body["text"]), room_id,
+            body["text"], room_id, app=app, source_device_id=row["id"],
         )
         reply = result["reply"]
 
@@ -711,6 +711,7 @@ async def xiaozhi_ws(ws: WebSocket):
             try:
                 result = await handle_command(
                     db, app.state.drivers, app.state.cfg, app.state.weather, command, room_id,
+                    app=app, source_device_id=device_row_id,
                 )
                 await send_json({"type": "stt", "text": transcript})
                 duration = await speak(result["reply"])

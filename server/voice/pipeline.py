@@ -71,7 +71,8 @@ class VoicePipeline:
         if stt_only:
             return {"transcript": transcript, "reply": "", "actions": [], "engine": "stt"}
         task = asyncio.create_task(
-            handle_command(self.db, self.drivers, self.cfg, self.weather, transcript, room_id)
+            handle_command(self.db, self.drivers, self.cfg, self.weather, transcript, room_id,
+                           app=getattr(self, "app", None))
         )
         done, _ = await asyncio.wait({task}, timeout=float(self.cfg.get("voice.ack_after", 1.2)))
         if not done and on_ack:

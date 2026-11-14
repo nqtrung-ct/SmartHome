@@ -457,6 +457,18 @@ async def scheduler_loop(app) -> None:
                                (nxt.isoformat(timespec="seconds"), timer["id"]))
                 else:
                     db.execute("UPDATE timers SET done=1 WHERE id=?", (timer["id"],))
+                if (timer["message"] or "").startswith("raw:") and (
+                        not action or action.get("kind") == "announcement"):
+                    from server.core.camera_talk import announce
+
+                    message = timer["message"][4:].strip()
+                    options = action or {}
+                    task = asyncio.create_task(announce(app, timer["room_id"], message,
+                                                        options.get("camera_id"), options.get("source_device_id")))
+                    app.state.announcement_tasks.add(task)
+                    task.add_done_callback(app.state.announcement_tasks.discard)
+                    log_event(db, "scheduler", f"Đến giờ phát thông báo (timer #{timer['id']})")
+                    continue
                 if action:
                     message = await _run_timer_action(app, action)
                     log_event(db, "scheduler", f"{message} (timer #{timer['id']})")
@@ -479,8 +491,6 @@ async def scheduler_loop(app) -> None:
                     from server.api.xiaozhi import announce_room as xiaozhi_announce
 
                     await xiaozhi_announce(app, timer["room_id"], message)
-                    # (đã thử phát qua LOA camera Imou qua NetSDK talk — firmware
-                    # chặn, xem camera_talk.py — không nối vào đây nữa)
             # battery sensors surface briefly (~seconds every 15 min): poll often
             if time.time() - last_sensor_poll >= int(app.state.cfg.get("tuya.poll_seconds", 60)):
                 last_sensor_poll = time.time()

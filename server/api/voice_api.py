@@ -97,7 +97,7 @@ async def voice_ws(ws: WebSocket, token: str = Query("")):
             reply = "Dạ, mình nghe nè."
         else:
             task = asyncio.create_task(handle_command(
-                db, app.state.drivers, app.state.cfg, app.state.weather, command, room_id,
+                db, app.state.drivers, app.state.cfg, app.state.weather, command, room_id, app=app,
             ))
             done, _ = await asyncio.wait(
                 {task}, timeout=float(app.state.cfg.get("voice.ack_after", 1.2))
