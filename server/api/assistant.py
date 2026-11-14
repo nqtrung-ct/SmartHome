@@ -268,6 +268,10 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         app.pipeline.tts = TtsNone()
 
     log_event(app.db, "assistant", "Cấu hình trợ lý: " + ("; ".join(changed) or "không đổi"))
+    if body.llm_keep_alive is True:
+        manager = getattr(app, "ollama_keepalive", None)
+        if manager:
+            manager.request_load()
     return {"ok": True, "changed": changed}
 
 

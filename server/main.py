@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from server.api import admin, assistant, command_api, devices, discovery_api, voice_api, xiaozhi
 from server.config import Config
 from server.core.scheduler import start_camera_monitor, start_scheduler
+from server.core.ollama_keepalive import OllamaKeepAlive
 from server.core.vision_states import start_vision
 from server.core.weather import Weather
 from server.db import Database, log_event
@@ -49,6 +50,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.pipeline = VoicePipeline(cfg, db, drivers, app.state.weather)
         app.state.voice_connections = VoiceConnections(db)
         app.state.scheduler_task = start_scheduler(app)
+        app.state.ollama_keepalive = OllamaKeepAlive(cfg, db)
         app.state.camera_monitor_task = start_camera_monitor(app)
         app.state.learn_jobs = {}
         start_vision(app)
@@ -67,6 +69,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         yield
 
         app.state.scheduler_task.cancel()
+        app.state.ollama_keepalive.task.cancel()
+        await asyncio.gather(app.state.ollama_keepalive.task, return_exceptions=True)
         app.state.camera_monitor_task.cancel()
         for driver in drivers.values():
             driver.stop()

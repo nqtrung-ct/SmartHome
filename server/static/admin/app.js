@@ -346,13 +346,14 @@ async function renderAssistant() {
           <label class="small muted">Model</label>
           <select id="llm-model-ollama" style="min-width:220px">${llmModels}</select>
         </div>
-        <div class="row">
-          <label class="small"><input type="checkbox" id="llm-keep-alive" ${st.llm.keep_alive ? "checked" : ""}
-            onchange="saveKeepAlive(this.checked)"> Giữ model trong VRAM luôn</label>
-          <span class="small muted">bật khi triển khai chính thức — model không tự dỡ sau 5 phút idle, phản hồi tức thì (chiếm VRAM thường trực)</span>
-        </div>`
+        `
         : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
            <code>ollama pull qwen3:8b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
+      </div>
+      <div class="row">
+        <label class="small"><input type="checkbox" id="llm-keep-alive" ${st.llm.keep_alive ? "checked" : ""}
+          onchange="saveKeepAlive(this.checked)"> Giữ model trong VRAM luôn</label>
+        <span class="small muted">Khởi động lại Ollama và nạp model khi bật và lúc 00:00 hằng ngày; nạp model khi server khởi động. Lệnh AI đang chạy sẽ bị gián đoạn khi khởi động lại.</span>
       </div>
       <div id="llm-cloud-fields" style="display:${cloud ? "block" : "none"}">
         <div class="row">

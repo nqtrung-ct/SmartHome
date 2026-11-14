@@ -96,7 +96,9 @@ def warm_model(cfg: Config) -> None:
 def main() -> None:
     cfg = Config()
     ensure_ollama()
-    if _port_open(OLLAMA_PORT):
+    # Keep-alive runs asynchronously in the server so a stalled model cannot
+    # delay the whole application for the warm-up timeout.
+    if _port_open(OLLAMA_PORT) and str(cfg.get("llm.keep_alive", "")).strip() != "-1":
         warm_model(cfg)
     if ensure_sidecar(cfg):
         print("[+] TTS sidecar sẵn sàng (8125)")
