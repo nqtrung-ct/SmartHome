@@ -32,3 +32,6 @@ firmware/esp-idf/
 firmware/esp-tools/
 
 openrouter_key.txt
+
+# local deployment notes may contain machine-specific secrets
+local_settings.md

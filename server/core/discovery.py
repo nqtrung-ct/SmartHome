@@ -12,13 +12,15 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 from server.config import Config
 from server.db import Database, log_event
-from server.util import lan_ip, now_iso
+from server.util import lan_ip, now, now_iso
 
 # A few common OUI prefixes so "unknown device" can at least say who made it.
 OUI_VENDORS = {
@@ -642,15 +644,54 @@ def _ping(ip: str) -> bool:
 
 def _arp_table() -> dict[str, str]:
     try:
-        out = subprocess.run(["arp", "-a"], capture_output=True, timeout=10, text=True).stdout
+        # On macOS, -n avoids slow reverse DNS lookups for every LAN entry.
+        args = ["arp", "-a"] if sys.platform == "win32" else ["arp", "-an"]
+        out = subprocess.run(args, capture_output=True, timeout=10, text=True).stdout
     except (subprocess.TimeoutExpired, OSError):
         return {}
+    if not out.strip() and sys.platform == "darwin":
+        # The bundled Python on macOS can see an empty ARP table even though
+        # the user's independent launchd jobs can read it. Run the read-only
+        # command as a short-lived launchd job, not as a child of that Python.
+        out = _macos_arp_from_launchd()
     table: dict[str, str] = {}
     for match in re.finditer(r"(\d+\.\d+\.\d+\.\d+)\s+([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", out):
         ip = match.group(0).split()[0]
         mac = match.group(0).split()[1].replace("-", ":").upper()
         table[ip] = mac
+    # macOS/BSD: '? (192.168.1.11) at a0:f2:62:90:9a:b0 on en0'.
+    # BSD arp may omit a leading zero in any MAC octet.
+    for match in re.finditer(r"\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+((?:[0-9a-fA-F]{1,2}:){5}[0-9a-fA-F]{1,2})\b", out):
+        table[match.group(1)] = ":".join(part.zfill(2) for part in match.group(2).upper().split(":"))
     return table
+
+
+def _macos_arp_from_launchd() -> str:
+    label = f"dev.smarthome.arp-{uuid.uuid4().hex}"
+    with tempfile.TemporaryDirectory(prefix="smarthome-arp-") as tmp:
+        output = Path(tmp) / "arp.txt"
+        partial = Path(tmp) / "arp.partial"
+        try:
+            result = subprocess.run(
+                ["/bin/launchctl", "submit", "-l", label, "--", "/bin/sh", "-c",
+                 '/usr/sbin/arp -an > "$1" && mv "$1" "$2"', "sh", str(partial), str(output)],
+                capture_output=True, timeout=10,
+            )
+            if result.returncode:
+                return ""
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if output.exists():
+                    return output.read_text(encoding="utf-8")
+                time.sleep(0.1)
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        finally:
+            try:
+                subprocess.run(["/bin/launchctl", "remove", label], capture_output=True, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    return ""
 
 
 def _tcp_open(ip: str, port: int, timeout: float = 0.5) -> bool:
@@ -828,13 +869,17 @@ def _cleanup_network_rows(db: Database) -> None:
             ).fetchall()
         }
         fixed: set[tuple] = set()
+        seen_devices: set[int] = set()
+        cutoff = (now() - timedelta(minutes=10)).isoformat(timespec="seconds")
         for row in c.execute(
             """SELECT id, ip, mac, adopted_device_id FROM discovered
-               WHERE mac != '' AND ip != ''"""
+               WHERE mac != '' AND ip != '' AND last_seen >= ?
+               ORDER BY last_seen DESC, id DESC""", (cutoff,)
         ).fetchall():
             dev = devices_by_mac.get(norm_mac(row["mac"]))
-            if not dev:
+            if not dev or dev["id"] in seen_devices:
                 continue
+            seen_devices.add(dev["id"])
             if row["adopted_device_id"] != dev["id"]:
                 c.execute(
                     "UPDATE discovered SET adopted_device_id=? WHERE id=?", (dev["id"], row["id"])

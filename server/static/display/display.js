@@ -508,8 +508,12 @@ $("ctrl-close").onclick = () => $("ctrl-overlay").classList.add("hidden");
 // --- camera: popup xem video (WebRTC A/V qua go2rtc; dự phòng MJPEG) + PTZ ---
 let camEntity = null;
 let camPc = null;  // RTCPeerConnection live A/V
+let camGeneration = 0;
+let camWatchTimer = null;
 
 function stopWebrtc() {
+  clearInterval(camWatchTimer);
+  camWatchTimer = null;
   if (camPc) { camPc.close(); camPc = null; }
   const v = $("cam-video");
   if (v) v.srcObject = null;
@@ -520,9 +524,16 @@ function startWebrtc(video, streamName) {
     const pc = new RTCPeerConnection();
     camPc = pc;
     let settled = false;
+    const startupTimer = setTimeout(() => done(false, "hết thời gian kết nối"), 12000);
+    const onVideoData = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) done(true);
+    };
     const done = (ok, why) => {
       if (settled) return;
       settled = true;
+      clearTimeout(startupTimer);
+      video.removeEventListener("loadeddata", onVideoData);
+      video.removeEventListener("resize", onVideoData);
       ok ? resolve() : reject(new Error(why));
     };
     pc.ontrack = (ev) => {
@@ -534,7 +545,8 @@ function startWebrtc(video, streamName) {
       $("cam-mute").textContent = "🔇";
     };
     // chỉ tính thành công khi có khung hình thật (loadeddata), không phải lúc có track
-    video.addEventListener("loadeddata", () => done(true), { once: true });
+    video.addEventListener("loadeddata", onVideoData);
+    video.addEventListener("resize", onVideoData);
     pc.onconnectionstatechange = () => {
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         done(false, "kết nối sụp");
@@ -562,9 +574,7 @@ function startWebrtc(video, streamName) {
         if (!resp.ok) throw new Error("webrtc " + resp.status);
         const answer = await resp.json();
         await pc.setRemoteDescription(answer);
-        // không có khung hình nào sau 8s (ICE tắc, media không chảy) -> fallback
-        setTimeout(() => { if (video.readyState < 2) done(false, "chưa có hình"); }, 8000);
-      } catch (err) { reject(err); }
+      } catch (err) { done(false, err.message); }
     })();
   });
 }
@@ -592,6 +602,7 @@ let camRetryTimer = null;
 
 function camAttempt() {
   if (!camEntity || $("cam-overlay").classList.contains("hidden")) return;
+  const generation = ++camGeneration;
   const id = camEntity.id;
   // lấy bản mới nhất từ dữ liệu refresh 30s (stream name có thể vừa được sửa)
   const found = findEntity(id);
@@ -600,11 +611,13 @@ function camAttempt() {
   err.textContent = "Đang kết nối với camera…";
   err.classList.remove("hidden");
   const fail = () => {
+    if (generation !== camGeneration) return;
     err.textContent = "Chưa lấy được video — camera đang khởi động hoặc mất kết nối, đang thử lại…";
     err.classList.remove("hidden");
     camRetryTimer = setTimeout(camAttempt, 5000);
   };
   const fallbackMjpeg = () => {  // không WebRTC được -> MJPEG (không tiếng)
+    if (generation !== camGeneration) return;
     stopWebrtc();
     video.classList.add("hidden");
     $("cam-mute").classList.add("hidden");
@@ -619,7 +632,32 @@ function camAttempt() {
     video.classList.remove("hidden");
     img.classList.add("hidden");
     startWebrtc(video, cur.stream).then(
-      () => err.classList.add("hidden"),  // có khung hình thật rồi
+      () => {
+        if (generation !== camGeneration) return;
+        err.classList.add("hidden");
+        // Âm thanh vẫn có thể chạy khi hình bị đứng: theo dõi riêng số khung đã giải mã.
+        let lastFrames = null, lastProgress = Date.now();
+        camWatchTimer = setInterval(async () => {
+          if (generation !== camGeneration || !camPc) return;
+          if (document.hidden) { lastFrames = null; lastProgress = Date.now(); return; }
+          try {
+            const stats = await camPc.getStats();
+            if (generation !== camGeneration) return;
+            let frames = null;
+            stats.forEach(s => {
+              if (s.type === "inbound-rtp" && (s.kind === "video" || s.mediaType === "video")
+                  && typeof s.framesDecoded === "number") frames = s.framesDecoded;
+            });
+            if (frames === null) return;
+            if (lastFrames === null || frames !== lastFrames) lastProgress = Date.now();
+            lastFrames = frames;
+            if (Date.now() - lastProgress > 12000) {
+              stopWebrtc();
+              camAttempt();
+            }
+          } catch (_) { /* trình duyệt không hỗ trợ thống kê */ }
+        }, 3000);
+      },
       () => fallbackMjpeg());
   } else {
     fallbackMjpeg();
@@ -659,6 +697,7 @@ async function sendPtz(body) {
 }
 
 function closeCam() {
+  camGeneration++;
   clearTimeout(camRetryTimer);        // ngừng vòng thử lại
   stopWebrtc();                       // ngắt phiên WebRTC
   $("cam-mute").classList.add("hidden");

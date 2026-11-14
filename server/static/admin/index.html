@@ -126,6 +126,26 @@
       <select id="e-room"></select>
     </label>
     <div id="e-hw" class="small muted" style="margin:4px 0 10px"></div>
+    <div id="e-record-wrap" class="hidden" style="border-top:1px solid var(--border,#444);margin-top:10px;padding-top:8px">
+      <h3 style="margin:4px 0 8px">Ghi hình Frigate</h3>
+      <label>Camera Frigate
+        <select id="e-record-camera"></select>
+      </label>
+      <label class="setting-toggle"><input type="checkbox" id="e-record-motion"> Lưu đoạn có chuyển động</label>
+      <label id="e-record-person-label" class="setting-toggle"><input type="checkbox" id="e-record-person"> Lưu sự kiện có người</label>
+      <label>Lưu bản ghi trong
+        <select id="e-record-days">
+          <option value="5">5 ngày</option>
+          <option value="10" selected>10 ngày</option>
+          <option value="15">15 ngày</option>
+        </select>
+      </label>
+      <p id="e-record-info" class="small muted"></p>
+      <p class="small muted">Chế độ “Có người” cần camera đang theo dõi person trong Frigate. Lưu sẽ khởi động lại Frigate (khoảng 1 phút).</p>
+      <div class="row" style="justify-content:flex-end;margin:6px 0 10px">
+        <button class="small-btn" id="e-record-save">Áp dụng chế độ ghi hình</button>
+      </div>
+    </div>
     <div id="e-pair-wrap" class="hidden">
       <h3 style="margin:10px 0 6px">🔗 Ghép nối TV (làm 1 lần)</h3>
       <div id="e-pair-status" class="small" style="margin-bottom:8px">Đang kiểm tra…</div>

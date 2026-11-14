@@ -858,7 +858,7 @@ function childRow(c) {
   </div>`;
 }
 
-window.openEditModal = (entityId) => {
+window.openEditModal = async (entityId) => {
   const d = devicesCache.find((x) => x.entities.some((e) => e.id === entityId));
   const e = d && d.entities.find((x) => x.id === entityId);
   if (!e || !d) return;
@@ -868,6 +868,31 @@ window.openEditModal = (entityId) => {
   $("#e-name").value = e.name;
   $("#e-alias").value = e.aliases || "";
   $("#e-hw").textContent = `Thiết bị gốc: ${d.name}${d.host ? " · " + d.host : ""}`;
+  const recordWrap = $("#e-record-wrap");
+  recordWrap.classList.toggle("hidden", e.entity_type !== "camera");
+  if (e.entity_type === "camera") {
+    const cameraSelect = $("#e-record-camera");
+    cameraSelect.innerHTML = `<option>Đang tải…</option>`;
+    try {
+      const settings = await api(`/entities/${e.id}/recording`);
+      editCtx.recordingCameras = Object.fromEntries(settings.cameras.map((c) => [c.name, c]));
+      cameraSelect.innerHTML = settings.cameras.map((c) =>
+        `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
+      if (!settings.cameras.length) throw new Error("Frigate chưa có camera nào");
+      if (settings.camera) cameraSelect.value = settings.camera;
+      const selected = settings.cameras.find((c) => c.name === cameraSelect.value);
+      $("#e-record-motion").checked = !!selected?.motion_enabled;
+      $("#e-record-person").checked = !!selected?.person_enabled;
+      $("#e-record-days").value = String(selected?.retention_days || 10);
+      $("#e-record-person").disabled = !selected?.person_tracked;
+      $("#e-record-person-label").title = selected?.person_tracked
+        ? "" : "Bật theo dõi person trong cấu hình Frigate trước";
+      updateRecordingInfo();
+    } catch (err) {
+      cameraSelect.innerHTML = `<option value="">Không tải được</option>`;
+      toast("Không tải được cài đặt ghi hình Frigate: " + err.message);
+    }
+  }
   // TV Android: hiện khu ghép nối (pair 1 lần, TV phải đang bật)
   $("#e-pair-wrap").classList.toggle("hidden", d.driver !== "androidtv");
   if (d.driver === "androidtv") {
@@ -951,6 +976,61 @@ $("#e-pair-finish").onclick = async () => {
   }
 };
 $("#e-cancel").onclick = () => $("#edit-modal").classList.add("hidden");
+$("#e-record-camera").onchange = () => {
+  const camera = editCtx?.recordingCameras?.[$("#e-record-camera").value];
+  if (!camera) return;
+  $("#e-record-motion").checked = !!camera.motion_enabled;
+  $("#e-record-person").checked = !!camera.person_enabled;
+  $("#e-record-days").value = String(camera.retention_days || 10);
+  $("#e-record-person").disabled = !camera.person_tracked;
+  $("#e-record-person-label").title = camera.person_tracked
+    ? "" : "Bật theo dõi person trong cấu hình Frigate trước";
+  updateRecordingInfo();
+};
+$("#e-record-motion").onchange = updateRecordingInfo;
+$("#e-record-person").onchange = updateRecordingInfo;
+$("#e-record-days").onchange = updateRecordingInfo;
+
+function updateRecordingInfo() {
+  const camera = editCtx?.recordingCameras?.[$("#e-record-camera").value];
+  if (!camera) return;
+  const days = $("#e-record-days").value;
+  const enabled = [];
+  if ($("#e-record-motion").checked) enabled.push("chuyển động");
+  if ($("#e-record-person").checked) enabled.push("có người");
+  $("#e-record-info").textContent = enabled.length
+    ? `Đang chọn lưu ${enabled.join(" và ")} trong ${days} ngày.`
+    : "Bật ít nhất một lựa chọn ghi hình.";
+}
+
+$("#e-record-save").onclick = async () => {
+  const { e } = editCtx;
+  const camera = $("#e-record-camera").value;
+  if (!camera) { toast("Chọn camera Frigate"); return; }
+  const motionEnabled = $("#e-record-motion").checked;
+  const personEnabled = $("#e-record-person").checked;
+  const retentionDays = Number($("#e-record-days").value);
+  if (!motionEnabled && !personEnabled) { toast("Bật ít nhất một lựa chọn ghi hình"); return; }
+  const selected = [motionEnabled && "chuyển động", personEnabled && "có người"].filter(Boolean).join(" và ");
+  if (!confirm(`Lưu clip theo ${selected} trong ${retentionDays} ngày? Frigate sẽ khởi động lại trong khoảng 1 phút.`)) return;
+  const button = $("#e-record-save");
+  button.disabled = true;
+  try {
+    const result = await api(`/entities/${e.id}/recording`, {
+      method: "PUT", body: JSON.stringify({
+        camera, motion_enabled: motionEnabled, person_enabled: personEnabled,
+        retention_days: retentionDays,
+      }),
+    });
+    toast(result.restarting
+      ? "Đã lưu chế độ ghi hình; Frigate đang khởi động lại."
+      : "Đã lưu cấu hình; hãy khởi động lại Frigate để áp dụng.");
+  } catch (err) {
+    toast("Lỗi: " + err.message);
+  } finally {
+    button.disabled = false;
+  }
+};
 
 $("#ptz-close").onclick = () => { $("#ptz-modal").classList.add("hidden"); renderDevices(); };
 $("#ptz-add").onclick = async () => {

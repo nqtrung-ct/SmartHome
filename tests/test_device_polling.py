@@ -106,6 +106,82 @@ class DevicePollingTests(unittest.TestCase):
         driver.get_state.assert_not_called()
         self.assertEqual(self.db.one("SELECT updated_at FROM entities WHERE id=1")["updated_at"], stamp)
 
+    def test_inverter_scans_after_30_minutes_and_throttles_across_restarts(self):
+        self.device("senergy")
+        self.entity(1, "sensor", {}, {"battery_soc": 60})
+        driver = Mock()
+        driver.get_state.side_effect = DriverError("offline")
+        app = SimpleNamespace(state=SimpleNamespace(db=self.db, cfg=self.cfg, drivers={"senergy": driver}))
+        with patch("server.core.scheduler._heal_device_ip", new_callable=AsyncMock) as scan:
+            for timestamp in (1000, 1300, 1600, 1900, 2200, 2500, 2799):
+                with patch("server.core.scheduler.time.time", return_value=timestamp):
+                    asyncio.run(_poll_solar(app))
+            scan.assert_not_awaited()
+            with patch("server.core.scheduler.time.time", return_value=2800):
+                asyncio.run(_poll_solar(app))
+            self.assertEqual(scan.await_count, 1)
+            self.db.close()
+            self.db = Database(self.path)
+            app.state.db = self.db
+            for timestamp in (3100, 3400, 3700, 4000, 4300):
+                with patch("server.core.scheduler.time.time", return_value=timestamp):
+                    asyncio.run(_poll_solar(app))
+            self.assertEqual(scan.await_count, 1)
+            with patch("server.core.scheduler.time.time", return_value=4600):
+                asyncio.run(_poll_solar(app))
+            self.assertEqual(scan.await_count, 2)
+            driver.get_state.side_effect = None
+            driver.get_state.return_value = {"battery_soc": 61}
+            with patch("server.core.scheduler.time.time", return_value=4900):
+                asyncio.run(_poll_solar(app))
+            self.assertIsNone(self.db.one("SELECT * FROM device_ip_recovery WHERE device_id=1"))
+
+    def test_inverter_updates_relay_destination_after_scan(self):
+        self.device("senergy")
+        self.entity(1, "sensor", {}, {})
+        target = self.path.parent / "relay" / "inverter-host"
+        self.cfg = SimpleNamespace(get=lambda key, default=None: {
+            "solar.poll_seconds": 300, "solar.proxy_target_file": str(target),
+        }.get(key, default))
+        driver = Mock()
+        driver.get_state.side_effect = DriverError("offline")
+        app = SimpleNamespace(state=SimpleNamespace(db=self.db, cfg=self.cfg, drivers={"senergy": driver}))
+        self.db.execute("INSERT INTO device_ip_recovery(device_id,failed_since) VALUES (1,?)", (1000,))
+        with patch("server.core.scheduler.time.time", return_value=2800), patch(
+                "server.core.scheduler._heal_device_ip", new=AsyncMock(return_value="192.0.2.2")):
+            asyncio.run(_poll_solar(app))
+        self.assertEqual(target.read_text().strip(), "192.0.2.2")
+
+    def test_relay_reads_current_destination_for_each_connection(self):
+        from deploy.macos.ptz_proxy import handle
+
+        async def exercise():
+            target = self.path.parent / "inverter-host"
+            target.write_text("127.0.0.1\n")
+
+            async def echo(reader, writer):
+                writer.write(await reader.read(8))
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+
+            upstream = await asyncio.start_server(echo, "127.0.0.1", 0)
+            port = upstream.sockets[0].getsockname()[1]
+            proxy = await asyncio.start_server(
+                lambda r, w: handle(r, w, "192.0.2.1", port, str(target)), "127.0.0.1", 0)
+            reader, writer = await asyncio.open_connection("127.0.0.1", proxy.sockets[0].getsockname()[1])
+            writer.write(b"test")
+            await writer.drain()
+            self.assertEqual(await asyncio.wait_for(reader.read(4), 2), b"test")
+            writer.close()
+            await writer.wait_closed()
+            proxy.close()
+            upstream.close()
+            await proxy.wait_closed()
+            await upstream.wait_closed()
+
+        asyncio.run(exercise())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,7 +8,7 @@ import time
 from server.db import Database, log_event
 from server.util import next_repeat, now, now_iso, parse_iso
 
-_last_ip_heal = 0.0  # lần cuối quét mạng để tự chữa IP (cooldown 5 phút)
+_SOLAR_IP_SCAN_SECONDS = 30 * 60
 
 
 async def _run_timer_action(app, action: dict) -> str:
@@ -166,13 +166,9 @@ async def _poll_tuya_cloud(app) -> None:
 async def _heal_device_ip(app, device_id: int) -> str | None:
     """Poll thiết bị mạng thất bại: có thể router đã cấp lại IP. Quét ping+ARP
     rồi tự chữa host theo MAC (qua _cleanup_network_rows — quy tắc "cùng MAC").
-    Trả về host mới nếu đổi, None nếu không/he không được. Cooldown để khỏi
-    quét ồ ạt khi thiết bị chỉ đang ngủ hay mất điện."""
-    global _last_ip_heal
+    Trả về host mới nếu đổi, None nếu không tìm thấy địa chỉ khác.
+    Lịch và giới hạn quét được lưu theo thiết bị trong _poll_solar."""
     db: Database = app.state.db
-    if time.time() - _last_ip_heal < 300:
-        return None
-    _last_ip_heal = time.time()
     from server.core.discovery import _cleanup_network_rows, scan_network
     old = db.one("SELECT host, mac FROM devices WHERE id=?", (device_id,))
     if not old or not old["mac"]:
@@ -183,10 +179,32 @@ async def _heal_device_ip(app, device_id: int) -> str | None:
     return new["host"] if new and new["host"] != old["host"] else None
 
 
+def _sync_solar_proxy_target(cfg, host: str) -> None:
+    """Keep the optional LAN relay's destination in sync with the device IP."""
+    import ipaddress
+    from pathlib import Path
+
+    target_file = cfg.get("solar.proxy_target_file", "")
+    if not target_file:
+        return
+    ipaddress.IPv4Address(host)
+    path = Path(target_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        current = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        current = ""
+    if current != host:
+        # Directory is mounted in the relay; atomic replacement is visible there.
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(host + "\n", encoding="ascii")
+        temporary.replace(path)
+
+
 async def _poll_solar(app) -> None:
     """Inverter Senergy (Modbus TCP): PV/pin/tải cho card điện năng màn hình tường.
     Wi-Fi dongle chập chờn - chỉ một lần kết nối mỗi nhịp, chu kỳ mặc định 5 phút.
-    Đọc thất bại thì giữ số liệu tốt gần nhất và dò IP mới cho nhịp sau."""
+    Đọc thất bại liên tục 30 phút thì dò IP; mỗi lần dò cách nhau 30 phút."""
     driver = app.state.drivers.get("senergy")
     if not driver:
         return
@@ -209,6 +227,7 @@ async def _poll_solar(app) -> None:
         )
         state = None
         try:
+            _sync_solar_proxy_target(app.state.cfg, host)
             state = await asyncio.to_thread(
                 driver.get_state, entity, {"id": row["did"], "host": host})
         except Exception as exc:
@@ -217,13 +236,25 @@ async def _poll_solar(app) -> None:
                 f"Không đọc được inverter {host}: {exc}",
                 level="warn",
             )
-            # Heal a changed address for the next scheduled poll. Do not
-            # reconnect in the same cycle; the dongle is sensitive to bursts.
-            from server.drivers.network import tcp_target
-            if tcp_target(app.state.cfg, host, 502) == (host, 502):
-                await _heal_device_ip(app, row["did"])
+            timestamp = time.time()
+            db.execute("INSERT OR IGNORE INTO device_ip_recovery(device_id, failed_since) VALUES (?,?)",
+                       (row["did"], timestamp))
+            recovery = db.one("SELECT failed_since, last_scan FROM device_ip_recovery WHERE device_id=?",
+                              (row["did"],))
+            if (timestamp - recovery["failed_since"] >= _SOLAR_IP_SCAN_SECONDS and
+                    (recovery["last_scan"] is None or timestamp - recovery["last_scan"] >= _SOLAR_IP_SCAN_SECONDS)):
+                # Record before scanning, so restart or scan errors cannot cause a burst.
+                db.execute("UPDATE device_ip_recovery SET last_scan=? WHERE device_id=?",
+                           (timestamp, row["did"]))
+                try:
+                    new_host = await _heal_device_ip(app, row["did"])
+                    if new_host:
+                        _sync_solar_proxy_target(app.state.cfg, new_host)
+                except Exception as scan_exc:
+                    log_event(db, "senergy", f"Không quét được IP inverter: {scan_exc}", level="warn")
         if not state:
             continue  # dongle nghỉ/mất WiFi: giữ số cũ, UI tự hiện "—" khi quá 1 tiếng
+        db.execute("DELETE FROM device_ip_recovery WHERE device_id=?", (row["did"],))
         db.execute(
             "UPDATE entities SET state=?, updated_at=? WHERE id=?",
             (json.dumps(state, ensure_ascii=False), now_iso(), row["eid"]),

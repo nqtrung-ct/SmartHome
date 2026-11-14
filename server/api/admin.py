@@ -5,6 +5,7 @@ import asyncio
 import secrets
 import sqlite3
 from datetime import datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
@@ -14,6 +15,157 @@ from server.db import log_event
 from server.util import now as util_now, now_iso, parse_iso
 
 router = APIRouter()
+
+
+class CameraRecordingModeIn(BaseModel):
+    camera: str
+    motion_enabled: bool = False
+    person_enabled: bool = False
+    retention_days: Literal[5, 10, 15] = 10
+
+
+async def _frigate_recording_context(request: Request, entity_id: int) -> tuple[dict, dict, str | None, dict]:
+    """Return Frigate config, camera entity data and its mapped Frigate camera name."""
+    import json as _json
+    import httpx
+
+    row = request.app.state.db.one(
+        """SELECT e.driver_data, d.host FROM entities e
+           JOIN devices d ON d.id=e.device_id
+           WHERE e.id=? AND e.entity_type='camera'""",
+        (entity_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy camera")
+    try:
+        driver_data = _json.loads(row["driver_data"] or "{}")
+    except ValueError:
+        driver_data = {}
+
+    base = str(request.app.state.cfg.get("frigate.base_url", "http://127.0.0.1:5000")).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{base}/api/config")
+            response.raise_for_status()
+            config = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"Không kết nối được Frigate: {exc}") from exc
+
+    cameras = config.get("cameras", {})
+    camera_name = driver_data.get("frigate")
+    if camera_name not in cameras:
+        camera_name = None
+        host = str(row["host"] or "")
+        if host:
+            for name, camera in cameras.items():
+                inputs = (camera.get("ffmpeg") or {}).get("inputs") or []
+                if any(host in str(source.get("path", "")) for source in inputs):
+                    camera_name = name
+                    break
+        if camera_name is None and len(cameras) == 1:
+            camera_name = next(iter(cameras))
+    return config, cameras, camera_name, driver_data
+
+
+@router.get("/entities/{entity_id}/recording")
+async def get_camera_recording_mode(request: Request, entity_id: int, _: None = Depends(require_admin)):
+    config, cameras, camera_name, driver_data = await _frigate_recording_context(request, entity_id)
+    modes = []
+    camera_configs = config.get("cameras", {})
+    for name in cameras:
+        camera_config = camera_configs.get(name) or {}
+        record = camera_config.get("record") or config.get("record") or {}
+        configured_motion_days = float((record.get("motion") or {}).get("days") or 0)
+        configured_person_days = float(((record.get("alerts") or {}).get("retain") or {}).get("days") or 0)
+        tracked = (camera_config.get("objects") or config.get("objects") or {}).get("track") or []
+        preferred_days = driver_data.get("recording_retention_days")
+        if preferred_days not in (5, 10, 15):
+            active_days = [days for days, enabled in (
+                (configured_motion_days, configured_motion_days > 0),
+                (configured_person_days, configured_person_days > 0 and "person" in tracked),
+            ) if enabled]
+            preferred_days = active_days[0] if active_days and all(
+                days == active_days[0] for days in active_days
+            ) and active_days[0] in (5, 10, 15) else 10
+        modes.append({
+            "name": name,
+            "motion_enabled": configured_motion_days > 0,
+            "person_enabled": configured_person_days > 0 and "person" in tracked,
+            "retention_days": preferred_days,
+            "person_tracked": "person" in tracked,
+        })
+    return {"camera": camera_name, "cameras": modes}
+
+
+@router.put("/entities/{entity_id}/recording")
+async def set_camera_recording_mode(
+    request: Request, entity_id: int, body: CameraRecordingModeIn,
+    _: None = Depends(require_admin),
+):
+    import json as _json
+    import httpx
+
+    if not body.motion_enabled and not body.person_enabled:
+        raise HTTPException(status_code=400, detail="Bật ít nhất một lựa chọn ghi hình")
+    config, cameras, _, driver_data = await _frigate_recording_context(request, entity_id)
+    if body.camera not in cameras:
+        raise HTTPException(status_code=400, detail="Camera Frigate không tồn tại")
+
+    record = ((config.get("cameras", {}).get(body.camera) or {}).get("record")
+              or config.get("record") or {})
+    if not record.get("enabled", True):
+        raise HTTPException(status_code=400, detail="Ghi hình đang tắt trong cấu hình Frigate")
+    camera_config = config.get("cameras", {}).get(body.camera) or {}
+    tracked = (camera_config.get("objects") or config.get("objects") or {}).get("track") or []
+    if body.person_enabled and "person" not in tracked:
+        raise HTTPException(status_code=400, detail="Hãy bật theo dõi person cho camera này trong Frigate trước")
+    camera_record = {
+        "enabled": True,
+        "motion": {"days": body.retention_days if body.motion_enabled else 0},
+        "alerts": {"retain": {
+            "days": body.retention_days if body.person_enabled else 0,
+            **({"mode": "motion"} if body.person_enabled else {}),
+        }},
+        "detections": {"retain": {"days": 0}},
+    }
+
+    base = str(request.app.state.cfg.get("frigate.base_url", "http://127.0.0.1:5000")).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.put(
+                f"{base}/api/config/set",
+                json={"requires_restart": 1, "config_data": {
+                    "cameras": {body.camera: {"record": camera_record}},
+                }},
+            )
+            response.raise_for_status()
+            result = response.json()
+            if not result.get("success", True):
+                raise HTTPException(status_code=400, detail=result.get("message", "Frigate không lưu được cấu hình"))
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"Không thể cập nhật cấu hình Frigate: {exc}") from exc
+
+    driver_data["frigate"] = body.camera
+    driver_data["recording_retention_days"] = body.retention_days
+    request.app.state.db.execute(
+        "UPDATE entities SET driver_data=? WHERE id=?",
+        (_json.dumps(driver_data, ensure_ascii=False), entity_id),
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            restart = await client.post(f"{base}/api/restart")
+            restart.raise_for_status()
+        restarting = True
+    except httpx.HTTPError:
+        restarting = False
+    return {
+        "ok": True, "motion_enabled": body.motion_enabled,
+        "person_enabled": body.person_enabled, "retention_days": body.retention_days,
+        "camera": body.camera,
+        "restarting": restarting, "restart_required": not restarting,
+    }
 
 
 def solar_snapshot(db) -> dict | None:

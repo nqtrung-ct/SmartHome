@@ -35,9 +35,12 @@ services:
     restart: unless-stopped
     environment:
       PTZ_TARGETS: "13778=192.168.1.16:37777,13779=192.168.1.15:37777,16668=192.168.1.5:6668,15020=192.168.1.11:502"
+      SOLAR_LISTEN_PORT: "15020"
+      SOLAR_TARGET_FILE: "/app/solar/inverter-host"
     command: ["python", "-u", "/app/ptz_proxy.py"]
     volumes:
       - ./ptz_proxy.py:/app/ptz_proxy.py:ro
+      - ./solar:/app/solar:ro
     ports:
       - "127.0.0.1:13778:13778"
       - "127.0.0.1:13779:13779"

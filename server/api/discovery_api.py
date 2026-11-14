@@ -151,16 +151,19 @@ async def adopt(request: Request, discovered_id: int, body: AdoptIn, _: None = D
     # cameras: keep the RTSP password in data/secrets.json, not in the DB/git.
     # Khóa theo IP lẫn MAC — IP đổi (router cấp lại) thì khóa MAC vẫn khớp
     if driver_name == "onvif" and body.rtsp_password and row["ip"]:
-        store_secret(app.cfg, "rtsp", row["ip"], body.rtsp_password)
+        store_secret(app.state.cfg, "rtsp", row["ip"], body.rtsp_password)
         if row["mac"]:
-            store_secret(app.cfg, "rtsp", norm_mac(row["mac"]), body.rtsp_password)
+            store_secret(app.state.cfg, "rtsp", norm_mac(row["mac"]), body.rtsp_password)
 
     driver = app.state.drivers.get(driver_name, app.state.drivers.get("generic"))
     entities = []
     error = None
     try:
         device_row = db.one("SELECT * FROM devices WHERE id=?", (device_id,))
-        for spec in await asyncio.to_thread(driver.adopt, device_row, body.model_dump()):
+        specs = ([{"name": "Camera", "entity_type": "camera", "driver_data": {"readonly": True}}]
+                 if driver_name == "onvif"
+                 else await asyncio.to_thread(driver.adopt, device_row, body.model_dump()))
+        for spec in specs:
             entities.append(
                 db.execute(
                     "INSERT INTO entities(device_id, name, entity_type, aliases, driver_data) VALUES (?,?,?,?,?)",

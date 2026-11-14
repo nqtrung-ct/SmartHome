@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS device_poll_attempts(
   device_id INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
   attempted_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS device_ip_recovery(
+  device_id INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+  failed_since REAL NOT NULL,
+  last_scan REAL
+);
 """
 
 

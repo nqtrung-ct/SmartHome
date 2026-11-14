@@ -80,7 +80,14 @@ class SenergyDriver(Driver):
         host = device["host"] or ""
         if not host:
             raise DriverError("Thiết bị inverter chưa có địa chỉ IP")
-        target = tcp_target(self.cfg, host, HOST_DEFAULT_PORT)
+        relay = self.cfg.get("solar.tcp_proxy", "") if self.cfg else ""
+        if relay:
+            proxy_host, sep, proxy_port = str(relay).rpartition(":")
+            if not sep or not proxy_host or not proxy_port.isdecimal() or not 0 < int(proxy_port) < 65536:
+                raise DriverError("Cấu hình proxy inverter không hợp lệ")
+            target = (proxy_host, int(proxy_port))
+        else:
+            target = tcp_target(self.cfg, host, HOST_DEFAULT_PORT)
         try:
             with socket.create_connection(target, timeout=TIMEOUT) as sock:
                 sock.settimeout(TIMEOUT)

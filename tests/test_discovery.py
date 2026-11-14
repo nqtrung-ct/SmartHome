@@ -5,10 +5,64 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from server.core.discovery import _cleanup_network_rows, scan_network
+from server.api.discovery_api import AdoptIn, adopt
 from server.db import Database
+from server.drivers.base import Driver
+
+
+class CameraAdoptionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_onvif_adoption_creates_camera_and_stores_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            db.execute("INSERT INTO rooms(id,name) VALUES (?,?)", (9, "Phòng sinh hoạt chung"))
+            db.execute(
+                "INSERT INTO discovered(method,ident,ip,mac,name,raw,first_seen,last_seen) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("wsdiscovery", "camera-1", "192.0.2.10", "AA:BB:CC:DD:EE:FF",
+                 "Camera", "{}", "2026-11-12", "2026-11-12"),
+            )
+            cfg = SimpleNamespace()
+            request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+                db=db, cfg=cfg, drivers={"generic": Driver()},
+            )))
+            with patch("server.api.discovery_api.store_secret") as store:
+                result = await adopt(request, 1, AdoptIn(room_id=9, rtsp_password="test"))
+            entity = db.one("SELECT * FROM entities WHERE id=?", (result["entities"][0],))
+            self.assertEqual((entity["entity_type"], entity["name"]), ("camera", "Camera"))
+            self.assertEqual(db.one("SELECT room_id FROM devices WHERE id=?", (result["device_id"],))["room_id"], 9)
+            self.assertEqual(store.call_count, 2)
+            self.assertTrue(all(call.args[0] is cfg for call in store.call_args_list))
+            self.assertIsNone(result["warning"])
+            db.close()
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_macos_arp_entries_with_short_octets(self):
+        from server.core.discovery import _arp_table
+        output = "? (192.0.2.2) at a0:f2:62:0:9a:b0 on en0 ifscope [ethernet]\n"
+        with patch("server.core.discovery.subprocess.run", return_value=SimpleNamespace(stdout=output)):
+            self.assertEqual(_arp_table(), {"192.0.2.2": "A0:F2:62:00:9A:B0"})
+
+    def test_macos_arp_falls_back_to_independent_launchd_job(self):
+        from server.core.discovery import _arp_table
+        output = "? (192.0.2.2) at a0:f2:62:90:9a:b0 on en0\n"
+        with patch("server.core.discovery.sys.platform", "darwin"), \
+                patch("server.core.discovery.subprocess.run", return_value=SimpleNamespace(stdout="")), \
+                patch("server.core.discovery._macos_arp_from_launchd", return_value=output) as fallback:
+            self.assertEqual(_arp_table(), {"192.0.2.2": "A0:F2:62:90:9A:B0"})
+            fallback.assert_called_once()
+
+    def test_old_discovery_does_not_revert_current_ip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            db.execute("INSERT INTO devices(id,name,driver,host,mac,created_at) VALUES (1,?,?,?,?,?)",
+                       ("Inverter", "senergy", "192.0.2.2", "AA:BB:CC:DD:EE:FF", "2026-01-01"))
+            db.execute("INSERT INTO discovered(method,ident,ip,mac,first_seen,last_seen,adopted_device_id) VALUES (?,?,?,?,?,?,?)",
+                       ("senergy", "inverter", "192.0.2.1", "AA:BB:CC:DD:EE:FF", "2020-01-01", "2020-01-01", 1))
+            _cleanup_network_rows(db)
+            self.assertEqual(db.one("SELECT host FROM devices WHERE id=1")["host"], "192.0.2.2")
+            db.close()
+
     def test_senergy_ip_heals_from_modbus_host_when_ping_misses_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "test.db")
