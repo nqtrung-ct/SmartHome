@@ -75,3 +75,6 @@ camera:
 # Frigate trên Mac: đổi API mặc định Windows :5000 sang :5001.
 # frigate:
 #   base_url: http://127.0.0.1:5001
+#   config_path: /Volumes/Camera/frigate/config/config.yml  # bật tự đồng bộ IP camera
+#   docker_command: /usr/local/bin/docker
+#   container: smarthome-frigate

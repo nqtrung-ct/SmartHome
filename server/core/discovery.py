@@ -110,7 +110,9 @@ def upsert(db: Database, method: str, ident: str, **fields) -> None:
             INSERT INTO discovered(method, ident, {', '.join(cols)}, first_seen, last_seen)
             VALUES (?, ?, {', '.join('?' for _ in cols)}, ?, ?)
             ON CONFLICT(method, ident) DO UPDATE SET
-              ip=excluded.ip, mac=CASE WHEN excluded.mac != '' THEN excluded.mac ELSE discovered.mac END,
+              ip=excluded.ip, mac=CASE WHEN excluded.mac != '' THEN excluded.mac
+                  WHEN excluded.ip != '' AND excluded.ip != discovered.ip THEN ''
+                  ELSE discovered.mac END,
               name=CASE WHEN excluded.name != '' THEN excluded.name ELSE discovered.name END,
               brand=CASE WHEN excluded.brand != '' THEN excluded.brand ELSE discovered.brand END,
               supported=excluded.supported, raw=excluded.raw, last_seen=excluded.last_seen
@@ -830,6 +832,13 @@ def _cleanup_network_rows(db: Database) -> None:
            WHERE adopted_device_id IS NOT NULL
              AND adopted_device_id NOT IN (SELECT id FROM devices)"""
     )
+    # Copy the current sweep's MAC before removing its generic network row.
+    db.execute(
+        """UPDATE discovered SET mac = COALESCE((
+               SELECT n.mac FROM discovered n
+               WHERE n.method='network' AND n.mac != '' AND n.ip = discovered.ip LIMIT 1), mac)
+           WHERE mac = '' AND method != 'network'"""
+    )
     # dòng "network" mù mờ phải nhường chỗ khi một scanner cụ thể đã nhận diện
     # IP đó (kể cả dòng cũ đã adopt — dòng cụ thể mang đủ thông tin hơn)
     db.execute(
@@ -845,12 +854,6 @@ def _cleanup_network_rows(db: Database) -> None:
              AND ip IN (SELECT ip FROM discovered WHERE method='androidtv')"""
     )
     with db.conn() as c:
-        c.execute(
-            """UPDATE discovered SET mac = COALESCE((
-                   SELECT n.mac FROM discovered n
-                   WHERE n.method='network' AND n.mac != '' AND n.ip = discovered.ip LIMIT 1), mac)
-               WHERE mac = '' AND method != 'network'"""
-        )
         # thiết bị đã thêm mà DB chưa lưu MAC: mượn từ dòng quét đã adopt
         # (để các lần quét sau khớp MAC được)
         c.execute(
@@ -859,18 +862,48 @@ def _cleanup_network_rows(db: Database) -> None:
                    WHERE x.adopted_device_id = devices.id AND x.mac != '' LIMIT 1), mac)
                WHERE mac IS NULL OR mac = ''"""
         )
+        # A previously adopted camera can have an incorrect devices.mac. Recover
+        # only when its old and recent WS-Discovery records share the full UUID.
+        cutoff = (now() - timedelta(minutes=10)).isoformat(timespec="seconds")
+        cameras = c.execute("""SELECT x.mac, x.raw, x.adopted_device_id, x.last_seen
+            FROM discovered x WHERE x.method='wsdiscovery' AND x.mac != ''""").fetchall()
+        by_address: dict[str, list] = {}
+        for camera in cameras:
+            try:
+                address = str(json.loads(camera["raw"] or "{}").get("address") or "").lower()
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if address:
+                by_address.setdefault(address, []).append(camera)
+        for rows in by_address.values():
+            linked = {r["adopted_device_id"] for r in rows if r["adopted_device_id"] is not None}
+            fresh = [r for r in rows if r["last_seen"] >= cutoff]
+            macs = {norm_mac(r["mac"]) for r in rows}
+            if len(linked) != 1 or not fresh or len(macs) != 1:
+                continue
+            device_id = next(iter(linked))
+            mac = fresh[0]["mac"]
+            owners = c.execute("SELECT id, mac FROM devices WHERE mac IS NOT NULL AND mac != ''").fetchall()
+            if any(d["id"] != device_id and norm_mac(d["mac"]) == norm_mac(mac) for d in owners):
+                continue
+            c.execute("UPDATE devices SET mac=? WHERE id=? AND driver='onvif'", (mac, device_id))
+
         # router cấp lại IP (camera là nạn nhân điển hình): dòng quét mới mang MAC
         # khớp thiết bị đã thêm -> chuyển thiết bị sang IP mới, gắn dòng mới, bỏ dòng cũ.
         # Áp dụng cho MỌI thiết bị (Broadlink/Tuya/camera...), không riêng camera.
-        devices_by_mac = {
-            norm_mac(d["mac"]): d
-            for d in c.execute(
-                "SELECT id, host, name, mac FROM devices WHERE mac IS NOT NULL AND mac != ''"
-            ).fetchall()
-        }
+        devices_by_mac = {}
+        ambiguous_macs: set[str] = set()
+        for d in c.execute(
+            "SELECT id, host, name, mac FROM devices WHERE mac IS NOT NULL AND mac != ''"
+        ).fetchall():
+            mac = norm_mac(d["mac"])
+            if mac in devices_by_mac:
+                ambiguous_macs.add(mac)
+            devices_by_mac[mac] = d
+        for mac in ambiguous_macs:
+            del devices_by_mac[mac]
         fixed: set[tuple] = set()
         seen_devices: set[int] = set()
-        cutoff = (now() - timedelta(minutes=10)).isoformat(timespec="seconds")
         for row in c.execute(
             """SELECT id, ip, mac, adopted_device_id FROM discovered
                WHERE mac != '' AND ip != '' AND last_seen >= ?

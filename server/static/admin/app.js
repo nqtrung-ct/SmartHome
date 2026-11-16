@@ -1366,11 +1366,16 @@ async function renderSettings() {
     <div class="card">
       <h2>📺 Màn hình treo tường</h2>
       <div class="row">
-        <label class="small muted">Mã PIN điều khiển (4 số)</label>
-        <input id="s-dpin" type="password" inputmode="numeric" maxlength="4" placeholder="${st.display.pin_set ? "•••• (đã đặt)" : "chưa đặt"}" style="width:110px">
-        <button class="small-btn danger" onclick="clearDisplayPin()">Xóa mã</button>
-        <span class="small muted">Nhập đúng mã trên màn hình để mở khóa nút điều khiển (hiệu lực 5 phút). Bỏ trống ô nhập = giữ nguyên.</span>
+        <label class="small muted">PIN Tầng 1</label>
+        <input id="s-dpin-floor1" type="password" inputmode="numeric" maxlength="4" placeholder="${st.display.pin_floor1_set ? "•••• (đã đặt)" : "chưa đặt"}" style="width:130px">
+        <button class="small-btn danger" onclick="clearDisplayPin('floor1')">Xóa mã</button>
       </div>
+      <div class="row">
+        <label class="small muted">PIN Admin</label>
+        <input id="s-dpin-admin" type="password" inputmode="numeric" maxlength="4" placeholder="${st.display.pin_admin_set ? "•••• (đã đặt)" : "chưa đặt"}" style="width:130px">
+        <button class="small-btn danger" onclick="clearDisplayPin('admin')">Xóa mã</button>
+      </div>
+      <p class="small muted">Mỗi mã gồm 4 số. Để trống để giữ mã hiện tại; quyền chưa đặt mã không thể đăng nhập.</p>
     </div>
     <div class="card">
       <h2>🖥 Server</h2>
@@ -1401,6 +1406,10 @@ async function renderSettings() {
 }
 
 window.saveSettings = async () => {
+  for (const role of ["floor1", "admin"]) {
+    const pin = $(`#s-dpin-${role}`).value.trim();
+    if (pin && !/^\d{4}$/.test(pin)) { toast("Mã PIN phải gồm 4 chữ số"); return; }
+  }
   const body = {
     mqtt_enabled: $("#s-mqtt").checked,
     mqtt_host: $("#s-mqtt-host").value.trim() || null,
@@ -1413,7 +1422,8 @@ window.saveSettings = async () => {
     advertise_mdns: $("#s-mdns").checked,
     retention_days: +$("#s-retention").value || null,
     admin_token: $("#s-token").value.trim() || null,
-    display_pin: /^\d{4}$/.test($("#s-dpin").value.trim()) ? $("#s-dpin").value.trim() : null,
+    display_pin_floor1: $("#s-dpin-floor1").value.trim() || null,
+    display_pin_admin: $("#s-dpin-admin").value.trim() || null,
   };
   try {
     const res = await api("/settings", { method: "POST", body: JSON.stringify(body) });
@@ -1424,14 +1434,15 @@ window.saveSettings = async () => {
     }
     toast(res.changed.length ? "Đã lưu: " + res.changed.join("; ") : "Không có gì thay đổi");
     $("#s-token").value = "";
-    $("#s-dpin").value = "";
+    $("#s-dpin-floor1").value = "";
+    $("#s-dpin-admin").value = "";
   } catch (e) { toast("Lỗi: " + e.message); }
 };
 
-window.clearDisplayPin = async () => {
+window.clearDisplayPin = async (role) => {
   try {
-    const res = await api("/settings", { method: "POST", body: JSON.stringify({ display_pin: "" }) });
-    toast(res.changed.includes("display.pin") ? "Đã xóa mã PIN màn hình" : "Không có gì thay đổi");
+    await api("/settings", { method: "POST", body: JSON.stringify({ [`display_pin_${role}`]: "" }) });
+    toast("Đã xóa mã PIN");
     renderSettings();
   } catch (e) { toast("Lỗi: " + e.message); }
 };

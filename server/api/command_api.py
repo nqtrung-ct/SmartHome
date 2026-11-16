@@ -21,13 +21,13 @@ async def overview(request: Request, _: None = Depends(require_admin)):
     db = request.app.state.db
     rooms = []
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
-        entities = db.query(
+        entities = [e for e in db.query(
             """SELECT e.*, d.name AS device_name, d.driver FROM entities e
                JOIN devices d ON d.id=e.device_id
                WHERE COALESCE(e.room_id, d.room_id)=? AND e.entity_type!='controller'
                ORDER BY e.id""",
             (room["id"],),
-        )
+        ) if not (e["entity_type"] == "sensor" and loads(e["driver_data"]).get("vision") is True)]
         live_states = {}
         live_entities = [
             e for e in entities
@@ -73,12 +73,12 @@ async def overview(request: Request, _: None = Depends(require_admin)):
                 for e in entities
             ],
         })
-    unassigned = db.query(
+    unassigned = [e for e in db.query(
         """SELECT e.*, d.name AS device_name, d.driver FROM entities e
            JOIN devices d ON d.id=e.device_id
            WHERE COALESCE(e.room_id, d.room_id) IS NULL AND e.entity_type!='controller'
            ORDER BY e.id"""
-    )
+    ) if not (e["entity_type"] == "sensor" and loads(e["driver_data"]).get("vision") is True)]
     return {
         "rooms": rooms,
         "unassigned": [

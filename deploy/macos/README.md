@@ -15,6 +15,13 @@ Database, model, video và cấu hình có mật khẩu vẫn nằm trong `data/
    Sửa đường dẫn người dùng trong `dev.smarthome.frigate-detector.plist` trước
    khi đặt vào `~/Library/LaunchAgents/`. Detector lắng nghe localhost:5555.
 4. Chạy `docker compose -f data/frigate/docker-compose.mac.yml up -d`.
+
+Để tự đồng bộ IP camera sang Frigate, đặt `frigate.config_path` là
+`/Volumes/Camera/frigate/config/config.yml` và `frigate.docker_command` là
+`/usr/local/bin/docker` trong `config.yaml`. Camera cần có tên Frigate trong
+`driver_data.frigate`. Sau khi SmartHome cập nhật IP, vòng kiểm tra camera sẽ
+cập nhật các nguồn RTSP tương ứng và khởi động lại container; nếu khởi động
+lại thất bại, hệ thống thử lại ở lần kiểm tra tiếp theo.
    Frigate UI ở cổng 8971; API nội bộ ở localhost:5001. IP trong compose là IP
    của bản triển khai hiện tại, cần sửa nếu địa chỉ camera/thiết bị thay đổi.
 5. Dùng cấu hình `camera.ptz_proxy` và `network.tcp_proxies` trong

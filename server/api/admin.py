@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from server.api.deps import require_admin, voice_identity
 from server.db import log_event
-from server.util import now as util_now, now_iso, parse_iso
+from server.util import normalize, now as util_now, now_iso, parse_iso
 
 router = APIRouter()
 
@@ -204,13 +204,16 @@ def health() -> dict:
 @router.get("/display")
 async def display(request: Request, response: Response):
     """Snapshot cho màn hình treo tường. Public (server LAN-only, không có secret).
-    Chỉ trả các phòng có cảm biến nhiệt độ; kèm thiết bị điều khiển của phòng
-    (sensor/công tắc không hiện — chỉ dùng để lọc phòng và lấy nhiệt độ;
-    số điện lưới của cầu dao vẫn có ở widget `grid` riêng)."""
+    Trả các phòng trong nhà có thiết bị hoặc cảm biến nhiệt/ẩm. Công tắc
+    hiển thị chỉ đọc; số điện lưới vẫn có ở widget `grid` riêng."""
     import json as _json
 
     app = request.app
     db = app.state.db
+    display_token = request.headers.get("X-Display-Token", "")
+    role = _display_role(app, display_token)
+    if display_token and not role:
+        raise HTTPException(status_code=401, detail="Phiên xem đã hết hạn")
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
 
@@ -223,11 +226,15 @@ async def display(request: Request, response: Response):
 
     rooms = []
     for room in db.query("SELECT * FROM rooms ORDER BY name"):
+        if not role or (role == "floor1" and normalize(room["floor"] or "") != "tang 1"):
+            continue
+        if normalize(room["floor"] or "") == "ngoai nha":
+            continue
         entities = db.query(
             """SELECT e.id, e.name, e.entity_type, e.state, e.driver_data, d.driver, d.extra
                FROM entities e JOIN devices d ON d.id=e.device_id
                WHERE COALESCE(e.room_id, d.room_id)=?
-                 AND e.entity_type NOT IN ('controller','sensor','switch')""",
+                 AND e.entity_type NOT IN ('controller','sensor')""",
             (room["id"],),
         )
         temp = humidity = None
@@ -269,7 +276,7 @@ async def display(request: Request, response: Response):
                 # màn hình treo tường chỉ điều khiển thiết bị IR (remote) và TV
                 # Android; Tuya/zigbee hiện trạng thái thôi, bấm không có gì xảy ra
                 "controllable": (e["driver"] == "broadlink"
-                                 and e["entity_type"] in ("light", "switch", "climate", "fan", "media")
+                                 and e["entity_type"] in ("light", "climate", "fan", "media")
                                  and "readonly" not in dd)
                                 or (e["driver"] == "androidtv" and e["entity_type"] == "media"),
             }
@@ -302,9 +309,10 @@ async def display(request: Request, response: Response):
             """SELECT t.target_at, t.message, t.repeat, t.action, r.name AS room_name
                FROM timers t
                LEFT JOIN rooms r ON r.id=t.room_id
-               WHERE t.done=0 ORDER BY t.target_at LIMIT 5"""
+               WHERE t.done=0 AND (?='admin' OR r.floor=?) ORDER BY t.target_at LIMIT 5""",
+            (role or "", "Tầng 1"),
         )
-    ]
+    ] if role else []
 
     # điện lưới: cầu dao Tuya (đầu vào lưới) + số Volt từ cảm biến cloud_meter.
     # Tắt cầu dao = mất điện lưới (nhà có điện mặt trời nên server vẫn chạy).
@@ -375,6 +383,8 @@ async def display(request: Request, response: Response):
             "SELECT COUNT(*) AS n FROM entities WHERE entity_type='climate'"
         )["n"],
     }
+    if role != "admin":
+        counts = {"rooms": len(rooms)}
     return {
         "weather": weather,
         "rooms": rooms,
@@ -403,6 +413,7 @@ async def display_camera_stream(request: Request, entity_id: int):
 
     from server.util import load_secret, norm_mac
 
+    _require_display_entity(request.app, request.query_params.get("token", ""), entity_id)
     db = request.app.state.db
     row = db.one(
         """SELECT e.state, d.host, d.extra, d.mac FROM entities e
@@ -518,10 +529,7 @@ async def display_camera_stream(request: Request, entity_id: int):
 
 # --- wall display: PIN unlock + control ---------------------------------------
 # Màn hình treo tường không có token admin; nhập đúng mã PIN 4 số (đặt trong
-# tab Thiết đặt) sẽ nhận token tạm hiệu lực 5 phút để gửi lệnh điều khiển.
-
-
-DISPLAY_UNLOCK_SECONDS = 300
+# tab Thiết đặt) sẽ nhận token cho đến khi thoát hoặc server khởi động lại.
 
 
 def _display_tokens(app) -> dict:
@@ -532,12 +540,37 @@ def _display_tokens(app) -> dict:
 
 class DisplayUnlockIn(BaseModel):
     pin: str
+    role: str = "admin"
+
+
+def _display_role(app, token):
+    session = _display_tokens(app).get(str(token or ""))
+    if not session:
+        return None
+    # Accept existing in-memory tokens until the server is restarted.
+    if isinstance(session, dict):
+        expiry = session.get("expires")
+        return session["role"] if expiry is None or expiry > util_now() else None
+    return "admin" if session > util_now() else None
+
+
+def _require_display_entity(app, token, entity_id):
+    role = _display_role(app, token)
+    if not role:
+        raise HTTPException(status_code=401, detail="Phiên xem đã hết hạn")
+    row = app.state.db.one("""SELECT r.floor FROM entities e JOIN devices d ON d.id=e.device_id
+        LEFT JOIN rooms r ON r.id=COALESCE(e.room_id, d.room_id) WHERE e.id=?""", (entity_id,))
+    if not row or (role == "floor1" and normalize(row["floor"] or "") != "tang 1"):
+        raise HTTPException(status_code=403, detail="Không có quyền truy cập phòng này")
 
 
 @router.post("/display/unlock")
 async def display_unlock(request: Request, body: DisplayUnlockIn):
     pin = str(body.pin or "").strip()
-    expected = str(request.app.state.cfg.get("display.pin", "") or "").strip()
+    if body.role not in ("floor1", "admin"):
+        raise HTTPException(status_code=400, detail="Quyền không hợp lệ")
+    key = "display.pin_floor1" if body.role == "floor1" else "display.pin_admin"
+    expected = str(request.app.state.cfg.get(key, "") or (request.app.state.cfg.get("display.pin", "") if body.role == "admin" else "") or "").strip()
     if not expected:
         raise HTTPException(status_code=400, detail="Chưa bật điều khiển trên màn hình")
     if pin != expected:
@@ -545,12 +578,18 @@ async def display_unlock(request: Request, body: DisplayUnlockIn):
         raise HTTPException(status_code=401, detail="Mã PIN không đúng")
     token = secrets.token_hex(16)
     tokens = _display_tokens(request.app)
-    now = util_now()
-    for k in [k for k, exp in tokens.items() if exp < now]:
+    for k in [k for k in tokens if not _display_role(request.app, k)]:
         del tokens[k]  # dọn token hết hạn luôn
-    tokens[token] = now + timedelta(seconds=DISPLAY_UNLOCK_SECONDS)
+    tokens[token] = {"role": body.role}
     log_event(request.app.state.db, "display", "Màn hình mở khóa điều khiển")
-    return {"token": token, "expires_in": DISPLAY_UNLOCK_SECONDS}
+    return {"token": token}
+
+
+@router.post("/display/logout")
+async def display_logout(request: Request):
+    token = request.headers.get("X-Display-Token", "")
+    _display_tokens(request.app).pop(token, None)
+    return {"status": "ok"}
 
 
 class DisplayCommandIn(BaseModel):
@@ -562,10 +601,12 @@ class DisplayCommandIn(BaseModel):
 
 @router.post("/display/command")
 async def display_command(request: Request, body: DisplayCommandIn):
-    tokens = _display_tokens(request.app)
-    expiry = tokens.get(str(body.token or ""))
-    if not expiry or expiry < util_now():
-        raise HTTPException(status_code=401, detail="Phiên mở khóa hết hạn, nhập lại mã PIN")
+    _require_display_entity(request.app, body.token, body.entity)
+    entity = request.app.state.db.one(
+        """SELECT e.entity_type, d.driver FROM entities e
+           JOIN devices d ON d.id=e.device_id WHERE e.id=?""", (body.entity,))
+    if entity and entity["entity_type"] == "switch":
+        raise HTTPException(status_code=403, detail="Công tắc chỉ xem trạng thái")
     from server.api.devices import run_entity_command
     state = await run_entity_command(request.app, body.entity, body.command, body.params)
     return {"state": state}
@@ -673,10 +714,7 @@ class DisplayPtzIn(PtzIn):
 
 @router.post("/display/ptz")
 async def display_ptz(request: Request, body: DisplayPtzIn):
-    tokens = _display_tokens(request.app)
-    expiry = tokens.get(str(body.token or ""))
-    if not expiry or expiry < util_now():
-        raise HTTPException(status_code=401, detail="Phiên mở khóa hết hạn, nhập lại mã PIN")
+    _require_display_entity(request.app, body.token, body.entity)
     if body.action != "goto":
         # màn hình treo tường chỉ được gọi góc đã lưu — xoay/lưu/xóa làm ở admin
         raise HTTPException(status_code=400, detail="Màn hình chỉ được quay về góc đã lưu")
@@ -933,7 +971,8 @@ def get_settings(request: Request, _: None = Depends(require_admin)):
             "days": int(cfg.get("retention.days", 30)),
         },
         "display": {
-            "pin_set": bool(cfg.get("display.pin", "")),
+            "pin_floor1_set": bool(cfg.get("display.pin_floor1", "")),
+            "pin_admin_set": bool(cfg.get("display.pin_admin", "") or cfg.get("display.pin", "")),
         },
     }
 
@@ -951,6 +990,8 @@ class SettingsIn(BaseModel):
     retention_days: int | None = None
     admin_token: str | None = None
     display_pin: str | None = None  # None=giữ nguyên, ""=xóa, "1234"=đặt mã mới
+    display_pin_floor1: str | None = None
+    display_pin_admin: str | None = None
 
 
 @router.post("/settings")
@@ -1007,6 +1048,17 @@ def update_settings(request: Request, body: SettingsIn, _: None = Depends(requir
         if pin and not (len(pin) == 4 and pin.isdigit()):
             raise HTTPException(status_code=400, detail="Mã PIN màn hình phải đúng 4 chữ số")
         apply("display", "pin", pin)
+
+    for role in ("floor1", "admin"):
+        pin = getattr(body, f"display_pin_{role}")
+        if pin is not None:
+            pin = pin.strip()
+            if pin and (len(pin) != 4 or not pin.isascii() or not pin.isdigit()):
+                raise HTTPException(status_code=400, detail="Mã PIN phải gồm 4 chữ số")
+            apply("display", f"pin_{role}", pin)
+            if role == "admin":
+                apply("display", "pin", "")
+            _display_tokens(app).clear()
 
     # live effects
     zigbee = app.state.drivers.get("zigbee")

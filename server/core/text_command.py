@@ -1771,6 +1771,14 @@ def _temp_from_text(norm: str):
             got = trailing_number(tokens[:i])
             if got and 16 <= got[0] <= 32:
                 return int(got[0])
+            # trailing_number hiện đọc "hai mươi tám" thành 208; xử lý
+            # riêng khoảng nhiệt độ máy lạnh mà không đổi cách đọc giờ hẹn.
+            if i >= 3 and tokens[i - 2] == "muoi":
+                tens = {"hai": 20, "ba": 30}.get(tokens[i - 3])
+                unit = {"mot": 1, "hai": 2, "ba": 3, "bon": 4, "nam": 5,
+                        "lam": 5, "sau": 6, "bay": 7, "tam": 8, "chin": 9}.get(tokens[i - 1])
+                if tens is not None and unit is not None and tens + unit <= 32:
+                    return tens + unit
     return None
 
 
@@ -2054,7 +2062,8 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None,
     # multi-part sentences -> let the LLM handle them. "Rồi" as an aspect
     # particle ("đã dùng bao nhiêu số điện rồi") is not a connector: with no
     # on/off verb the sentence is still a single question.
-    if (has_on and has_off) or re.search(r"\bsau do\b", norm) or (
+    vision_choice = bool(_vision_question(norm) and re.search(r"\bhay\b", norm))
+    if (has_on and has_off and not vision_choice) or re.search(r"\bsau do\b", norm) or (
             re.search(r"\broi\b", norm) and (has_on or has_off)):
         return None
 
@@ -2177,12 +2186,29 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None,
 
     # power questions: solar home, grid draw is ~0 W and misleading - trợ lý
     # không đọc số điện bằng giọng nói; Vol/kW nằm trên tab Tổng quan
-    if not (has_on or has_off) and re.search(
+    if not (has_on or has_off) and not multi_intent and re.search(
         r"\bcong suat\b|\bkw\b|tieu thu|\bso dien\b|\bdien nang\b|\bkwh\b|\bdien ap\b|\bvol\b", norm
     ):
         return {"reply": "Nhà mình dùng điện mặt trời nên các số đo từ lưới thường rất thấp "
                          "và không nói lên nhiều.",
                 "action": None}
+
+    # Lệnh chỉnh nhiệt độ máy lạnh phải thắng nhánh cảm biến bên dưới. Chỉ
+    # nhận động từ điều chỉnh rõ ràng, có nhiệt độ và tên/alias máy lạnh;
+    # câu hỏi trạng thái vẫn đi qua nhánh đọc cảm biến.
+    climate_temp = _temp_from_text(norm)
+    if (not (has_on or has_off) and not multi_intent and climate_temp is not None
+            and re.search(r"\b(chinh|dieu chinh|dat|tang|giam|cho|de)\b", norm)
+            and not re.search(r"\b(khong|chua|bao nhieu|may do)\b\s*[?.!]*$", norm)):
+        climate_anywhere = resolve_entity(db, norm, None, "climate")
+        if climate_anywhere:
+            mentioned = _room_from_text(db, norm)
+            entity = resolve_entity(db, norm, room_id, "climate")
+            if entity:
+                return await act_climate(db, drivers, entity, mode="cool", temperature=climate_temp,
+                                         mentioned_room=mentioned)
+            return {"reply": _miss_reply(db, mentioned or room_id, "máy lạnh"),
+                    "action": {"tool": "climate", "ok": False}}
 
     # temperature/humidity question without a verb -> sensor
     # (câu ghép "thời tiết và độ ẩm" nhường LLM kẻo mất nửa thời tiết)
@@ -2224,16 +2250,21 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None,
             return await act_tv_status(db, drivers, entity,
                                        mentioned_room=_room_from_text(db, norm))
 
+    # Câu hỏi trạng thái có chữ "bật/tắt" không phải lệnh đổi trạng thái.
+    # Nhường model xử lý nếu chưa có nhánh trạng thái chuyên biệt ở trên.
+    if (has_on or has_off) and re.search(r"\b(khong|chua)\b\s*[?.!]*$", norm):
+        return None
+
     # "cái gì đang bật?" — câu hỏi liệt kê, đặt TRƯỚC nhánh on/off vì chứa từ "bật";
     # thiết bị IR không có trạng thái thật nên act_list_active tự loại khỏi danh sách
-    if re.search(r"\b(dang bat|dang mo|dang chay)\b", norm) and re.search(r"\b(gi|nao)\b", norm):
+    if not multi_intent and re.search(r"\b(dang bat|dang mo|dang chay)\b", norm) and re.search(r"\b(gi|nao)\b", norm):
         mentioned = _room_from_text(db, norm)
         return act_list_active(db, mentioned or room_id, mentioned_room=mentioned)
 
     # âm lượng loa: đặt TRƯỚC nhánh on/off vì "tắt tiếng" chứa từ "tắt" —
     # không tắt nguồn loa; up/down chỉ nhận khi câu không có bật/tắt
     vol = volume_button(norm)
-    if vol and (vol == "mute" or not (has_on or has_off)):
+    if vol and not multi_intent and (vol == "mute" or not (has_on or has_off)):
         entity = resolve_entity(db, norm, room_id) or resolve_entity(db, "loa", room_id)
         if entity:
             return await act_button(db, drivers, entity, vol,
@@ -2255,7 +2286,7 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None,
     # mở app trên TV Android ("mở YouTube trên TV"): đặt TRƯỚC nhánh on/off vì
     # "mở" cũng là động từ bật — câu nhắc tên app là muốn mở app, không bật nguồn
     tv_app = _tv_app(norm)
-    if tv_app:
+    if tv_app and not multi_intent:
         entity = resolve_entity(db, norm, room_id, "media") or resolve_entity(db, "tv", room_id, "media")
         if entity:
             return await act_tv_app(db, drivers, entity, tv_app,
@@ -2263,7 +2294,7 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None,
 
     # điều hướng TV ("tivi về màn hình chính", "quay lại tv", "tạm dừng tivi")
     tv_nav = _tv_nav_button(norm)
-    if tv_nav:
+    if tv_nav and not multi_intent:
         entity = resolve_entity(db, norm, room_id, "media") or resolve_entity(db, "tv", room_id, "media")
         if entity:
             return await act_button(db, drivers, entity, tv_nav,
@@ -2273,7 +2304,7 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None,
     # động từ bật/tắt thắng thế ("tắt xoay quạt" = khóa xoay, không tắt quạt).
     # Câu hỏi ("quạt có xoay không?") không bấm gì cả.
     sw = swing_button(norm)
-    if sw and not re.search(r"\b(khong|chua|chua)\b\s*[?.!]?\s*$", norm):
+    if sw and not multi_intent and not re.search(r"\b(khong|chua)\b\s*[?.!]?\s*$", norm):
         if has_off:
             sw = "swing_off"
         elif has_on:
@@ -2284,7 +2315,8 @@ async def fast_path(db, drivers, weather, text: str, room_id: int | None,
                                     mentioned_room=_room_from_text(db, norm))
 
     # "chỉnh máy lạnh 25 độ" — set nhiệt độ không cần động từ bật/tắt
-    if not (has_on or has_off):
+    if (not (has_on or has_off) and not multi_intent
+            and not re.search(r"\b(khong|chua|bao nhieu|may do)\b\s*[?.!]*$", norm)):
         temp = _temp_from_text(norm)
         if temp:
             entity = resolve_entity(db, norm, room_id, "climate")

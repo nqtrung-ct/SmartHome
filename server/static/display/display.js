@@ -4,10 +4,16 @@
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------- unlock state
-// token + thời điểm hết hạn (5 phút) — chỉ nằm trong bộ nhớ của trang
-let unlock = { token: null, until: 0 };
+// Giữ phiên trên trình duyệt cho đến khi thoát hoặc server khởi động lại.
+let unlock = { token: null, role: null };
+try {
+  unlock = JSON.parse(localStorage.getItem("display_session") || sessionStorage.getItem("display_session")) || unlock;
+  if (unlock.token) localStorage.setItem("display_session", JSON.stringify(unlock));
+  sessionStorage.removeItem("display_session");
+} catch {}
+let selectedRole = null;
 
-const unlocked = () => unlock.token && Date.now() < unlock.until;
+const unlocked = () => !!unlock.token;
 
 // emoji khóa là emoji màu (vàng) — dùng SVG trắng cho hợp nền tối
 const LOCK_SVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7a4 4 0 1 1 8 0v3.5"/></svg>`;
@@ -15,18 +21,11 @@ const UNLOCK_SVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" 
 
 function tickUnlock() {
   const ind = $("lock-ind");
+  $("display-logout").classList.toggle("hidden", !unlocked());
   if (unlocked()) {
-    const left = Math.max(0, Math.floor((unlock.until - Date.now()) / 1000));
-    ind.innerHTML = `${UNLOCK_SVG} ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    ind.innerHTML = `${UNLOCK_SVG} ${unlock.role === "floor1" ? "Tầng 1" : "Admin"}`;
     ind.classList.add("on");
   } else {
-    if (unlock.token) {
-      unlock = { token: null, until: 0 };
-      // hết phiên 5 phút: đóng hết popup điều khiển đang mở — để nguyên thì
-      // bấm nút trong popup cũ sẽ hiện PIN đè lên (camera còn stream dưới nền)
-      closeCam();
-      $("ctrl-overlay").classList.add("hidden");
-    }
     ind.innerHTML = LOCK_SVG;
     ind.classList.remove("on");
   }
@@ -201,10 +200,18 @@ let lastData = { rooms: [] };
 
 async function refresh() {
   let data;
+  const token = unlock.token;
   try {
-    const resp = await fetch("/api/display", { cache: "no-store" });
+    const resp = await fetch("/api/display", { cache: "no-store", headers: token ? { "X-Display-Token": token } : {} });
+    if (token !== unlock.token) return;
+    if (resp.status === 401) {
+      unlock = { token: null, role: null }; localStorage.removeItem("display_session");
+      closeCam(); $("ctrl-overlay").classList.add("hidden"); tickUnlock(); showRoles();
+      return refresh();
+    }
     if (!resp.ok) throw new Error(resp.status);
     data = await resp.json();
+    if (token !== unlock.token) return;
     lastData = data;
   } catch {
     return; // giữ dữ liệu cũ trên màn hình; thử lại chu kỳ sau
@@ -259,12 +266,13 @@ async function refresh() {
 // ---------------------------------------------------------------- room cards
 // icon SVG (1em: co theo font-size như emoji) — quạt 3 cánh, loa bookshelf
 const FAN_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/></svg>`;
+const SWITCH_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="3"/><rect x="8" y="6" width="8" height="12" rx="1"/><path d="M8 12h8"/></svg>`;
 const SPEAKER_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="1.5"/><circle cx="12" cy="8" r="3"/><circle cx="12" cy="16" r="1.6"/></svg>`;
 const SNOW_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/></svg>`;
 const DROPLET_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>`;
 const VIDEO_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>`;
 const TV_SVG = `<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="15" rx="2"/><path d="m17 2-5 5-5-5"/></svg>`;
-const TYPE_ICON = { light: "💡", switch: "🔌", climate: SNOW_SVG, fan: FAN_SVG, media: SPEAKER_SVG, camera: VIDEO_SVG };
+const TYPE_ICON = { light: "💡", switch: SWITCH_SVG, climate: SNOW_SVG, fan: FAN_SVG, media: SPEAKER_SVG, camera: VIDEO_SVG };
 // TV Android và loa cùng là media — icon khác nhau theo driver
 const entityIcon = (e) =>
   (e.type === "media" && e.driver === "androidtv" ? TV_SVG : TYPE_ICON[e.type]) || "🔘";
@@ -272,7 +280,9 @@ const entityIcon = (e) =>
 // thiết bị IR không phản hồi trạng thái thật — chỉ hiện tên, không hiện bật/tắt
 // (camera: trạng thái online do scheduler poll socket RTSP)
 function chipState(e) {
-  if (e.driver === "broadlink") return "";
+  if (e.driver === "broadlink") return e.type === "switch" ? "không rõ" : "";
+  if (e.type === "switch" &&
+      (!e.state || !["on", "off"].includes(e.state.state))) return "không rõ";
   if (e.type === "climate") {
     const on = e.state && e.state.state === "on";
     return on && e.state.temperature != null ? `${e.state.temperature}°` : "đang tắt";
@@ -332,7 +342,7 @@ function renderRooms(rooms) {
   // đo sau khi DOM có thật: card phòng tràn khỏi màn hình thì chuyển 2 cột
   requestAnimationFrame(() => {
     const top = el.getBoundingClientRect().top;
-    if (top > 0 && el.scrollHeight > window.innerHeight - top - 24) {
+    if (window.matchMedia("(min-width: 769px)").matches && top > 0 && el.scrollHeight > window.innerHeight - top - 24) {
       el.classList.replace("one", "two");
     }
   });
@@ -347,19 +357,18 @@ function findEntity(id) {
 }
 
 // ---------------------------------------------------------------- PIN unlock
-// PIN chỉ hiện khi bấm vào một thiết bị điều khiển được (chặn trẻ em vọc);
-// nhập đủ 4 số là tự xác nhận. Đúng một lần -> mọi thiết bị mở trong 5 phút.
-function showPin(cb, deviceName) {
+// Nhập PIN một lần sau khi chọn quyền; phiên không tự hết hạn theo thời gian.
+function showPin() {
+  if (!selectedRole) { showRoles(); return; }
   $("pin-error").textContent = "";
   $("pin-input").value = "";
-  $("pin-sub").textContent = deviceName
-    ? `Nhập mã PIN 4 số để điều khiển "${deviceName}"`
-    : "Nhập mã PIN 4 số";
+  $("role-options").classList.add("hidden");
+  $("pin-row").classList.remove("hidden");
+  $("pin-title").textContent = selectedRole === "floor1" ? "Quyền Tầng 1" : "Quyền Admin";
+  $("pin-sub").textContent = "Nhập mã PIN 4 số cho quyền này";
   $("pin-overlay").classList.remove("hidden");
   $("pin-input").focus();
-  pinCb = cb;
 }
-let pinCb = null;
 
 async function tryPin() {
   const pin = $("pin-input").value.trim();
@@ -370,7 +379,7 @@ async function tryPin() {
   try {
     const resp = await fetch("/api/display/unlock", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pin }),
+      body: JSON.stringify({ pin, role: selectedRole }),
     });
     if (!resp.ok) {
       const d = await resp.json().catch(() => ({}));
@@ -380,10 +389,11 @@ async function tryPin() {
       return;
     }
     const d = await resp.json();
-    unlock = { token: d.token, until: Date.now() + d.expires_in * 1000 };
+    unlock = { token: d.token, role: selectedRole };
+    localStorage.setItem("display_session", JSON.stringify(unlock));
     $("pin-overlay").classList.add("hidden");
     tickUnlock();
-    if (pinCb) { const cb = pinCb; pinCb = null; cb(); }
+    refresh();
   } catch {
     $("pin-error").textContent = "Không kết nối được";
   }
@@ -399,7 +409,27 @@ $("pin-clear").onclick = () => {
   $("pin-error").textContent = "";
   $("pin-input").focus();
 };
-$("pin-close").onclick = () => { pinCb = null; $("pin-overlay").classList.add("hidden"); };
+function showRoles() {
+  selectedRole = null;
+  $("pin-title").textContent = "Chọn quyền xem";
+  $("pin-sub").textContent = "Chọn quyền để xem phòng và điều khiển thiết bị";
+  $("pin-error").textContent = "";
+  $("pin-row").classList.add("hidden");
+  $("role-options").classList.remove("hidden");
+  $("pin-overlay").classList.remove("hidden");
+}
+$("role-options").querySelectorAll("button").forEach((button) => {
+  button.onclick = () => { selectedRole = button.dataset.role; showPin(); };
+});
+$("pin-close").onclick = () => { if (selectedRole) showRoles(); else $("pin-overlay").classList.add("hidden"); };
+$("display-logout").onclick = () => {
+  const token = unlock.token;
+  unlock = { token: null, role: null };
+  localStorage.removeItem("display_session");
+  closeCam(); $("ctrl-overlay").classList.add("hidden");
+  tickUnlock(); refresh(); showRoles();
+  fetch("/api/display/logout", { method: "POST", headers: { "X-Display-Token": token } }).catch(() => {});
+};
 
 // ---------------------------------------------------------------- control panel
 // Bảng điều khiển kiểu remote: nút tròn, chức năng chính to ở trên,
@@ -466,7 +496,7 @@ function ctrlBody(e) {
 function openCtrl(id) {
   const { e, r } = findEntity(id);
   if (!e) return;
-  if (!unlocked()) { showPin(() => openCtrl(id), e.name); return; }
+  if (!unlocked()) { showRoles(); return; }
   $("ctrl-icon").innerHTML = entityIcon(e);
   $("ctrl-name").textContent = e.name;
   $("ctrl-room").textContent = r ? r.name : "";
@@ -567,7 +597,7 @@ function startWebrtc(video, streamName) {
           });
         });
         // go2rtc chạy chung máy server — API webrtc kiểu JSON offer/answer
-        const resp = await fetch(`http://${location.hostname}:1984/api/webrtc?src=${streamName}`, {
+        const resp = await fetch(`http://${location.hostname}:1984/api/webrtc?src=${encodeURIComponent(streamName)}`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ type: "offer", sdp: pc.localDescription.sdp }),
         });
@@ -583,7 +613,7 @@ function openCam(id) {
   const { e, r } = findEntity(id);
   if (!e) return;
   // popup chứa nút preset (điều khiển) nên mở cũng phải qua PIN như thiết bị khác
-  if (!unlocked()) { showPin(() => openCam(id), e.name); return; }
+  if (!unlocked()) { showRoles(); return; }
   camEntity = e;
   clearTimeout(camRetryTimer);
   $("cam-icon").innerHTML = VIDEO_SVG;
@@ -624,7 +654,7 @@ function camAttempt() {
     img.onload = () => err.classList.add("hidden");
     img.onerror = fail;
     img.classList.remove("hidden");
-    img.src = `/api/display/camera/${id}/stream?ts=${Date.now()}`;
+    img.src = `/api/display/camera/${id}/stream?token=${encodeURIComponent(unlock.token)}&ts=${Date.now()}`;
   };
   if (cur.stream && typeof RTCPeerConnection !== "undefined") {
     img.onload = img.onerror = null;
@@ -674,7 +704,7 @@ function renderCamPresets() {
 }
 
 async function sendPtz(body) {
-  if (!unlocked()) { showPin(() => sendPtz(body), camEntity ? camEntity.name : ""); return false; }
+  if (!unlocked()) { showRoles(); return false; }
   if (!camEntity) return false;
   try {
     const resp = await fetch("/api/display/ptz", {
@@ -682,9 +712,9 @@ async function sendPtz(body) {
       body: JSON.stringify({ token: unlock.token, entity: camEntity.id, ...body }),
     });
     if (resp.status === 401) {
-      unlock = { token: null, until: 0 };
+      unlock = { token: null, role: null };
       closeCam();  // đóng popup camera kẻo PIN hiện đè lên nền còn stream
-      showPin(() => sendPtz(body));
+      localStorage.removeItem("display_session"); showRoles(); refresh();
       return false;
     }
     const d = await resp.json().catch(() => ({}));
@@ -713,16 +743,16 @@ $("cam-mute").onclick = () => {  // một chạm = ngữ cảnh thao tác thật
 };
 
 async function sendCommand(e, command, params) {
-  if (!unlocked()) { $("ctrl-overlay").classList.add("hidden"); showPin(() => openCtrl(e.id), e.name); return; }
+  if (!unlocked()) { $("ctrl-overlay").classList.add("hidden"); showRoles(); return false; }
   try {
     const resp = await fetch("/api/display/command", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: unlock.token, entity: e.id, command, params }),
     });
     if (resp.status === 401) {
-      unlock = { token: null, until: 0 };
+      unlock = { token: null, role: null };
       $("ctrl-overlay").classList.add("hidden");
-      showPin(null);
+      localStorage.removeItem("display_session"); showRoles(); refresh();
       return false;
     }
     if (!resp.ok) {
@@ -831,4 +861,5 @@ function renderTimers(timers) {
 }
 
 refresh();
+if (!unlocked()) showRoles();
 setInterval(refresh, 30000);

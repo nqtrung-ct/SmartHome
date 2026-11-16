@@ -560,6 +560,8 @@ async def camera_monitor_loop(app) -> None:
             await asyncio.sleep(1)
             if time.monotonic() - last_camera_poll >= int(app.state.cfg.get("camera.poll_seconds", 60)):
                 last_camera_poll = time.monotonic()
+                from server.core.frigate_sync import sync_frigate
+                await asyncio.to_thread(sync_frigate, app.state.db, app.state.cfg)
                 await _poll_cameras(app)
             if time.monotonic() - last_ptz_poll >= 10:
                 last_ptz_poll = time.monotonic()
