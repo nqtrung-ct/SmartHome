@@ -11,11 +11,14 @@ SmartPSS ARM64 của Dahua (Mach-O, tên libdhnetsdk.so).
 from __future__ import annotations
 
 import ctypes as C
+import ipaddress
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 from server.util import load_secret, norm_mac
 
@@ -29,7 +32,7 @@ _sdk = None
 _dll_dir = None
 _sdk_lock = threading.RLock()  # NetSDK không đảm bảo thread-safe: gọi tuần tự như IR.
 # RLock để fast_goto giữ khóa xuyên suốt cả thời gian chờ đợi giữa 2 lệnh goto
-_sessions: dict[str, int] = {}  # "host:port" -> handle login còn hạn
+_sessions: dict[str, int] = {}  # host, port và MAC -> handle login còn hạn
 
 
 class _DeviceInfo(C.Structure):
@@ -168,7 +171,7 @@ def _parts(device) -> tuple[str, int, str]:
 def _creds(cfg, host: str, mac: str) -> tuple[str, str]:
     """Tài khoản NetSDK = tài khoản RTSP (secret 'rtsp', khóa host hoặc MAC)."""
     raw = ""
-    for key in (host, norm_mac(mac)):
+    for key in (norm_mac(mac), host):
         if key:
             raw = load_secret(cfg, "rtsp", key) or ""
             if raw:
@@ -183,14 +186,36 @@ def _creds(cfg, host: str, mac: str) -> tuple[str, str]:
 
 
 def _login(cfg, host: str, port: int, mac: str) -> int:
-    key = f"{host}:{port}"
+    key = f"{host}:{port}:{norm_mac(mac)}"
+    mapping = (cfg.get("camera.ptz_devices", {}) or {}).get(norm_mac(mac))
+    if mapping:
+        try:
+            target = str(ipaddress.IPv4Address(host))
+            path = Path(mapping["target_file"])
+            if not path.is_absolute():
+                from server.config import ROOT
+                path = ROOT / path
+            if not path.exists() or path.read_text(encoding="ascii").strip() != target:
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="ascii", dir=path.parent, delete=False) as tmp:
+                        tmp_path = Path(tmp.name)
+                        tmp.write(target + "\n")
+                        tmp.flush()
+                        os.fsync(tmp.fileno())
+                    os.replace(tmp_path, path)
+                finally:
+                    if tmp_path:
+                        tmp_path.unlink(missing_ok=True)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise PtzError("Không cập nhật được IP relay PTZ") from exc
     h = _sessions.get(key, 0)
     if h:
         return h
     sdk = _load()
     user, pwd = _creds(cfg, host, mac)
     connect_host, connect_port = host, port
-    proxy = (cfg.get("camera.ptz_proxy", {}) or {}).get(host)
+    proxy = mapping.get("proxy") if mapping else (cfg.get("camera.ptz_proxy", {}) or {}).get(host)
     if proxy:
         connect_host, sep, proxy_port = str(proxy).rpartition(":")
         if not sep or not connect_host or not proxy_port.isdecimal():
@@ -206,8 +231,8 @@ def _login(cfg, host: str, port: int, mac: str) -> int:
     return h
 
 
-def _drop(host: str, port: int) -> None:
-    h = _sessions.pop(f"{host}:{port}", 0)
+def _drop(host: str, port: int, mac: str) -> None:
+    h = _sessions.pop(f"{host}:{port}:{norm_mac(mac)}", 0)
     if h and _sdk:
         try:
             _sdk.CLIENT_Logout(h)
@@ -224,7 +249,7 @@ def _control(cfg, device, cmd: int, p1: int, p2: int = 0, p3: int = 0, stop: int
             h = _login(cfg, host, port, mac)
             if sdk.CLIENT_DHPTZControlEx2(h, 0, cmd, p1, p2, p3, stop, None):
                 return True
-            _drop(host, port)
+            _drop(host, port, mac)
             if attempt:
                 return False
     return False
@@ -249,7 +274,7 @@ def read_position(cfg, device) -> dict:
         ret = C.c_int(0)
         if not sdk.CLIENT_QueryDevState(h, NET_DEVSTATE_PTZ_LOCATION,
                                         C.byref(loc), C.sizeof(loc), C.byref(ret), 5000):
-            _drop(host, port)
+            _drop(host, port, mac)
             raise PtzError("Không đọc được tọa độ camera")
     return {"pan": loc.nPTZPan, "tilt": loc.nPTZTilt, "zoom": loc.nPTZZoom}
 

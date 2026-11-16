@@ -457,8 +457,8 @@ async def display_camera_stream(request: Request, entity_id: int):
     cred = {}
     raw = ""
     # IP đổi (tự chữa qua MAC lúc quét) thì secret theo host cũ trượt:
-    # thử theo host -> theo MAC -> nếu nhóm rtsp chỉ có 1 entry thì dùng nó
-    for key in (row["host"], norm_mac(row["mac"] or "")):
+    # Ưu tiên MAC vì IP cũ có thể đã được cấp cho camera khác.
+    for key in (norm_mac(row["mac"] or ""), row["host"]):
         if not key:
             continue
         try:

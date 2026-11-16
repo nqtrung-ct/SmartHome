@@ -28,6 +28,13 @@ lại thất bại, hệ thống thử lại ở lần kiểm tra tiếp theo.
    `config.example.yaml` khi server nền trên Mac không truy cập được LAN.
    Đổi `frigate.base_url` thành `http://127.0.0.1:5001` và bật MQTT localhost.
 
+Để PTZ tự theo IP mới, tạo thư mục `data/frigate/ptz`, cấu hình
+`camera.ptz_devices` theo MAC như trong `config.example.yaml`, và bật mount
+`./ptz:/app/ptz:ro` cùng `PTZ_TARGET_FILES` trong compose. Mỗi camera dùng
+một cổng relay và một tệp riêng. Khi kết nối, server ghi IP đang có trong DB
+vào tệp, relay đọc tệp cho từng kết nối; tệp thiếu hoặc không hợp lệ thì relay
+từ chối kết nối. Cần cập nhật bản `ptz_proxy.py` đã mount và tạo lại relay.
+
 Relay inverter tự cập nhật IP: tạo `data/frigate/solar/inverter-host` chứa IP
 inverter hiện tại, rồi cấu hình `solar.tcp_proxy: 127.0.0.1:15020` và
 `solar.proxy_target_file: data/frigate/solar/inverter-host`. Khi mất dữ liệu

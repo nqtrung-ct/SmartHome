@@ -64,6 +64,11 @@ camera:
   # ptz_proxy:
   #   "192.168.1.16": "127.0.0.1:13778"
   #   "192.168.1.15": "127.0.0.1:13779"
+  # Relay theo MAC để tự cập nhật IP khi camera đổi địa chỉ:
+  # ptz_devices:
+  #   "302450CC09E0":
+  #     proxy: "127.0.0.1:13779"
+  #     target_file: "data/frigate/ptz/camera-bep"
 
 # TCP proxy khi server nền trên Mac không truy cập được LAN.
 # Mẫu triển khai: deploy/macos/README.md. Chỉ mở các cổng này trên localhost.

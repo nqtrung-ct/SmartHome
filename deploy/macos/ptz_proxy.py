@@ -42,10 +42,13 @@ async def handle(client_reader: asyncio.StreamReader,
 
 async def main() -> None:
     servers = []
+    target_files = dict(item.split("=", 1) for item in os.environ.get("PTZ_TARGET_FILES", "").split(",") if item)
     for target in os.environ["PTZ_TARGETS"].split(","):
         listen, destination = target.split("=", 1)
         host, port = destination.rsplit(":", 1)
-        target_file = os.environ.get("SOLAR_TARGET_FILE", "") if listen == os.environ.get("SOLAR_LISTEN_PORT", "") else ""
+        target_file = target_files.get(listen, "")
+        if listen == os.environ.get("SOLAR_LISTEN_PORT", ""):
+            target_file = os.environ.get("SOLAR_TARGET_FILE", "")
         server = await asyncio.start_server(
             lambda reader, writer, h=host, p=int(port), f=target_file: handle(reader, writer, h, p, f),
             "0.0.0.0", int(listen))
