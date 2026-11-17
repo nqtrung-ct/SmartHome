@@ -22,6 +22,15 @@ Database, model, video và cấu hình có mật khẩu vẫn nằm trong `data/
 `driver_data.frigate`. Sau khi SmartHome cập nhật IP, vòng kiểm tra camera sẽ
 cập nhật các nguồn RTSP tương ứng và khởi động lại container; nếu khởi động
 lại thất bại, hệ thống thử lại ở lần kiểm tra tiếp theo.
+
+Đặt `database.path: /frigate-db/frigate.db` trong cấu hình Frigate và mount
+`/Volumes/Data/frigate` vào `/frigate-db` để lưu SQLite trên ổ Data APFS,
+tách khỏi ổ exFAT chứa video. Di chuyển DB khi Frigate đã dừng, giữ bản sao
+gốc và kiểm tra `PRAGMA integrity_check` trước khi khởi động lại. Chạy
+`deploy/macos/install-frigate-db-backup.sh` để tạo bản sao SQLite nhất quán,
+kiểm tra toàn vẹn mỗi 15 phút sau khi đăng nhập; giữ ba bản gần nhất trong
+`/Volumes/Data/frigate/backups`. Khôi phục vẫn cần dừng Frigate và
+chọn bản sao tốt; bản sao không thay thế được bộ lưu điện (UPS).
    Frigate UI ở cổng 8971; API nội bộ ở localhost:5001. IP trong compose là IP
    của bản triển khai hiện tại, cần sửa nếu địa chỉ camera/thiết bị thay đổi.
 5. Dùng cấu hình `camera.ptz_proxy` và `network.tcp_proxies` trong

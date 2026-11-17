@@ -9,6 +9,8 @@ services:
     volumes:
       - /Volumes/Camera/frigate/config:/config
       - /Volumes/Camera/frigate/media:/media/frigate
+      # Keep the SQLite database on the APFS Data volume.
+      - /Volumes/Data/frigate:/frigate-db
     tmpfs:
       - /tmp/cache:size=512m
     ports:
