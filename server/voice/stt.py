@@ -1,6 +1,11 @@
 """Speech-to-text. sherpa-onnx Zipformer-vi when installed; "none" otherwise."""
 from __future__ import annotations
 
+import atexit
+import base64
+import json
+import queue
+import subprocess
 import threading
 from pathlib import Path
 
@@ -137,8 +142,87 @@ class SttSherpa:
             return self._recognizer.get_result().strip()
 
 
+class SttQwen:
+    """Qwen3-ASR in a separate MLX environment, loaded on first use."""
+
+    def __init__(self, cfg: Config):
+        self.model = Path(cfg.get("stt.qwen_model_dir", "data/models/qwen3-asr-1.7b-8bit"))
+        self.python = Path(cfg.get("stt.qwen_python", "data/qwen3-asr-venv/bin/python"))
+        self.context = Path(cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
+        if not self.python.is_file() or not (self.model / "config.json").is_file() or not list(self.model.glob("*.safetensors")):
+            raise RuntimeError("Chưa cài môi trường hoặc model Qwen3-ASR-1.7B trên máy này")
+        self._lock = threading.Lock()
+        self._proc = None
+        self._lines = None
+
+    def _start(self):
+        if self._proc and self._proc.poll() is None:
+            return
+        self._lines = queue.Queue()
+        self._proc = subprocess.Popen(
+            [str(self.python.absolute()), "-u", str(Path(__file__).with_name("qwen3_worker.py")), str(self.model.resolve())],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+        )
+        atexit.register(self.close)
+        proc, lines = self._proc, self._lines
+        def read_lines():
+            for line in proc.stdout:
+                lines.put(line)
+            lines.put(None)
+        threading.Thread(target=read_lines, daemon=True, name="qwen3-stt-output").start()
+        if not self._read(180).get("ready"):
+            self.close()
+            raise RuntimeError("Không nạp được model Qwen3-ASR")
+
+    def _read(self, timeout):
+        try:
+            line = self._lines.get(timeout=timeout)
+        except queue.Empty:
+            self.close()
+            raise RuntimeError("Qwen3-ASR không phản hồi kịp") from None
+        if line is None:
+            self.close()
+            raise RuntimeError("Tiến trình Qwen3-ASR đã dừng")
+        return json.loads(line)
+
+    def transcribe(self, pcm16: bytes) -> str:
+        if not pcm16:
+            return ""
+        with self._lock:
+            self._start()
+            context = self.context.read_text(encoding="utf-8")[:8000] if self.context.is_file() else ""
+            request = {"audio": base64.b64encode(pcm16).decode("ascii"), "context": context}
+            try:
+                self._proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+                self._proc.stdin.flush()
+                response = self._read(120)
+            except (BrokenPipeError, OSError):
+                self.close()
+                raise RuntimeError("Mất kết nối tới Qwen3-ASR") from None
+            if response.get("error"):
+                raise RuntimeError(response["error"])
+            return response.get("text", "").strip()
+
+    def close(self):
+        atexit.unregister(self.close)
+        proc, self._proc = self._proc, None
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3)
+        if proc:
+            for stream in (proc.stdin, proc.stdout):
+                if stream:
+                    stream.close()
+
+
 def make_stt(cfg: Config):
     engine = cfg.get("stt.engine", "none")
     if engine == "sherpa":
         return SttSherpa(cfg)
+    if engine == "qwen3_mlx":
+        return SttQwen(cfg)
     return SttNone()

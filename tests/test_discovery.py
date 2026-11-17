@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from server.core.discovery import _cleanup_network_rows, scan_network, upsert
+from server.core.discovery import _cleanup_network_rows, scan_androidtv, scan_network, upsert
 from server.api.discovery_api import AdoptIn, adopt
 from server.db import Database
 from server.drivers.base import Driver
@@ -38,6 +38,26 @@ class CameraAdoptionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_cast_id_is_not_network_mac_and_keeps_link_on_ip_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            db.execute("INSERT INTO devices(id,name,driver,host,mac,created_at) VALUES (1,?,?,?,?,?)",
+                       ("TV", "androidtv", "192.0.2.1", "C4:8B:66:0B:76:25", now_iso()))
+            upsert(db, "androidtv", "EE:C6:53:1B:39:D6", ip="192.0.2.1", mac="C4:8B:66:0B:76:25")
+            db.execute("UPDATE discovered SET adopted_device_id=1 WHERE method='androidtv'")
+            upsert(db, "ssdp", "cast", ip="192.0.2.2", raw={"server": "Chromecast"})
+            cfg = SimpleNamespace(get=lambda key, default=None: 0 if key == "discovery.mdns_seconds" else default)
+            desc = {"friendlyName": "Smart TV Pro", "manufacturer": "TCL", "modelName": "Smart TV Pro",
+                    "UDN": "uuid:6cf971e9-5a7f-138b-c090-eec6531b39d6"}
+            with patch.dict("sys.modules", {"zeroconf": None}), \
+                    patch("server.core.discovery._port_open", return_value=True), \
+                    patch("server.core.discovery._cast_desc", return_value=desc):
+                scan_androidtv(db, cfg)
+            row = db.one("SELECT ip,mac,adopted_device_id FROM discovered WHERE method='androidtv'")
+            self.assertEqual((row["ip"], row["mac"], row["adopted_device_id"]), ("192.0.2.2", "", 1))
+            self.assertEqual(db.one("SELECT host FROM devices WHERE id=1")["host"], "192.0.2.2")
+            db.close()
+
     def test_duplicate_device_macs_do_not_move_either_device(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "test.db")

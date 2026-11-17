@@ -17,6 +17,9 @@ mqtt:                       # Mosquitto + Zigbee2MQTT (see instructions/phase-1-
   base_topic: zigbee2mqtt
 
 stt:                        # speech-to-text
+  qwen_model_dir: data/models/qwen3-asr-1.7b-8bit
+  qwen_python: data/qwen3-asr-venv/bin/python
+  qwen_context_file: data/qwen3-asr-context.md
   engine: none              # "none" until models are installed; then "sherpa"
   model_dir: data/models/stt   # put the Zipformer-vi model files here (tokens.txt, *.onnx)
   num_threads: 2

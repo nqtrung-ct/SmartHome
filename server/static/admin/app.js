@@ -11,6 +11,10 @@ let eventsTimer = null;
 let floorsCache = [];
 let devicesCache = [];
 let roomsCache = [];
+let sttMic = null;
+let sttMicGeneration = 0;
+let sttSavedEngine = "";
+let sttSavedModel = "";
 
 async function loadFloors() {
   floorsCache = await api("/floors").catch(() => []);
@@ -83,6 +87,7 @@ let currentTab = "dashboard";
 $("#tabs").addEventListener("click", (ev) => {
   const btn = ev.target.closest("button[data-tab]");
   if (!btn) return;
+  if (btn.dataset.tab !== "assistant") stopSttMic(true);
   currentTab = btn.dataset.tab;
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b === btn));
   $$(".tab").forEach((t) => t.classList.add("hidden"));
@@ -311,12 +316,15 @@ const dot = (ok, okText, badText) =>
   ok ? `<span class="badge on">${okText}</span>` : `<span class="badge off">${badText}</span>`;
 
 async function renderAssistant() {
+  stopSttMic(true);
   const el = $("#tab-assistant");
   // trạng thái phải probe Ollama (đến 5s khi Ollama tắt) — hiện chỗ này ngay
   // kẻo tab trắng trơn trông như hỏng
   el.innerHTML = `<div class="card muted">Đang tải trạng thái trợ lý…</div>`;
   const st = await api("/assistant/status").catch(() => null);
   if (!st) { el.innerHTML = `<div class="card muted">Không tải được trạng thái trợ lý.</div>`; return; }
+  sttSavedEngine = st.stt.engine;
+  sttSavedModel = st.stt.model_dir_rel;
 
   // --- LLM (Ollama local hoặc dịch vụ OpenAI-compatible) ---
   const cloud = st.llm.engine === "openai";
@@ -394,18 +402,24 @@ async function renderAssistant() {
     </div>
 
     <div class="card">
-      <h2>🎙 Nhận dạng giọng nói (STT) ${dot(st.stt.loaded, "model đã nạp", "chưa nạp")}</h2>
+      <h2>🎙 Nhận dạng giọng nói (STT) ${dot(st.stt.loaded, st.stt.engine === "qwen3_mlx" ? "sẵn sàng, nạp khi dùng" : "model đã nạp", "chưa nạp")}</h2>
       ${!st.stt.loaded && st.stt.error ? `<p class="small error">Lý do: ${esc(st.stt.error)}</p>` : ""}
       <div class="row">
         <label class="small muted">Engine</label>
         <select id="stt-engine">
           <option value="none" ${st.stt.engine === "none" ? "selected" : ""}>none (tắt)</option>
           <option value="sherpa" ${st.stt.engine === "sherpa" ? "selected" : ""}>sherpa-onnx Zipformer-vi</option>
+          <option value="qwen3_mlx" ${st.stt.engine === "qwen3_mlx" ? "selected" : ""}>Qwen3-ASR-1.7B (Mac MLX)</option>
         </select>
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
       </div>
       <div class="row">
-        <label class="small muted">Model</label>
+        <label class="small muted">Tệp ngữ cảnh Qwen (.md)</label>
+        <input id="stt-qwen-context" value="${esc(st.stt.qwen_context_file || "")}" placeholder="data/qwen3-asr-context.md" style="width:300px">
+        <span class="small muted">Đọc lại khi nhận diện; model nạp ở lần dùng đầu.</span>
+      </div>
+      <div class="row">
+        <label class="small muted">Model Sherpa</label>
         <select id="stt-model-dir" style="min-width:220px">
           ${st.stt.models.length
             ? st.stt.models.map((m) => `<option value="${esc(m.dir)}" ${m.dir === st.stt.model_dir_rel ? "selected" : ""}>${esc(m.dir)} (${m.size_mb} MB${m.hotwords ? ", hotwords" : ""})</option>`).join("")
@@ -417,6 +431,7 @@ async function renderAssistant() {
         <label class="small muted">Câu thử</label>
         <input id="stt-test-text" value="Hãy hẹn giờ 15 phút nữa nhắc tôi tắt bếp." style="width:300px">
         <button class="small-btn" onclick="testStt()">▶ Thử STT</button>
+        <button class="small-btn" id="stt-mic-btn" onclick="toggleSttMic()">🎤 Thử bằng micro</button>
       </div>
       <div id="stt-test-out" class="console-out muted small"></div>
       ${!st.stt.loaded ? `<p class="small">Cài đặt: <code>pip install -r optional-requirements.txt</code>, tải model Zipformer-vi (mục Vietnamese) từ
@@ -466,6 +481,7 @@ window.saveAssistantConfig = async () => {
     llm_ollama_url: engine === "openai" ? ($("#llm-ollama-url")?.value.trim() || null) : null,
     stt_engine: $("#stt-engine")?.value || null,
     stt_model_dir: $("#stt-model-dir")?.value || null,
+    stt_qwen_context_file: $("#stt-qwen-context")?.value ?? null,
     tts_engine: $("#tts-engine")?.value || null,
     tts_http_url: $("#tts-url")?.value ?? null,
     tts_model: $("#tts-model")?.value || null,
@@ -496,6 +512,93 @@ window.testStt = async () => {
     out.textContent = `Nghe: ${res.transcript}\n` +
       `STT ${res.stt_ms} ms · piper ${res.synth_ms} ms · ${res.model_dir}`;
   } catch (e) { out.textContent = "Lỗi: " + e.message; }
+};
+
+function pcm16At16k(chunks, sourceRate) {
+  const length = chunks.reduce((n, c) => n + c.length, 0);
+  const source = new Float32Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { source.set(chunk, offset); offset += chunk.length; }
+  const count = Math.floor(length * 16000 / sourceRate);
+  const bytes = new ArrayBuffer(count * 2);
+  const view = new DataView(bytes);
+  for (let i = 0; i < count; i++) {
+    const pos = i * sourceRate / 16000;
+    const lo = Math.floor(pos), hi = Math.min(lo + 1, length - 1);
+    const sample = Math.max(-1, Math.min(1, source[lo] + (source[hi] - source[lo]) * (pos - lo)));
+    view.setInt16(i * 2, sample < 0 ? sample * 32768 : sample * 32767, true);
+  }
+  return bytes;
+}
+
+async function stopSttMic(discard = false) {
+  sttMicGeneration++;
+  const rec = sttMic;
+  sttMic = null;
+  if (!rec) return;
+  clearTimeout(rec.timer);
+  rec.processor.onaudioprocess = null;
+  rec.source.disconnect();
+  rec.processor.disconnect();
+  rec.stream.getTracks().forEach((track) => track.stop());
+  await rec.context.close().catch(() => {});
+  const button = $("#stt-mic-btn"), out = $("#stt-test-out");
+  if (button) button.textContent = "🎤 Thử bằng micro";
+  if (discard || !out) return;
+  out.textContent = "Đang nhận diện…";
+  try {
+    const pcm = pcm16At16k(rec.chunks, rec.rate);
+    const res = await api("/assistant/test-stt-mic", {
+      method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: pcm,
+    });
+    out.textContent = res.transcript ? `Nghe: ${res.transcript}\nSTT ${res.stt_ms} ms` : (res.message || "Không nghe rõ, hãy thử lại.");
+  } catch (e) { out.textContent = "Lỗi: " + e.message; }
+}
+
+window.toggleSttMic = async () => {
+  if (sttMic) return stopSttMic();
+  const out = $("#stt-test-out"), button = $("#stt-mic-btn");
+  if ($("#stt-engine").value !== sttSavedEngine ||
+      (sttSavedEngine === "sherpa" && $("#stt-model-dir").value !== sttSavedModel)) {
+    out.textContent = "Hãy lưu engine và model STT đã chọn trước khi thử micro.";
+    return;
+  }
+  const generation = ++sttMicGeneration;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    out.textContent = "Trình duyệt cần HTTPS hoặc localhost để dùng micro.";
+    return;
+  }
+  let stream, context;
+  try {
+    button.disabled = true;
+    out.textContent = "Đang xin quyền micro…";
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true } });
+    if (generation !== sttMicGeneration || currentTab !== "assistant") {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    context = new (window.AudioContext || window.webkitAudioContext)();
+    await context.resume();
+    if (generation !== sttMicGeneration || currentTab !== "assistant") {
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+      return;
+    }
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(4096, 1, 1);
+    const rec = { stream, context, source, processor, rate: context.sampleRate, chunks: [] };
+    processor.onaudioprocess = (ev) => rec.chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    source.connect(processor);
+    processor.connect(context.destination);
+    sttMic = rec;
+    rec.timer = setTimeout(() => stopSttMic(), 19500);
+    button.textContent = "⏹ Dừng và nhận diện";
+    out.textContent = "Đang nghe… Nhấn Dừng khi nói xong (tối đa 20 giây).";
+  } catch (e) {
+    if (stream) stream.getTracks().forEach((track) => track.stop());
+    if (context) await context.close().catch(() => {});
+    out.textContent = "Không mở được micro: " + e.message;
+  } finally { if (button) button.disabled = false; }
 };
 
 window.testLlm = async () => {
@@ -677,6 +780,9 @@ async function renderDevices() {
   const items = [];
   for (const d of devices) for (const e of d.entities) {
     if (e.entity_type === "sensor" && meterByDev.has(d.id)) continue;
+    // TV vision is a camera-derived state, not another physical device.
+    const details = safeJson(e.driver_data);
+    if (e.entity_type === "sensor" && details.vision && details.model === "TiVi") continue;
     items.push([e, d]);
   }
   const byRoom = new Map();

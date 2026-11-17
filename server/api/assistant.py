@@ -120,9 +120,10 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "models": _stt_models(),
             "has_tokens": (model_dir / "tokens.txt").exists(),
             "onnx_files": onnx_files,
-            "loaded": type(pipeline.stt).__name__ == "SttSherpa",
+            "loaded": type(pipeline.stt).__name__ in ("SttSherpa", "SttQwen"),
             "available": _sherpa_importable(),
-            "error": None if type(pipeline.stt).__name__ == "SttSherpa" else _stt_error_hint(cfg, model_dir),
+            "error": None if type(pipeline.stt).__name__ in ("SttSherpa", "SttQwen") else _stt_error_hint(cfg, model_dir),
+            "qwen_context_file": cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"),
         },
         "tts": {
             "engine": cfg.get("tts.engine"),
@@ -146,6 +147,8 @@ def _sherpa_importable() -> bool:
 def _stt_error_hint(cfg, model_dir) -> str:
     if cfg.get("stt.engine") == "none":
         return "Engine đang là 'none'"
+    if cfg.get("stt.engine") == "qwen3_mlx":
+        return "Chưa cài hoặc không nạp được Qwen3-ASR-1.7B"
     if not _sherpa_importable():
         return "Chưa cài module sherpa-onnx: pip install -r optional-requirements.txt"
     if not (model_dir / "tokens.txt").exists():
@@ -170,8 +173,9 @@ class AssistantConfigIn(BaseModel):
     llm_ollama_url: str | None = None  # URL Ollama khi fallback (rỗng = 127.0.0.1:11434)
     llm_model: str | None = None
     llm_keep_alive: bool | None = None  # True = giữ model trong VRAM luôn
-    stt_engine: str | None = None  # none | sherpa
+    stt_engine: str | None = None  # none | sherpa | qwen3_mlx
     stt_model_dir: str | None = None  # thư mục model trong data/models (đổi là nạp lại ngay)
+    stt_qwen_context_file: str | None = None
     tts_engine: str | None = None  # none | http
     tts_http_url: str | None = None
     tts_model: str | None = None
@@ -182,6 +186,13 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
     app = request.app.state
     cfg = app.cfg
     changed = []
+    old_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
+    if body.stt_engine == "qwen3_mlx":
+        from server.voice.stt import SttQwen
+        try:
+            SttQwen(cfg)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if body.llm_engine in ("ollama", "openai") and body.llm_engine != cfg.get("llm.engine"):
         new_engine = body.llm_engine
@@ -234,7 +245,7 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         set_yaml_value(cfg.path, "llm", "keep_alive", value)
         changed.append(
             f"llm.keep_alive = {value} ({'giữ trong VRAM luôn' if body.llm_keep_alive else 'tự dỡ sau 5 phút idle'})")
-    if body.stt_engine in ("none", "sherpa"):
+    if body.stt_engine in ("none", "sherpa", "qwen3_mlx"):
         cfg._data.setdefault("stt", {})["engine"] = body.stt_engine
         set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)
         changed.append(f"stt.engine = {body.stt_engine}")
@@ -245,6 +256,11 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
             changed.append(f"stt.model_dir = {body.stt_model_dir} (nạp lại ngay)")
         else:
             changed.append(f"bỏ qua stt.model_dir — không có model trong {body.stt_model_dir}")
+    if body.stt_qwen_context_file is not None:
+        value = body.stt_qwen_context_file.strip()
+        cfg._data.setdefault("stt", {})["qwen_context_file"] = value
+        set_yaml_value(cfg.path, "stt", "qwen_context_file", value)
+        changed.append(f"stt.qwen_context_file = {value}")
     if body.tts_engine in ("none", "http"):
         cfg._data.setdefault("tts", {})["engine"] = body.tts_engine
         set_yaml_value(cfg.path, "tts", "engine", body.tts_engine)
@@ -259,13 +275,15 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         changed.append(f"tts.model = {body.tts_model}")
 
     # rebuild the engines the pipeline uses (fall back to "none" on bad settings)
-    try:
-        app.pipeline.stt = make_stt(cfg)
-    except Exception as exc:
-        from server.voice.stt import SttNone
-
-        app.pipeline.stt = SttNone()
-        changed.append(f"stt load lỗi: {exc}")
+    new_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
+    if old_stt != new_stt:
+        try:
+            previous = app.pipeline.stt
+            app.pipeline.stt = make_stt(cfg)
+            if hasattr(previous, "close"):
+                previous.close()
+        except Exception as exc:
+            changed.append(f"stt load lỗi: {exc}; giữ engine đang chạy")
     try:
         app.pipeline.tts = make_tts(cfg)
     except Exception:
@@ -366,6 +384,28 @@ def test_stt(request: Request, body: SttTestIn, _: None = Depends(require_admin)
         "stt_ms": stt_ms,
         "model_dir": str(request.app.state.cfg.get("stt.model_dir", "")),
     }
+
+
+@router.post("/assistant/test-stt-mic")
+async def test_stt_mic(request: Request, _: None = Depends(require_admin)):
+    """Transcribe 16 kHz mono PCM16 only; never execute the transcript."""
+    max_bytes = 16000 * 2 * 20
+    pcm = bytearray()
+    async for chunk in request.stream():
+        pcm.extend(chunk)
+        if len(pcm) > max_bytes:
+            raise HTTPException(status_code=413, detail="Bản ghi quá 20 giây")
+    if not pcm or len(pcm) % 2:
+        raise HTTPException(status_code=400, detail="Âm thanh PCM16 không hợp lệ")
+    from server.voice.pipeline import _has_speech_energy
+    if not _has_speech_energy(bytes(pcm)):
+        return {"transcript": "", "stt_ms": 0, "message": "Không nghe thấy giọng nói"}
+    start = time.perf_counter()
+    try:
+        transcript = await asyncio.to_thread(request.app.state.pipeline.stt.transcribe, bytes(pcm))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"STT lỗi: {exc}") from exc
+    return {"transcript": transcript, "stt_ms": int((time.perf_counter() - start) * 1000)}
 
 
 class AnnounceIn(BaseModel):

@@ -496,7 +496,7 @@ def _cast_desc(ip: str) -> dict:
     import html
 
     out = {}
-    for field in ("friendlyName", "manufacturer", "modelName"):
+    for field in ("friendlyName", "manufacturer", "modelName", "UDN"):
         m = re.search(rf"<{field}>(.*?)</{field}>", text, re.S)
         if m and m.group(1).strip():
             out[field] = html.unescape(m.group(1)).strip()
@@ -580,11 +580,7 @@ def scan_androidtv(db: Database, cfg: Config) -> None:
         cand["server"] = server
         if row["mac"]:
             cand["mac"] = row["mac"]
-        # đuôi UUID của Cast chính là MAC (uuid:…-eec6531b39d6) — IP đổi vẫn khớp
-        tail = re.search(r"([0-9A-Fa-f]{12})$", raw.get("usn") or "")
-        if tail:
-            h = tail.group(1)
-            cand["mac"] = ":".join(h[i:i + 2] for i in range(0, 12, 2)).upper()
+        cand["usn"] = raw.get("usn") or ""
 
     def probe(ip: str) -> dict:
         info = dict(candidates[ip])
@@ -605,14 +601,20 @@ def scan_androidtv(db: Database, cfg: Config) -> None:
             continue  # Chromecast thường / loa Google — không phải TV
         name = info.get("friendlyName") or (f"TV {brand}" if brand else f"TV Android {ip}")
         mac = info.get("mac", "")
+        # The Cast UUID suffix is a stable service identifier, not necessarily
+        # the network MAC. Retain the old identifier format for existing rows.
+        cast_uuid = info.get("UDN") or info.get("usn") or ""
+        match = re.search(r"(?:uuid:)[0-9a-fA-F-]*?([0-9a-fA-F]{12})(?:::|$)", cast_uuid, re.I)
+        suffix = match.group(1) if match else ""
+        cast_id = ":".join(suffix[i:i + 2] for i in range(0, 12, 2)).upper() if suffix else ""
         upsert(
-            db, "androidtv", mac or f"androidtv:{ip}",
+            db, "androidtv", cast_id or mac or f"androidtv:{ip}",
             ip=ip, mac=mac, name=name, brand=brand or "Android TV",
             supported=1 if info["remote_port"] else 0,
             raw={
                 "ip": ip, "manufacturer": info.get("manufacturer", ""),
                 "model": info.get("modelName", ""), "friendly": info.get("friendlyName", ""),
-                "remote_port": info["remote_port"], "mdns": info.get("mdns"),
+                "remote_port": info["remote_port"], "mdns": info.get("mdns"), "cast_uuid": cast_uuid,
             },
         )
 
