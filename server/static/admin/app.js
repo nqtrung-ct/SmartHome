@@ -449,17 +449,32 @@ async function renderAssistant() {
           <option value="http" ${st.tts.engine === "http" ? "selected" : ""}>http (POST text → wav)</option>
         </select>
         <input id="tts-url" value="${esc(st.tts.http_url)}" placeholder="http://127.0.0.1:8125/tts" style="width:230px">
-        <label class="small muted">Giọng đọc</label>
-        <select id="tts-model">
+        <label class="small muted">Model</label>
+        <select id="tts-model" onchange="toggleTtsVoice(this.value)">
           <option value="piper" ${st.tts.model === "piper" ? "selected" : ""}>Piper (cũ)</option>
-          <option value="vieneu" ${st.tts.model === "vieneu" ? "selected" : ""}>VieNeu v3 Turbo — Mai Anh (nữ)</option>
+          <option value="vieneu" ${st.tts.model === "vieneu" ? "selected" : ""}>VieNeu v3 Turbo</option>
         </select>
+        <label class="small muted">Giọng đọc</label>
+        ${["piper", "vieneu"].map((model) => {
+          const voices = st.tts.voices?.[model] || [];
+          const saved = st.tts[`${model}_voice`] || "";
+          return `<select id="tts-voice-${model}" style="display:${st.tts.model === model ? "" : "none"};max-width:280px" ${voices.length ? "" : "disabled"}>
+            ${saved && !voices.some((v) => v.id === saved) ? `<option value="${esc(saved)}">${esc(saved)} (đang lưu)</option>` : ""}
+            <option value="" ${!saved ? "selected" : ""}>Mặc định</option>
+            ${voices.map((v) => `<option value="${esc(v.id)}" ${v.id === saved ? "selected" : ""}>${esc(v.label)}</option>`).join("")}
+          </select>`;
+        }).join("")}
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
         <button class="small-btn" onclick="testTts()">▶ Phát thử</button>
       </div>
+      ${st.tts.voices_error ? `<p class="small error">${esc(st.tts.voices_error)}</p>` : ""}
       <div id="tts-test-out" class="console-out muted small"></div>
     </div>`;
 }
+
+window.toggleTtsVoice = (model) => {
+  for (const name of ["piper", "vieneu"]) $("#tts-voice-" + name).style.display = name === model ? "" : "none";
+};
 
 window.toggleLlmEngine = (engine) => {
   // xem trước fields của engine mới ngay khi đổi select (chưa lưu)
@@ -485,6 +500,8 @@ window.saveAssistantConfig = async () => {
     tts_engine: $("#tts-engine")?.value || null,
     tts_http_url: $("#tts-url")?.value ?? null,
     tts_model: $("#tts-model")?.value || null,
+    tts_piper_voice: $("#tts-voice-piper")?.disabled ? null : $("#tts-voice-piper")?.value,
+    tts_vieneu_voice: $("#tts-voice-vieneu")?.disabled ? null : $("#tts-voice-vieneu")?.value,
   };
   try {
     const res = await api("/assistant/config", { method: "POST", body: JSON.stringify(body) });

@@ -88,7 +88,11 @@ class VoicePipeline:
         """Audio câu ACK (voice.ack_text) — synthesize đúng 1 lần rồi dùng lại."""
         if self._ack_audio is None:
             try:
-                self._ack_audio = await self.tts_audio(self.cfg.get("voice.ack_text", "Đang kiểm tra"))
+                engine = self.tts
+                audio = await self.tts_audio(self.cfg.get("voice.ack_text", "Đang kiểm tra"))
+                if engine is not self.tts:
+                    return await self.ack_audio()
+                self._ack_audio = audio
             except Exception:
                 return None
         return self._ack_audio

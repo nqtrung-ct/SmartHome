@@ -6,6 +6,7 @@ import json
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -71,6 +72,20 @@ def _stt_models() -> list[dict]:
     return out
 
 
+def _tts_voices(cfg):
+    url = str(cfg.get("tts.http_url", ""))
+    try:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            return {}, "Chưa cấu hình dịch vụ TTS"
+        endpoint = urlunsplit((parts.scheme, parts.netloc, parts.path.rsplit("/", 1)[0] + "/voices", "", ""))
+        response = httpx.get(endpoint, timeout=3)
+        response.raise_for_status()
+        return response.json(), None
+    except Exception:
+        return {}, "Không lấy được danh sách giọng từ dịch vụ TTS"
+
+
 @router.get("/assistant/status")
 def assistant_status(request: Request, _: None = Depends(require_admin)):
     app = request.app.state
@@ -95,6 +110,7 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
         model_dir = Path.cwd() / model_dir
     onnx_files = sorted(f.name for f in model_dir.glob("*.onnx")) if model_dir.exists() else []
 
+    tts_voices, tts_voices_error = _tts_voices(cfg)
     return {
         "llm": {
             "engine": cfg.get("llm.engine"),
@@ -128,6 +144,10 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
         "tts": {
             "engine": cfg.get("tts.engine"),
             "model": cfg.get("tts.model", "piper"),
+            "voices": tts_voices,
+            "voices_error": tts_voices_error,
+            "piper_voice": cfg.get("tts.piper_voice", ""),
+            "vieneu_voice": cfg.get("tts.vieneu_voice", "Mai Anh"),
             "http_url": cfg.get("tts.http_url", ""),
             "loaded": type(pipeline.tts).__name__ == "TtsHttp",
             "error": None if type(pipeline.tts).__name__ == "TtsHttp" else _tts_error_hint(cfg),
@@ -179,6 +199,8 @@ class AssistantConfigIn(BaseModel):
     tts_engine: str | None = None  # none | http
     tts_http_url: str | None = None
     tts_model: str | None = None
+    tts_piper_voice: str | None = None
+    tts_vieneu_voice: str | None = None
 
 
 @router.post("/assistant/config")
@@ -273,6 +295,12 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         cfg._data.setdefault("tts", {})["model"] = body.tts_model
         set_yaml_value(cfg.path, "tts", "model", body.tts_model)
         changed.append(f"tts.model = {body.tts_model}")
+    for model in ("piper", "vieneu"):
+        value = getattr(body, f"tts_{model}_voice")
+        if value is not None:
+            cfg._data.setdefault("tts", {})[f"{model}_voice"] = value
+            set_yaml_value(cfg.path, "tts", f"{model}_voice", value)
+            changed.append(f"tts.{model}_voice = {value}")
 
     # rebuild the engines the pipeline uses (fall back to "none" on bad settings)
     new_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
@@ -290,6 +318,9 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         from server.voice.tts import TtsNone
 
         app.pipeline.tts = TtsNone()
+
+    # ACK phải được tổng hợp lại sau khi thay engine/giọng.
+    app.pipeline._ack_audio = None
 
     log_event(app.db, "assistant", "Cấu hình trợ lý: " + ("; ".join(changed) or "không đổi"))
     if body.llm_keep_alive is True:

@@ -109,6 +109,7 @@ class TtsHttp:
         self.cfg = cfg
         self.url = cfg.get("tts.http_url", "")
         self.model = cfg.get("tts.model", "piper")
+        self.voice = cfg.get(f"tts.{self.model}_voice", "")
         # length_scale piper: càng lớn đọc càng chậm (1.0 = tốc gốc)
         self.length_scale = cfg.get("tts.length_scale")
         # khoảng lặng giữa các DÒNG (giây) — bản tin nhiều tin đọc dễ nghe hơn
@@ -119,6 +120,8 @@ class TtsHttp:
         payload = {"text": text}
         if self.model == "vieneu":
             payload["model"] = "vieneu"
+        if self.voice:
+            payload["voice"] = self.voice
         if self.length_scale:
             payload["length_scale"] = float(self.length_scale)
         try:

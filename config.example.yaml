@@ -27,6 +27,9 @@ stt:                        # speech-to-text
 tts:                        # text-to-speech
   engine: none              # "none" | "http"
   http_url: ""              # engine "http": POST {"text": "..."} -> audio/wav bytes
+  model: piper              # piper | vieneu
+  piper_voice: ""           # rỗng = giọng Piper mặc định
+  vieneu_voice: "Mai Anh"   # chọn trong tab Trợ lý
 
 llm:                        # command understanding (tool calls)
   engine: ollama            # "ollama" (local, miễn phí) | "openai" (dịch vụ đám mây)

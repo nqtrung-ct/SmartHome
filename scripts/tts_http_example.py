@@ -22,6 +22,8 @@ Lần đầu cần mạng để tải model; mặc định dùng giọng nữ Ma
 from __future__ import annotations
 
 import io
+import importlib.util
+import json
 import os
 import sys
 import threading
@@ -41,9 +43,45 @@ LENGTH_SCALE = float(os.environ.get("TTS_LENGTH_SCALE", "1.15"))
 _voice = None  # piper.PiperVoice | None (None = placeholder silence)
 _vieneu = None
 _vieneu_lock = threading.Lock()
+_piper_voices = {}
+_piper_lock = threading.Lock()
 
 
-def synthesize_vieneu(text: str) -> bytes:
+def available_voices() -> dict:
+    result = {"vieneu": [], "piper": []}
+    spec = importlib.util.find_spec("vieneu")
+    if spec and spec.submodule_search_locations:
+        path = Path(next(iter(spec.submodule_search_locations))) / "assets/voices_v3_turbo.json"
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            result["vieneu"] = [{"id": name, "label": name + (" — " + v["description"] if v.get("description") else "")}
+                                for name, v in data.get("presets", {}).items()]
+    root = Path("data/models/tts")
+    for model in sorted(root.glob("**/*.onnx")):
+        config_path = model.with_suffix(".onnx.json")
+        if not config_path.is_file():
+            continue
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        model_id = model.relative_to(root).as_posix()
+        name = model.parent.name if model.stem == "model" else model.stem
+        speakers = data.get("speaker_id_map") or {}
+        if speakers:
+            result["piper"].extend({"id": f"{model_id}#{speaker_id}", "label": f"{name} — {speaker}"}
+                                   for speaker, speaker_id in speakers.items())
+        else:
+            result["piper"].append({"id": model_id, "label": name})
+    return result
+
+
+@app.get("/voices")
+def voices():
+    return available_voices()
+
+
+def synthesize_vieneu(text: str, voice: str = "Mai Anh") -> bytes:
     """Nạp v3 Turbo khi dùng lần đầu; giữ khóa vì backend CPU chạy một luồng."""
     global _vieneu
     with _vieneu_lock:
@@ -82,7 +120,7 @@ def synthesize_vieneu(text: str) -> bytes:
                 OnnxV3LiteEngine._fetch = original_fetch
         import numpy as np
 
-        audio = np.asarray(_vieneu.infer(text, voice="Mai Anh"), dtype=np.float32).reshape(-1)
+        audio = np.asarray(_vieneu.infer(text, voice=voice), dtype=np.float32).reshape(-1)
         pcm = (np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes()
         return pcm_to_wav(pcm, 48000)
 
@@ -106,20 +144,34 @@ def _load_piper():
         return None
 
 
-def synthesize(text: str, sample_rate: int = 22050, length_scale: float | None = None) -> bytes:
+def synthesize(text: str, sample_rate: int = 22050, length_scale: float | None = None, voice: str = "") -> bytes:
     """PCM16 mono WAV của câu text. length_scale càng lớn đọc càng chậm."""
-    if _voice is not None:
+    selected, speaker_id = _voice, None
+    if voice:
+        if voice not in {v["id"] for v in available_voices()["piper"]}:
+            raise ValueError("Giọng Piper không tồn tại")
+        model_id, sep, speaker = voice.partition("#")
+        speaker_id = int(speaker) if sep else None
+        with _piper_lock:
+            if model_id not in _piper_voices:
+                import piper
+                model = Path("data/models/tts") / model_id
+                _piper_voices[model_id] = piper.PiperVoice.load(str(model), config_path=str(model.with_suffix(".onnx.json")))
+            selected = _piper_voices[model_id]
+    if selected is not None:
         scale = length_scale if length_scale else LENGTH_SCALE
         # piper >= 1.3: synthesize() yields AudioChunk per sentence
         try:
             from piper import PiperSynthesisConfig
 
-            opts = PiperSynthesisConfig(length_scale=scale)
-            chunks = _voice.synthesize(text, opts)
+            opts = PiperSynthesisConfig(length_scale=scale, speaker_id=speaker_id)
+            chunks = selected.synthesize(text, opts)
         except (ImportError, TypeError):
-            chunks = _voice.synthesize(text)
+            if speaker_id is not None:
+                raise RuntimeError("Phiên bản Piper không hỗ trợ chọn speaker")
+            chunks = selected.synthesize(text)
         pcm = b"".join(chunk.audio_int16_bytes for chunk in chunks)
-        return pcm_to_wav(pcm, _voice.config.sample_rate)
+        return pcm_to_wav(pcm, selected.config.sample_rate)
     # placeholder: silence proportional to text length
     duration = min(1.0 + len(text) * 0.04, 20.0)
     return pcm_to_wav(b"\x00\x00" * int(sample_rate * duration), sample_rate)
@@ -139,20 +191,25 @@ class TtsRequest(BaseModel):
     text: str
     length_scale: float | None = None  # None = dùng mặc định LENGTH_SCALE của sidecar
     model: str = "piper"
+    voice: str = ""
 
 
 @app.post("/tts")
 def tts(req: TtsRequest) -> Response:
     if req.model == "vieneu":
         try:
-            audio = synthesize_vieneu(req.text)
+            audio = synthesize_vieneu(req.text, req.voice or "Mai Anh")
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"VieNeu chưa sẵn sàng: {exc}") from exc
         return Response(content=audio, media_type="audio/wav", headers={"X-TTS-Model": "vieneu"})
     if req.model != "piper":
         raise HTTPException(status_code=400, detail="Model TTS không được hỗ trợ")
     scale = req.length_scale if req.length_scale else LENGTH_SCALE
-    return Response(content=synthesize(req.text, length_scale=scale), media_type="audio/wav", headers={"X-TTS-Model": "piper"})
+    try:
+        audio = synthesize(req.text, length_scale=scale, voice=req.voice)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=audio, media_type="audio/wav", headers={"X-TTS-Model": "piper"})
 
 
 if __name__ == "__main__":
