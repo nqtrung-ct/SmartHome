@@ -97,6 +97,14 @@ CREATE TABLE IF NOT EXISTS events(
   level TEXT NOT NULL DEFAULT 'info',
   message TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS stt_recordings(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  source TEXT NOT NULL,
+  engine TEXT NOT NULL,
+  transcript TEXT NOT NULL,
+  pcm BLOB NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_entities_device ON entities(device_id);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE TABLE IF NOT EXISTS device_poll_attempts(
@@ -182,6 +190,17 @@ def log_event(db: Database, source: str, message: str, level: str = "info") -> N
         "INSERT INTO events(ts, source, level, message) VALUES (?,?,?,?)",
         (now_iso(), source, level, message),
     )
+
+
+def save_stt_recording(db: Database, source: str, engine: str, transcript: str, pcm: bytes) -> None:
+    """Keep the five most recent completed STT inputs, including empty results."""
+    from server.util import now_iso
+
+    with db.conn() as c:
+        c.execute("INSERT INTO stt_recordings(ts, source, engine, transcript, pcm) VALUES (?,?,?,?,?)",
+                  (now_iso(), source, engine, transcript, pcm))
+        c.execute("DELETE FROM stt_recordings WHERE id NOT IN "
+                  "(SELECT id FROM stt_recordings ORDER BY id DESC LIMIT 5)")
 
 
 def cleanup_old_rows(db: Database, days: int) -> dict[str, int]:

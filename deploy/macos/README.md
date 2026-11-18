@@ -71,15 +71,6 @@ PTZ cần bộ thư viện NetSDK Mach-O ARM64 trong SmartPSS ARM64 của Dahua;
 không dùng DLL Windows. Đường dẫn mặc định:
 `~/Library/SmartHome/SmartPSS.app/Contents/Frameworks`.
 
-Qwen3-ASR-1.7B trên Apple Silicon dùng môi trường Python riêng tại
-`data/qwen3-asr-venv` (cài `mlx-audio`) và model MLX 8-bit tại
-`data/models/qwen3-asr-1.7b-8bit`. Tab Trợ lý cho phép chọn engine
-`Qwen3-ASR-1.7B (Mac MLX)`, giữ model Sherpa cũ để chuyển lại. Model nạp khi
-nhận yêu cầu đầu tiên và chạy ở tiến trình riêng. Tệp ngữ cảnh mặc định là
-`data/qwen3-asr-context.md`; sao chép từ `qwen3-asr-context.example.md` và sửa
-tên riêng/từ vựng nhà bạn. Nội dung được đọc lại mỗi lần nhận diện và chỉ là
-gợi ý, không bảo đảm model nghe đúng.
-
 `model-build.Dockerfile` lưu công thức xuất YOLOv9-t 320px đã dùng khi triển khai.
 Đặt mã nguồn YOLOv9 ở `model-build-src/yolov9/` và trọng số
 `model-build-src/yolov9-t-converted.pt` trong build context. Công thức dùng wheel

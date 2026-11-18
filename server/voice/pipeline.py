@@ -5,7 +5,7 @@ import asyncio
 
 from server.config import Config
 from server.core.text_command import handle_command
-from server.db import Database, log_event
+from server.db import Database, log_event, save_stt_recording
 from server.voice.stt import SttNone, make_stt
 from server.voice.tts import TtsNone, make_tts
 
@@ -61,6 +61,10 @@ class VoicePipeline:
             transcript = await asyncio.to_thread(self.stt.transcribe, pcm16)
         except Exception as exc:
             return {"transcript": "", "reply": str(exc), "actions": [], "engine": "stt-error"}
+        try:
+            save_stt_recording(self.db, "voice", str(self.cfg.get("stt.engine", "none")), transcript, pcm16)
+        except Exception as exc:
+            log_event(self.db, "stt", f"Không lưu được bản ghi STT: {exc}", level="warn")
         if not transcript.strip():
             return {
                 "transcript": "",

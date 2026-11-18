@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import io
+import wave
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from server.api.deps import require_admin
@@ -157,3 +159,24 @@ def events(request: Request, limit: int = 200, date: str = "", _: None = Depends
             return [dict(r) for r in rows]
     rows = db.query("SELECT * FROM events ORDER BY id DESC LIMIT ?", (min(limit, 1000),))
     return [dict(r) for r in rows]
+
+
+@router.get("/stt-recordings")
+def stt_recordings(request: Request, _: None = Depends(require_admin)):
+    rows = request.app.state.db.query(
+        "SELECT id, ts, source, engine, transcript FROM stt_recordings ORDER BY id DESC LIMIT 5")
+    return [dict(r) for r in rows]
+
+
+@router.get("/stt-recordings/{recording_id}/audio")
+def stt_recording_audio(recording_id: int, request: Request, _: None = Depends(require_admin)):
+    row = request.app.state.db.one("SELECT pcm FROM stt_recordings WHERE id=?", (recording_id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Bản ghi không còn trong 5 lệnh gần nhất")
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(row["pcm"])
+    return Response(output.getvalue(), media_type="audio/wav", headers={"Cache-Control": "no-store"})

@@ -6,6 +6,7 @@ import base64
 import json
 import queue
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -143,17 +144,60 @@ class SttSherpa:
 
 
 class SttQwen:
-    """Qwen3-ASR in a separate MLX environment, loaded on first use."""
+    """Qwen3-ASR in a separate Windows CUDA environment."""
 
     def __init__(self, cfg: Config):
-        self.model = Path(cfg.get("stt.qwen_model_dir", "data/models/qwen3-asr-1.7b-8bit"))
-        self.python = Path(cfg.get("stt.qwen_python", "data/qwen3-asr-venv/bin/python"))
+        self.model = Path(cfg.get("stt.qwen_torch_model_dir", "data/models/Qwen3-ASR-1.7B"))
+        self.python = Path(cfg.get("stt.qwen_torch_python", "data/qwen3-asr-venv/Scripts/python.exe"))
         self.context = Path(cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
         if not self.python.is_file() or not (self.model / "config.json").is_file() or not list(self.model.glob("*.safetensors")):
             raise RuntimeError("Chưa cài môi trường hoặc model Qwen3-ASR-1.7B trên máy này")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._proc = None
         self._lines = None
+        self._keep_alive = False
+        self._idle_timer = None
+        self._timer_generation = 0
+        self._closed = False
+
+    def set_keep_alive(self, enabled: bool):
+        with self._lock:
+            if self._closed:
+                return
+            self._keep_alive = enabled
+            self._cancel_idle_timer()
+            if enabled:
+                threading.Thread(target=self._warmup, daemon=True, name="qwen3-stt-warmup").start()
+            elif self._proc:
+                self._schedule_idle_stop()
+
+    def _warmup(self):
+        with self._lock:
+            if self._closed or not self._keep_alive:
+                return
+            try:
+                self._start()
+            except Exception:
+                # A later recognition attempt may retry and report the error.
+                pass
+
+    def _cancel_idle_timer(self):
+        self._timer_generation += 1
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+    def _schedule_idle_stop(self):
+        self._cancel_idle_timer()
+        generation = self._timer_generation
+        def stop_if_idle():
+            with self._lock:
+                if generation == self._timer_generation and not self._keep_alive and not self._closed:
+                    self._idle_timer = None
+                    self._stop_worker()
+        self._idle_timer = threading.Timer(300, stop_if_idle)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
 
     def _start(self):
         if self._proc and self._proc.poll() is None:
@@ -162,6 +206,7 @@ class SttQwen:
         self._proc = subprocess.Popen(
             [str(self.python.absolute()), "-u", str(Path(__file__).with_name("qwen3_worker.py")), str(self.model.resolve())],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
         atexit.register(self.close)
         proc, lines = self._proc, self._lines
@@ -171,17 +216,17 @@ class SttQwen:
             lines.put(None)
         threading.Thread(target=read_lines, daemon=True, name="qwen3-stt-output").start()
         if not self._read(180).get("ready"):
-            self.close()
+            self._stop_worker()
             raise RuntimeError("Không nạp được model Qwen3-ASR")
 
     def _read(self, timeout):
         try:
             line = self._lines.get(timeout=timeout)
         except queue.Empty:
-            self.close()
+            self._stop_worker()
             raise RuntimeError("Qwen3-ASR không phản hồi kịp") from None
         if line is None:
-            self.close()
+            self._stop_worker()
             raise RuntimeError("Tiến trình Qwen3-ASR đã dừng")
         return json.loads(line)
 
@@ -189,21 +234,33 @@ class SttQwen:
         if not pcm16:
             return ""
         with self._lock:
-            self._start()
-            context = self.context.read_text(encoding="utf-8")[:8000] if self.context.is_file() else ""
-            request = {"audio": base64.b64encode(pcm16).decode("ascii"), "context": context}
+            if self._closed:
+                raise RuntimeError("Qwen3-ASR đã đóng")
+            self._cancel_idle_timer()
             try:
+                self._start()
+                context = self.context.read_text(encoding="utf-8")[:8000] if self.context.is_file() else ""
+                request = {"audio": base64.b64encode(pcm16).decode("ascii"), "context": context}
                 self._proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
                 self._proc.stdin.flush()
                 response = self._read(120)
             except (BrokenPipeError, OSError):
-                self.close()
+                self._stop_worker()
                 raise RuntimeError("Mất kết nối tới Qwen3-ASR") from None
+            finally:
+                if not self._keep_alive and self._proc:
+                    self._schedule_idle_stop()
             if response.get("error"):
                 raise RuntimeError(response["error"])
             return response.get("text", "").strip()
 
     def close(self):
+        with self._lock:
+            self._closed = True
+            self._cancel_idle_timer()
+            self._stop_worker()
+
+    def _stop_worker(self):
         atexit.unregister(self.close)
         proc, self._proc = self._proc, None
         if proc and proc.poll() is None:
@@ -223,6 +280,8 @@ def make_stt(cfg: Config):
     engine = cfg.get("stt.engine", "none")
     if engine == "sherpa":
         return SttSherpa(cfg)
-    if engine == "qwen3_mlx":
-        return SttQwen(cfg)
+    if engine == "qwen3_torch":
+        stt = SttQwen(cfg)
+        stt.set_keep_alive(str(cfg.get("llm.keep_alive", "")).strip() == "-1")
+        return stt
     return SttNone()

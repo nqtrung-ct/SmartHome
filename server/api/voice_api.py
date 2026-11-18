@@ -70,19 +70,6 @@ async def voice_ws(ws: WebSocket, token: str = Query("")):
         ack_sent = False
         result = await pipeline.process_audio(pcm, room_id, skip_gate=True, stt_only=True)
         transcript = result.get("transcript", "")
-        if not transcript.strip():  # debug: keep the audio that STT couldn't read
-            try:
-                import wave
-
-                dbg = app.state.cfg.data_path("debug")
-                dbg.mkdir(exist_ok=True)
-                with wave.open(str(dbg / f"utt_{int(time.time())}.wav"), "wb") as f:
-                    f.setnchannels(1)
-                    f.setsampwidth(2)
-                    f.setframerate(16000)
-                    f.writeframes(pcm)
-            except Exception:
-                pass
         command = split_wake_word(transcript)
         if command is None:
             await ws.send_json({"type": "ignored", "text": transcript})

@@ -167,7 +167,7 @@ def _sherpa_importable() -> bool:
 def _stt_error_hint(cfg, model_dir) -> str:
     if cfg.get("stt.engine") == "none":
         return "Engine đang là 'none'"
-    if cfg.get("stt.engine") == "qwen3_mlx":
+    if cfg.get("stt.engine") == "qwen3_torch":
         return "Chưa cài hoặc không nạp được Qwen3-ASR-1.7B"
     if not _sherpa_importable():
         return "Chưa cài module sherpa-onnx: pip install -r optional-requirements.txt"
@@ -193,7 +193,7 @@ class AssistantConfigIn(BaseModel):
     llm_ollama_url: str | None = None  # URL Ollama khi fallback (rỗng = 127.0.0.1:11434)
     llm_model: str | None = None
     llm_keep_alive: bool | None = None  # True = giữ model trong VRAM luôn
-    stt_engine: str | None = None  # none | sherpa | qwen3_mlx
+    stt_engine: str | None = None  # none | sherpa | qwen3_torch
     stt_model_dir: str | None = None  # thư mục model trong data/models (đổi là nạp lại ngay)
     stt_qwen_context_file: str | None = None
     tts_engine: str | None = None  # none | http
@@ -209,7 +209,9 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
     cfg = app.cfg
     changed = []
     old_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
-    if body.stt_engine == "qwen3_mlx":
+    if body.stt_engine is not None and body.stt_engine not in ("none", "sherpa", "qwen3_torch"):
+        raise HTTPException(status_code=400, detail="Engine STT không được hỗ trợ")
+    if body.stt_engine == "qwen3_torch":
         from server.voice.stt import SttQwen
         try:
             SttQwen(cfg)
@@ -267,7 +269,7 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         set_yaml_value(cfg.path, "llm", "keep_alive", value)
         changed.append(
             f"llm.keep_alive = {value} ({'giữ trong VRAM luôn' if body.llm_keep_alive else 'tự dỡ sau 5 phút idle'})")
-    if body.stt_engine in ("none", "sherpa", "qwen3_mlx"):
+    if body.stt_engine in ("none", "sherpa", "qwen3_torch"):
         cfg._data.setdefault("stt", {})["engine"] = body.stt_engine
         set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)
         changed.append(f"stt.engine = {body.stt_engine}")
@@ -312,6 +314,8 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
                 previous.close()
         except Exception as exc:
             changed.append(f"stt load lỗi: {exc}; giữ engine đang chạy")
+    if body.llm_keep_alive is not None and hasattr(app.pipeline.stt, "set_keep_alive"):
+        app.pipeline.stt.set_keep_alive(body.llm_keep_alive)
     try:
         app.pipeline.tts = make_tts(cfg)
     except Exception:

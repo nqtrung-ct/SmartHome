@@ -74,6 +74,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.ollama_keepalive.task.cancel()
         await asyncio.gather(app.state.ollama_keepalive.task, return_exceptions=True)
         app.state.camera_monitor_task.cancel()
+        if hasattr(app.state.pipeline.stt, "close"):
+            await asyncio.to_thread(app.state.pipeline.stt.close)
         for task in app.state.announcement_tasks:
             task.cancel()
         await asyncio.gather(*app.state.announcement_tasks, return_exceptions=True)

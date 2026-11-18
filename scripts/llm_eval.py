@@ -219,7 +219,7 @@ async def run_model(model: str, cfg, db, room_id) -> list[dict]:
 
 async def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--models", nargs="+", default=["qwen3:8b", "qwen3.5:4b"])
+    ap.add_argument("--models", nargs="+", default=["qwen3:8b", "qwen3.5:9b"])
     ap.add_argument("--room", default="khach", help="từ khóa tên phòng đứng theo mic")
     args = ap.parse_args()
 

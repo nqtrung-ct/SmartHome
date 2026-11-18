@@ -360,8 +360,8 @@ async function renderAssistant() {
       </div>
       <div class="row">
         <label class="small"><input type="checkbox" id="llm-keep-alive" ${st.llm.keep_alive ? "checked" : ""}
-          onchange="saveKeepAlive(this.checked)"> Giữ model trong VRAM luôn</label>
-        <span class="small muted">Khởi động lại Ollama và nạp model khi bật và lúc 00:00 hằng ngày; nạp model khi server khởi động. Lệnh AI đang chạy sẽ bị gián đoạn khi khởi động lại.</span>
+          onchange="saveKeepAlive(this.checked)"> Giữ model LLM và Qwen STT trong GPU luôn</label>
+        <span class="small muted">Nạp model Ollama và Qwen STT (nếu chọn) khi bật và khi server khởi động. Khi tắt, Qwen STT được dỡ sau 5 phút không dùng. Ollama khởi động lại khi bật và lúc 00:00 hằng ngày; lệnh AI đang chạy sẽ bị gián đoạn.</span>
       </div>
       <div id="llm-cloud-fields" style="display:${cloud ? "block" : "none"}">
         <div class="row">
@@ -402,21 +402,21 @@ async function renderAssistant() {
     </div>
 
     <div class="card">
-      <h2>🎙 Nhận dạng giọng nói (STT) ${dot(st.stt.loaded, st.stt.engine === "qwen3_mlx" ? "sẵn sàng, nạp khi dùng" : "model đã nạp", "chưa nạp")}</h2>
+      <h2>🎙 Nhận dạng giọng nói (STT) ${dot(st.stt.loaded, st.stt.engine.startsWith("qwen3_") ? "sẵn sàng" : "model đã nạp", "chưa nạp")}</h2>
       ${!st.stt.loaded && st.stt.error ? `<p class="small error">Lý do: ${esc(st.stt.error)}</p>` : ""}
       <div class="row">
         <label class="small muted">Engine</label>
         <select id="stt-engine">
           <option value="none" ${st.stt.engine === "none" ? "selected" : ""}>none (tắt)</option>
           <option value="sherpa" ${st.stt.engine === "sherpa" ? "selected" : ""}>sherpa-onnx Zipformer-vi</option>
-          <option value="qwen3_mlx" ${st.stt.engine === "qwen3_mlx" ? "selected" : ""}>Qwen3-ASR-1.7B (Mac MLX)</option>
+          <option value="qwen3_torch" ${st.stt.engine === "qwen3_torch" ? "selected" : ""}>Qwen3-ASR-1.7B (Windows CUDA)</option>
         </select>
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
       </div>
       <div class="row">
         <label class="small muted">Tệp ngữ cảnh Qwen (.md)</label>
         <input id="stt-qwen-context" value="${esc(st.stt.qwen_context_file || "")}" placeholder="data/qwen3-asr-context.md" style="width:300px">
-        <span class="small muted">Đọc lại khi nhận diện; model nạp ở lần dùng đầu.</span>
+        <span class="small muted">Đọc lại khi nhận diện; Qwen dùng chung tùy chọn giữ model trong GPU phía trên.</span>
       </div>
       <div class="row">
         <label class="small muted">Model Sherpa</label>
@@ -1405,6 +1405,26 @@ window.cancelTimer = async (id) => {
 // ---------------------------------------------------------------- events
 
 let eventsDate = "";  // YYYY-MM-DD đang xem; rỗng = hôm nay
+let sttAudioUrl = "";
+let sttAudioLoading = false;
+
+window.playSttRecording = async (id) => {
+  sttAudioLoading = true;
+  try {
+    const response = await fetch(`/api/stt-recordings/${id}/audio`, {
+      headers: { Authorization: "Bearer " + token }, cache: "no-store",
+    });
+    if (!response.ok) throw new Error("Bản ghi không còn hoặc không thể tải");
+    const blob = await response.blob();
+    const player = $("#stt-recording-player");
+    if (!player) return;
+    if (sttAudioUrl) URL.revokeObjectURL(sttAudioUrl);
+    sttAudioUrl = URL.createObjectURL(blob);
+    player.src = sttAudioUrl;
+    await player.play();
+  } catch (e) { toast(e.message); }
+  finally { sttAudioLoading = false; }
+};
 
 const localDateStr = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1425,11 +1445,24 @@ window.onEventsDatePick = (value) => {
 async function renderEvents(force = false) {
   const el = $("#tab-events");
   // đang chọn ngày trên calendar thì đừng vẽ lại (sẽ đóng popup + mất focus)
-  if (!force && el.contains(document.activeElement)) return;
+  const player = $("#stt-recording-player");
+  if (!force && (el.contains(document.activeElement) || sttAudioLoading || (player && !player.paused))) return;
   if (!eventsDate) eventsDate = localDateStr();
-  const rows = await api(`/events?date=${eventsDate}`).catch(() => []);
+  const [rows, recordings] = await Promise.all([
+    api(`/events?date=${eventsDate}`).catch(() => []),
+    api("/stt-recordings").catch(() => []),
+  ]);
   const today = localDateStr();
-  el.innerHTML = `<div class="card"><h2>📜 Nhật ký ${eventsDate === today ? "(hôm nay)" : ""}</h2>
+  if (sttAudioUrl) { URL.revokeObjectURL(sttAudioUrl); sttAudioUrl = ""; }
+  el.innerHTML = `<div class="card"><h2>🎙 5 lượt nhận dạng giọng nói gần nhất</h2>
+    <p class="small muted">Lời nhận dạng gốc và âm thanh gửi vào STT; bản cũ tự xóa khi có lượt mới.</p>
+    ${recordings.length ? `<table><tr><th>Thời gian</th><th>Nguồn / model</th><th>Lời nhận dạng</th><th>Nghe lại</th></tr>
+      ${recordings.map((r) => `<tr><td class="small muted">${esc(r.ts.replace("T", " ").slice(0, 19))}</td>
+        <td>${esc(r.source)} · ${esc(r.engine)}</td><td>${esc(r.transcript || "(không nhận dạng được)")}</td>
+        <td><button class="small-btn" onclick="playSttRecording(${r.id})">▶ Nghe</button></td></tr>`).join("")}</table>
+      <audio id="stt-recording-player" controls style="width:100%;margin-top:10px"></audio>`
+      : "<p class='muted'>Chưa có bản ghi nào.</p>"}</div>
+    <div class="card"><h2>📜 Nhật ký ${eventsDate === today ? "(hôm nay)" : ""}</h2>
     <div class="row" style="margin-bottom:10px">
       <button class="small-btn" onclick="setEventsDate(-1)">◀</button>
       <input type="date" value="${eventsDate}" onchange="onEventsDatePick(this.value)" style="width:170px">

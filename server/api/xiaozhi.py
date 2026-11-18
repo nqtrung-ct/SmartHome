@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebS
 
 from server.api.devices import run_entity_command
 from server.core.text_command import awaiting_confirmation, handle_command
-from server.db import log_event
+from server.db import log_event, save_stt_recording
 from server.util import normalize, now_iso
 from server.voice.pipeline import _has_speech_energy
 
@@ -677,6 +677,10 @@ async def xiaozhi_ws(ws: WebSocket):
         nonlocal close_at, speaking_task, ignore_until, auto_followups
         try:
             transcript = await asyncio.to_thread(pipeline.stt.transcribe, pcm)
+            try:
+                save_stt_recording(db, row['name'], str(app.state.cfg.get("stt.engine", "none")), transcript, pcm)
+            except Exception as exc:
+                log_event(db, "stt", f"Không lưu được bản ghi STT: {exc}", level="warn")
         except Exception as exc:
             log_event(db, "xiaozhi", f"Lỗi STT: {exc}", level="warn")
             transcript = ""
