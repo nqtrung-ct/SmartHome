@@ -468,6 +468,7 @@ async function renderAssistant() {
         <button class="small-btn" onclick="testTts()">▶ Phát thử</button>
       </div>
       ${st.tts.voices_error ? `<p class="small error">${esc(st.tts.voices_error)}</p>` : ""}
+      <p class="small muted">Phát thử dùng giọng đang chọn; bấm Lưu để áp dụng cho trợ lý.</p>
       <div id="tts-test-out" class="console-out muted small"></div>
     </div>`;
 }
@@ -642,7 +643,8 @@ window.testTts = async () => {
     const resp = await fetch("/api/assistant/test-tts", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-      body: JSON.stringify({ text: "Đã tắt điều hòa phòng ngủ." }),
+      body: JSON.stringify({ text: "Đã tắt điều hòa phòng ngủ.", model: $("#tts-model").value,
+        voice: $("#tts-voice-" + $("#tts-model").value).value }),
     });
     if (!resp.ok) {
       let detail = resp.statusText;

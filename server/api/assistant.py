@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import re
 import time
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -16,7 +18,7 @@ from server.api.deps import require_admin
 from server.db import log_event
 from server.util import set_yaml_value
 from server.voice.stt import make_stt
-from server.voice.tts import make_tts
+from server.voice.tts import TtsHttp, make_tts
 
 router = APIRouter()
 
@@ -336,14 +338,23 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
 
 class TtsTestIn(BaseModel):
     text: str = "Đã tắt điều hòa phòng ngủ."
+    model: Literal["piper", "vieneu"] | None = None
+    voice: str | None = None
 
 
 @router.post("/assistant/test-tts")
 async def test_tts(request: Request, body: TtsTestIn, _: None = Depends(require_admin)):
     pipeline = request.app.state.pipeline
     started = time.perf_counter()
+    tts = pipeline.tts
+    if isinstance(tts, TtsHttp) and (body.model is not None or body.voice is not None):
+        tts = copy.copy(tts)
+        if body.model is not None:
+            tts.model = body.model
+        if body.voice is not None:
+            tts.voice = body.voice
     try:
-        audio = await asyncio.to_thread(pipeline.tts.synthesize, body.text)
+        audio = await asyncio.to_thread(tts.synthesize, body.text)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"TTS lỗi: {exc}")
     if not audio:
