@@ -38,6 +38,19 @@ class CameraAdoptionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_stale_specific_row_does_not_hide_current_network_device(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "test.db")
+            db.execute("INSERT INTO devices(id,name,driver,host,mac,created_at) VALUES (1,?,?,?,?,?)",
+                       ("Camera", "onvif", "192.0.2.1", "AA:BB:CC:DD:EE:FF", now_iso()))
+            db.execute("INSERT INTO discovered(method,ident,ip,mac,first_seen,last_seen) VALUES (?,?,?,?,?,?)",
+                       ("androidtv", "old", "192.0.2.2", "11:22:33:44:55:66", "2020-01-01", "2020-01-01"))
+            db.execute("INSERT INTO discovered(method,ident,ip,mac,first_seen,last_seen) VALUES (?,?,?,?,?,?)",
+                       ("network", "192.0.2.2", "192.0.2.2", "AA:BB:CC:DD:EE:FF", now_iso(), now_iso()))
+            _cleanup_network_rows(db)
+            self.assertEqual(db.one("SELECT host FROM devices WHERE id=1")["host"], "192.0.2.2")
+            db.close()
+
     def test_cast_id_is_not_network_mac_and_keeps_link_on_ip_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Database(Path(tmp) / "test.db")

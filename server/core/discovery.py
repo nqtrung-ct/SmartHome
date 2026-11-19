@@ -835,18 +835,23 @@ def _cleanup_network_rows(db: Database) -> None:
              AND adopted_device_id NOT IN (SELECT id FROM devices)"""
     )
     # Copy the current sweep's MAC before removing its generic network row.
+    cutoff = (now() - timedelta(minutes=10)).isoformat(timespec="seconds")
     db.execute(
         """UPDATE discovered SET mac = COALESCE((
                SELECT n.mac FROM discovered n
-               WHERE n.method='network' AND n.mac != '' AND n.ip = discovered.ip LIMIT 1), mac)
-           WHERE mac = '' AND method != 'network'"""
+               WHERE n.method='network' AND n.mac != '' AND n.ip = discovered.ip
+                 AND n.last_seen >= ? LIMIT 1), mac)
+           WHERE mac = '' AND method != 'network' AND last_seen >= ?""", (cutoff, cutoff)
     )
     # dòng "network" mù mờ phải nhường chỗ khi một scanner cụ thể đã nhận diện
     # IP đó (kể cả dòng cũ đã adopt — dòng cụ thể mang đủ thông tin hơn)
     db.execute(
-        """DELETE FROM discovered
-           WHERE method='network' AND ip != ''
-             AND ip IN (SELECT ip FROM discovered WHERE method != 'network' AND ip != '')"""
+        """DELETE FROM discovered AS n
+           WHERE n.method='network' AND n.ip != '' AND EXISTS (
+               SELECT 1 FROM discovered s WHERE s.method != 'network' AND s.ip=n.ip
+                 AND s.last_seen >= ? AND (s.mac='' OR n.mac='' OR
+                     REPLACE(REPLACE(UPPER(s.mac), ':', ''), '-', '') =
+                     REPLACE(REPLACE(UPPER(n.mac), ':', ''), '-', '')) )""", (cutoff,)
     )
     # TV đã nhận diện qua scanner androidtv thì bỏ các dòng "Chromecast" chung
     # chung của scanner ssdp (cùng IP) kẻo danh sách hiện trùng hai lần

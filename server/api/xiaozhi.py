@@ -45,7 +45,8 @@ TAIL_KEEP_S = 0.5
 FOLLOWUP_S = 8.0       # cửa sổ nghe câu tiếp sau khi trả lời xong
 MAX_AUTO_FOLLOWUPS = 5  # tối đa bao nhiêu lượt nối tiếp không có wake word
                       # (lượt vượt ngưỡng vẫn được đáp xong mới đóng phiên)
-SEND_LEAD_S = 0.4      # packets TTS được phép dẫn trước phát tối đa chừng này
+SEND_LEAD_S = 0.08     # tránh dồn phần im lặng khi ESP chưa phát xong khởi động loa
+TTS_START_DELAY_S = 0.3  # chờ ESP chuyển sang speaking và reset decoder trước packet đầu
 TTS_WARMUP_S = 1.0     # im lặng đầu câu để ESP và loa sẵn sàng trước tiếng nói
 ECHO_GUARD_S = 0.5     # bỏ qua mic chừng này sau khi loa phát xong (1 mic, không AEC)
 MIC_WARMUP_S = 0.45    # bỏ frame mic sau wake: tiếng bíp (~0.3s) + đuôi wake word khỏi lọt STT
@@ -656,6 +657,9 @@ async def xiaozhi_ws(ws: WebSocket):
             pcm = b"\x00\x00" * int(OUT_RATE * TTS_WARMUP_S) + pcm
             pkts, dur = enc.encode(pcm)
             pkts += enc.flush()
+            # ESP đổi trạng thái speaking bất đồng bộ và reset hàng đợi audio.
+            # Không gửi packet ngay sau lệnh start, kẻo phần đầu bị xóa.
+            await asyncio.sleep(TTS_START_DELAY_S)
             t0 = time.monotonic()
             sent = 0.0
             for pkt in pkts:
