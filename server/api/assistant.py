@@ -121,6 +121,7 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "api_key_set": bool(str(cfg.get("llm.api_key", "")).strip()),
             "fallback": bool(cfg.get("llm.fallback", True)),
             "local_model": cfg.get("llm.local_model", ""),
+            "cloud_model": cfg.get("llm.cloud_model", ""),
             "ollama_url": cfg.get("llm.ollama_url", ""),
             "keep_alive": str(cfg.get("llm.keep_alive", "")).strip() == "-1",
             "reachable": llm_error is None,
@@ -138,10 +139,12 @@ def assistant_status(request: Request, _: None = Depends(require_admin)):
             "models": _stt_models(),
             "has_tokens": (model_dir / "tokens.txt").exists(),
             "onnx_files": onnx_files,
-            "loaded": type(pipeline.stt).__name__ in ("SttSherpa", "SttQwen"),
+            "loaded": type(pipeline.stt).__name__ in ("SttSherpa", "SttQwen", "SttQwenFallback", "SttQwenOllama"),
             "available": _sherpa_importable(),
-            "error": None if type(pipeline.stt).__name__ in ("SttSherpa", "SttQwen") else _stt_error_hint(cfg, model_dir),
+            "error": None if type(pipeline.stt).__name__ in ("SttSherpa", "SttQwen", "SttQwenFallback", "SttQwenOllama") else _stt_error_hint(cfg, model_dir),
             "qwen_context_file": cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"),
+            "qwen_ollama_url": cfg.get("stt.qwen_ollama_url", "http://127.0.0.1:11434"),
+            "qwen_ollama_model": cfg.get("stt.qwen_ollama_model", "frozenlab/qwen3-asr:1.7b"),
         },
         "tts": {
             "engine": cfg.get("tts.engine"),
@@ -195,9 +198,12 @@ class AssistantConfigIn(BaseModel):
     llm_ollama_url: str | None = None  # URL Ollama khi fallback (rỗng = 127.0.0.1:11434)
     llm_model: str | None = None
     llm_keep_alive: bool | None = None  # True = giữ model trong VRAM luôn
+    llm_cloud_model: str | None = None
     stt_engine: str | None = None  # none | sherpa | qwen3_torch
     stt_model_dir: str | None = None  # thư mục model trong data/models (đổi là nạp lại ngay)
     stt_qwen_context_file: str | None = None
+    stt_qwen_ollama_url: str | None = None
+    stt_qwen_ollama_model: str | None = None
     tts_engine: str | None = None  # none | http
     tts_http_url: str | None = None
     tts_model: str | None = None
@@ -210,16 +216,16 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
     app = request.app.state
     cfg = app.cfg
     changed = []
-    old_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
-    if body.stt_engine is not None and body.stt_engine not in ("none", "sherpa", "qwen3_torch"):
+    old_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"), cfg.get("stt.qwen_ollama_url"), cfg.get("stt.qwen_ollama_model"))
+    if body.stt_engine is not None and body.stt_engine not in ("none", "sherpa", "qwen3_torch", "qwen3_ollama"):
         raise HTTPException(status_code=400, detail="Engine STT không được hỗ trợ")
-    if body.stt_engine == "qwen3_torch":
-        from server.voice.stt import SttQwen
-        try:
-            SttQwen(cfg)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+    for value in (body.stt_qwen_ollama_url, body.llm_ollama_url):
+        if value and (urlsplit(value).scheme not in ("http", "https") or not urlsplit(value).hostname):
+            raise HTTPException(status_code=400, detail="URL phải bắt đầu bằng http:// hoặc https:// và có địa chỉ máy")
+    if body.llm_engine == "none":
+        cfg._data.setdefault("llm", {})["engine"] = "none"
+        set_yaml_value(cfg.path, "llm", "engine", "none")
+        changed.append("llm.engine = none")
     if body.llm_engine in ("ollama", "openai") and body.llm_engine != cfg.get("llm.engine"):
         new_engine = body.llm_engine
         old_model = str(cfg.get("llm.model", ""))
@@ -257,10 +263,14 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         cfg._data.setdefault("llm", {})["local_model"] = body.llm_local_model
         set_yaml_value(cfg.path, "llm", "local_model", body.llm_local_model)
         changed.append(f"llm.local_model = {body.llm_local_model}")
-    if body.llm_ollama_url:  # rỗng = mặc định http://127.0.0.1:11434
+    if body.llm_ollama_url is not None:
         cfg._data.setdefault("llm", {})["ollama_url"] = body.llm_ollama_url
         set_yaml_value(cfg.path, "llm", "ollama_url", body.llm_ollama_url)
         changed.append(f"llm.ollama_url = {body.llm_ollama_url}")
+    if body.llm_cloud_model is not None:
+        cfg._data.setdefault("llm", {})["cloud_model"] = body.llm_cloud_model.strip()
+        set_yaml_value(cfg.path, "llm", "cloud_model", body.llm_cloud_model.strip())
+        changed.append("llm.cloud_model = " + body.llm_cloud_model.strip())
     if body.llm_model:
         cfg._data.setdefault("llm", {})["model"] = body.llm_model
         set_yaml_value(cfg.path, "llm", "model", body.llm_model)
@@ -271,7 +281,7 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         set_yaml_value(cfg.path, "llm", "keep_alive", value)
         changed.append(
             f"llm.keep_alive = {value} ({'giữ trong VRAM luôn' if body.llm_keep_alive else 'tự dỡ sau 5 phút idle'})")
-    if body.stt_engine in ("none", "sherpa", "qwen3_torch"):
+    if body.stt_engine in ("none", "sherpa", "qwen3_torch", "qwen3_ollama"):
         cfg._data.setdefault("stt", {})["engine"] = body.stt_engine
         set_yaml_value(cfg.path, "stt", "engine", body.stt_engine)
         changed.append(f"stt.engine = {body.stt_engine}")
@@ -287,6 +297,12 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
         cfg._data.setdefault("stt", {})["qwen_context_file"] = value
         set_yaml_value(cfg.path, "stt", "qwen_context_file", value)
         changed.append(f"stt.qwen_context_file = {value}")
+    for field in ("qwen_ollama_url", "qwen_ollama_model"):
+        value = getattr(body, "stt_" + field)
+        if value is not None:
+            cfg._data.setdefault("stt", {})[field] = value.strip()
+            set_yaml_value(cfg.path, "stt", field, value.strip())
+            changed.append("stt." + field + " = " + value.strip())
     if body.tts_engine in ("none", "http"):
         cfg._data.setdefault("tts", {})["engine"] = body.tts_engine
         set_yaml_value(cfg.path, "tts", "engine", body.tts_engine)
@@ -307,7 +323,7 @@ def update_config(request: Request, body: AssistantConfigIn, _: None = Depends(r
             changed.append(f"tts.{model}_voice = {value}")
 
     # rebuild the engines the pipeline uses (fall back to "none" on bad settings)
-    new_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"))
+    new_stt = (cfg.get("stt.engine"), cfg.get("stt.model_dir"), cfg.get("stt.qwen_context_file", "data/qwen3-asr-context.md"), cfg.get("stt.qwen_ollama_url"), cfg.get("stt.qwen_ollama_model"))
     if old_stt != new_stt:
         try:
             previous = app.pipeline.stt

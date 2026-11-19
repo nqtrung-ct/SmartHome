@@ -4,7 +4,11 @@ $docker = Join-Path $dockerDir 'docker.exe'
 $env:PATH = "$dockerDir;$env:PATH"
 $env:COMPOSE_ANSI = 'never'
 $compose = 'D:\Immich\docker-compose.yml'
-$share = '\\192.168.1.100\share'
+$share = '\\192.168.1.101\share'
+$mapping = (& net.exe use 'I:' 2>&1 | Out-String)
+if ($LASTEXITCODE -eq 0 -and -not $mapping.Contains($share)) {
+    throw 'Drive I: is mapped to a different network share; Immich was not started.'
+}
 $marker = 'I:\backup\Ti_Camera\Immich\upload\.immich'
 $logDir = 'D:\Immich\logs'
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null

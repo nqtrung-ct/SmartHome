@@ -342,28 +342,29 @@ async function renderAssistant() {
       <div class="row">
         <label class="small muted">Engine</label>
         <select id="llm-engine" style="min-width:220px" onchange="toggleLlmEngine(this.value)">
-          <option value="ollama" ${!cloud ? "selected" : ""}>Ollama (local, miễn phí)</option>
+          <option value="none" ${st.llm.engine === "none" ? "selected" : ""}>Không có AI (lệnh có sẵn)</option>
+          <option value="ollama" ${st.llm.engine === "ollama" ? "selected" : ""}>Ollama (ưu tiên, cloud dự phòng)</option>
           <option value="openai" ${cloud ? "selected" : ""}>Đám mây (OpenAI-compatible)</option>
         </select>
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
         <button class="small-btn" onclick="testLlm()">▶ Thử LLM</button>
       </div>
-      <div id="llm-ollama-fields" style="display:${cloud ? "none" : "block"}">
-        ${st.llm.reachable ? `
+      <div id="llm-ollama-fields" style="display:${st.llm.engine === "none" ? "none" : "block"}">
         <div class="row">
           <label class="small muted">Model</label>
-          <select id="llm-model-ollama" style="min-width:220px">${llmModels}</select>
+          <input id="llm-model-ollama" list="ollama-model-list" value="${esc(cloud ? st.llm.local_model : st.llm.model || '')}" placeholder="qwen3:8b" style="min-width:220px">
+          <datalist id="ollama-model-list">${ollamaList.map((m) => `<option value="${esc(m.name)}">`).join("")}</datalist>
         </div>
-        `
-        : `<p class="small">Chưa chạy Ollama. Cài tại <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a> rồi:<br>
-           <code>ollama pull qwen3:8b</code><br>Lỗi: ${esc(st.llm.error || "?")}</p>`}
+        <div class="row"><label class="small muted">Ollama URL</label>
+          <input id="llm-ollama-url" value="${esc(st.llm.ollama_url || '')}" placeholder="http://127.0.0.1:11434" style="width:260px"></div>
       </div>
       <div class="row">
         <label class="small"><input type="checkbox" id="llm-keep-alive" ${st.llm.keep_alive ? "checked" : ""}
           onchange="saveKeepAlive(this.checked)"> Giữ model LLM và Qwen STT trong GPU luôn</label>
-        <span class="small muted">Nạp model Ollama và Qwen STT (nếu chọn) khi bật và khi server khởi động. Khi tắt, Qwen STT được dỡ sau 5 phút không dùng. Ollama khởi động lại khi bật và lúc 00:00 hằng ngày; lệnh AI đang chạy sẽ bị gián đoạn.</span>
+        <span class="small muted">Nạp model LLM Ollama và Qwen CUDA khi bật và khi server khởi động. Qwen STT qua Ollama được nạp khi nhận dạng lần đầu và dùng cùng thời gian giữ model. Khi tắt, model được dỡ sau 5 phút không dùng. Ollama trên máy này khởi động lại khi bật và lúc 00:00 hằng ngày; lệnh AI đang chạy sẽ bị gián đoạn.</span>
       </div>
-      <div id="llm-cloud-fields" style="display:${cloud ? "block" : "none"}">
+      <div id="llm-cloud-fields" style="display:${st.llm.engine === 'none' ? 'none' : 'block'}">
+        <p class="small muted">Cloud dự phòng khi Ollama không truy cập được; để trống nếu không dùng.</p>
         <div class="row">
           <label class="small muted">Base URL</label>
           <input id="llm-base-url" value="${esc(st.llm.base_url || "")}" placeholder="https://api.openai.com/v1" style="width:260px">
@@ -375,7 +376,7 @@ async function renderAssistant() {
         </div>
         <div class="row">
           <label class="small muted">Model</label>
-          <input id="llm-model-cloud" list="llm-model-list" value="${esc(st.llm.model || "")}"
+          <input id="llm-model-cloud" list="llm-model-list" value="${esc((cloud ? st.llm.model : st.llm.cloud_model) || "")}"
             placeholder="gpt-4o-mini / deepseek-chat / ..." style="min-width:220px">
           <datalist id="llm-model-list">${cloudList.map((m) => `<option value="${esc(m.name)}">`).join("")}</datalist>
         </div>
@@ -388,11 +389,6 @@ async function renderAssistant() {
           <input id="llm-local-model" value="${esc(st.llm.local_model || "")}"
             placeholder="${esc(st.llm.model || "qwen3:8b")}" style="min-width:220px">
         </div>
-        <div class="row">
-          <label class="small muted">Ollama URL</label>
-          <input id="llm-ollama-url" value="${esc(st.llm.ollama_url || "")}"
-            placeholder="http://127.0.0.1:11434" style="width:260px">
-        </div>
         <p class="small muted">Hỗ trợ mọi dịch vụ tương thích OpenAI: <code>api.openai.com/v1</code>,
           <code>openrouter.ai/api/v1</code>, <code>api.deepseek.com/v1</code>, <code>api.groq.com/openai/v1</code>…
           Key lưu trong <code>config.yaml</code> (đã git-ignore).</p>
@@ -402,7 +398,7 @@ async function renderAssistant() {
     </div>
 
     <div class="card">
-      <h2>🎙 Nhận dạng giọng nói (STT) ${dot(st.stt.loaded, st.stt.engine.startsWith("qwen3_") ? "sẵn sàng" : "model đã nạp", "chưa nạp")}</h2>
+      <h2>🎙 Nhận dạng giọng nói (STT) ${dot(st.stt.loaded, st.stt.engine.startsWith("qwen3_") ? "đã cấu hình" : "model đã nạp", "chưa nạp")}</h2>
       ${!st.stt.loaded && st.stt.error ? `<p class="small error">Lý do: ${esc(st.stt.error)}</p>` : ""}
       <div class="row">
         <label class="small muted">Engine</label>
@@ -410,13 +406,21 @@ async function renderAssistant() {
           <option value="none" ${st.stt.engine === "none" ? "selected" : ""}>none (tắt)</option>
           <option value="sherpa" ${st.stt.engine === "sherpa" ? "selected" : ""}>sherpa-onnx Zipformer-vi</option>
           <option value="qwen3_torch" ${st.stt.engine === "qwen3_torch" ? "selected" : ""}>Qwen3-ASR-1.7B (Windows CUDA)</option>
+          <option value="qwen3_ollama" ${st.stt.engine === "qwen3_ollama" ? "selected" : ""}>Qwen3-ASR qua Ollama</option>
         </select>
         <button class="primary small-btn" onclick="saveAssistantConfig()">💾 Lưu</button>
       </div>
       <div class="row">
+        <label class="small muted">Ollama URL cho STT</label>
+        <input id="stt-qwen-ollama-url" value="${esc(st.stt.qwen_ollama_url || '')}" placeholder="http://127.0.0.1:11434" style="width:240px">
+        <label class="small muted">Model</label>
+        <input id="stt-qwen-ollama-model" value="${esc(st.stt.qwen_ollama_model || '')}" placeholder="frozenlab/qwen3-asr:1.7b" style="width:230px">
+        <span class="small muted">Ollama cần hỗ trợ Qwen3-ASR và có model này. Khi lỗi dùng Sherpa trên máy này.</span>
+      </div>
+      <div class="row">
         <label class="small muted">Tệp ngữ cảnh Qwen (.md)</label>
         <input id="stt-qwen-context" value="${esc(st.stt.qwen_context_file || "")}" placeholder="data/qwen3-asr-context.md" style="width:300px">
-        <span class="small muted">Đọc lại khi nhận diện; Qwen dùng chung tùy chọn giữ model trong GPU phía trên.</span>
+        <span class="small muted">Chỉ dùng cho Qwen CUDA; không áp dụng cho Qwen qua Ollama.</span>
       </div>
       <div class="row">
         <label class="small muted">Model Sherpa</label>
@@ -479,8 +483,8 @@ window.toggleTtsVoice = (model) => {
 
 window.toggleLlmEngine = (engine) => {
   // xem trước fields của engine mới ngay khi đổi select (chưa lưu)
-  $("#llm-ollama-fields").style.display = engine === "openai" ? "none" : "block";
-  $("#llm-cloud-fields").style.display = engine === "openai" ? "block" : "none";
+  $("#llm-ollama-fields").style.display = engine === "none" ? "none" : "block";
+  $("#llm-cloud-fields").style.display = engine === "none" ? "none" : "block";
 };
 
 window.saveAssistantConfig = async () => {
@@ -490,14 +494,17 @@ window.saveAssistantConfig = async () => {
     llm_model: engine === "openai"
       ? ($("#llm-model-cloud")?.value.trim() || null)
       : ($("#llm-model-ollama")?.value || null),
-    llm_base_url: engine === "openai" ? ($("#llm-base-url")?.value.trim() || null) : null,
-    llm_api_key: engine === "openai" ? ($("#llm-api-key")?.value.trim() || null) : null,
+    llm_base_url: $("#llm-base-url")?.value.trim() || null,
+    llm_api_key: $("#llm-api-key")?.value.trim() || null,
+    llm_cloud_model: engine === "ollama" ? ($("#llm-model-cloud")?.value.trim() ?? null) : null,
     llm_fallback: engine === "openai" ? ($("#llm-fallback")?.checked ?? null) : null,
     llm_local_model: engine === "openai" ? ($("#llm-local-model")?.value.trim() || null) : null,
-    llm_ollama_url: engine === "openai" ? ($("#llm-ollama-url")?.value.trim() || null) : null,
+    llm_ollama_url: $("#llm-ollama-url")?.value.trim() ?? null,
     stt_engine: $("#stt-engine")?.value || null,
     stt_model_dir: $("#stt-model-dir")?.value || null,
     stt_qwen_context_file: $("#stt-qwen-context")?.value ?? null,
+    stt_qwen_ollama_url: $("#stt-qwen-ollama-url")?.value.trim() ?? null,
+    stt_qwen_ollama_model: $("#stt-qwen-ollama-model")?.value.trim() ?? null,
     tts_engine: $("#tts-engine")?.value || null,
     tts_http_url: $("#tts-url")?.value ?? null,
     tts_model: $("#tts-model")?.value || null,

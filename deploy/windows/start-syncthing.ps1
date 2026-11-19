@@ -2,7 +2,11 @@ $ErrorActionPreference = 'Stop'
 $exe = 'D:\Syncthing\app\syncthing-windows-amd64-v2.1.7\syncthing.exe'
 $syncthingHome = 'D:\Syncthing\config'
 $marker = 'I:\Backup\Vo_Camera\.stfolder'
-$share = '\\192.168.1.100\share'
+$share = '\\192.168.1.101\share'
+$mapping = (& net.exe use 'I:' 2>&1 | Out-String)
+if ($LASTEXITCODE -eq 0 -and -not $mapping.Contains($share)) {
+    throw 'Drive I: is mapped to a different network share; Syncthing was not started.'
+}
 
 for ($i = 0; $i -lt 180; $i++) {
     if (-not (Test-Path -LiteralPath $marker)) {

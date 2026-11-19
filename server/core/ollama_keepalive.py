@@ -106,6 +106,8 @@ class OllamaKeepAlive:
 
     async def _load(self, restart=False):
         cfg = self.cfg
+        if cfg.get("llm.engine") == "none":
+            return
         model = (cfg.get("llm.local_model", "") if cfg.get("llm.engine") == "openai"
                  else cfg.get("llm.model", ""))
         if not model:
@@ -113,9 +115,7 @@ class OllamaKeepAlive:
         base = str(cfg.get("llm.ollama_url", "") or "http://127.0.0.1:11434").rstrip("/")
         url = urlsplit(base)
         local = url.hostname in ("127.0.0.1", "localhost", "::1") and (url.port or 11434) == 11434
-        if restart:
-            if not local:
-                raise RuntimeError("Không thể khởi động lại Ollama trên máy khác")
+        if restart and local:
             await asyncio.to_thread(_restart_local_ollama)
         async with httpx.AsyncClient() as client:
             try:

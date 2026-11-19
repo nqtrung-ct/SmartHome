@@ -3,6 +3,7 @@ import io
 import json
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -12,6 +13,35 @@ from server.voice.stt import SttQwen, make_stt
 
 
 class QwenSttTests(unittest.TestCase):
+    def test_ollama_failure_uses_sherpa_and_retries_qwen(self):
+        values = {"stt.engine": "qwen3_ollama", "stt.qwen_ollama_url": "http://192.0.2.1:11434", "stt.qwen_ollama_model": "qwen-asr"}
+        cfg = SimpleNamespace(get=lambda key, default=None: values.get(key, default))
+        sherpa = Mock()
+        sherpa.transcribe.return_value = "dự phòng"
+        response = Mock()
+        response.json.return_value = {"message": {"content": "language Vietnamese<asr_text>qwen"}}
+        with patch("server.voice.stt.httpx.post", side_effect=[OSError("offline"), response]) as post, \
+             patch("server.voice.stt.SttSherpa", return_value=sherpa):
+            engine = make_stt(cfg)
+            self.assertEqual(engine.transcribe(b"12"), "dự phòng")
+            self.assertEqual(engine.transcribe(b"12"), "qwen")
+            self.assertEqual(post.call_args.args[0], "http://192.0.2.1:11434/api/chat")
+            payload = post.call_args.kwargs["json"]
+            self.assertEqual(payload["model"], "qwen-asr")
+            wav = base64.b64decode(payload["messages"][0]["images"][0])
+            with wave.open(io.BytesIO(wav), "rb") as audio:
+                self.assertEqual((audio.getframerate(), audio.getnchannels(), audio.getsampwidth()), (16000, 1, 2))
+                self.assertEqual(audio.readframes(1), b"12")
+
+    def test_ollama_non_asr_response_falls_back(self):
+        cfg = SimpleNamespace(get=lambda key, default=None: {"stt.engine": "qwen3_ollama"}.get(key, default))
+        response = Mock()
+        response.json.return_value = {"message": {"content": "I cannot listen"}}
+        sherpa = Mock()
+        sherpa.transcribe.return_value = "dự phòng"
+        with patch("server.voice.stt.httpx.post", return_value=response), patch("server.voice.stt.SttSherpa", return_value=sherpa):
+            self.assertEqual(make_stt(cfg).transcribe(b"12"), "dự phòng")
+
     def test_passes_pcm_and_reloads_markdown_context_each_time(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -48,8 +78,8 @@ class QwenSttTests(unittest.TestCase):
             values = {"stt.engine": "qwen3_torch", "stt.qwen_torch_python": str(root / "python.exe"),
                       "stt.qwen_torch_model_dir": str(root)}
             engine = make_stt(SimpleNamespace(get=lambda key, default=None: values.get(key, default)))
-            self.assertEqual(engine.model, root)
-            self.assertEqual(engine.python, root / "python.exe")
+            self.assertEqual(engine.qwen.model, root)
+            self.assertEqual(engine.qwen.python, root / "python.exe")
             engine.close()
 
     def test_shared_keep_alive_warms_qwen_and_idle_timer_stops_it(self):
@@ -65,6 +95,7 @@ class QwenSttTests(unittest.TestCase):
                 engine = make_stt(cfg)
                 thread.assert_called_once()
                 thread.return_value.start.assert_called_once()
+            engine = engine.qwen
             with patch.object(engine, "_start") as start:
                 engine._warmup()
                 start.assert_called_once()

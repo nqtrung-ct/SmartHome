@@ -2472,7 +2472,7 @@ async def _openai_chat(cfg: Config, messages: list) -> dict:
     url = cfg.get("llm.base_url", "").rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {cfg.get('llm.api_key', '')}"}
     payload = {
-        "model": cfg.get("llm.model", ""),
+        "model": cfg.get("llm.model", "") if cfg.get("llm.engine") == "openai" else cfg.get("llm.cloud_model", ""),
         "messages": _openai_messages(messages),
         "tools": TOOLS,
         "tool_choice": "auto",
@@ -2516,7 +2516,14 @@ async def _call_llm(cfg: Config, messages: list) -> tuple[dict, str]:
             if not cfg.get("llm.fallback", True):
                 raise
             return await _ollama_chat(cfg, messages), "ollama-fallback"
-    return await _ollama_chat(cfg, messages), "ollama"
+    if engine == "none":
+        raise RuntimeError("Chế độ không có AI")
+    try:
+        return await _ollama_chat(cfg, messages), "ollama"
+    except Exception:
+        if cfg.get("llm.api_key", "") and cfg.get("llm.base_url", "") and cfg.get("llm.cloud_model", ""):
+            return await _openai_chat(cfg, messages), "openai-fallback"
+        raise
 
 
 async def execute_tool(db, drivers, weather, name: str, args: dict, room_id,
@@ -2783,8 +2790,8 @@ async def llm_path(db, drivers, cfg, weather, text: str, room_id) -> dict:
             if replies:
                 break  # already did something useful; answer with what we have
             return {
-                "reply": f"Mình chưa hiểu câu này, và không gọi được mô hình ngôn ngữ ({exc}).",
-                "actions": [], "engine": "llm-error",
+                "reply": "Mình chưa hiểu lệnh này. Bạn thử nói theo lệnh điều khiển có sẵn nhé.",
+                "actions": [], "engine": "fast",
             }
 
         content = result["content"]
@@ -2927,4 +2934,6 @@ async def handle_command(db: Database, drivers, cfg: Config, weather, text: str,
     except Exception as exc:
         return {"reply": f"Lỗi khi thực hiện: {exc}", "actions": [], "engine": "fast"}
 
+    if cfg.get("llm.engine", "ollama") == "none":
+        return {"reply": "Mình chưa hiểu lệnh này. Bạn thử nói theo lệnh điều khiển có sẵn nhé.", "actions": [], "engine": "fast"}
     return await llm_path(db, drivers, cfg, weather, text, room_id)

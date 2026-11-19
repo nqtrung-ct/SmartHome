@@ -27,12 +27,16 @@ class KeepAliveTests(unittest.IsolatedAsyncioTestCase):
         restart.assert_called_once()
         self.assertEqual(calls, ["/api/tags", "/api/generate"])
 
-    async def test_remote_restart_is_refused(self):
+    async def test_remote_restart_does_not_restart_local_process(self):
         values = {"llm.engine": "ollama", "llm.model": "local:4b", "llm.ollama_url": "http://192.0.2.1:11434"}
         manager = OllamaKeepAlive.__new__(OllamaKeepAlive)
         manager.cfg = SimpleNamespace(get=lambda key, default=None: values.get(key, default))
-        with self.assertRaisesRegex(RuntimeError, "máy khác"):
-            await manager._load(restart=True)
+        with patch("server.core.ollama_keepalive._restart_local_ollama") as restart, \
+             patch("server.core.ollama_keepalive.httpx.AsyncClient") as client:
+            client.return_value.__aenter__.return_value.get = AsyncMock(side_effect=httpx.ConnectError("offline"))
+            with self.assertRaisesRegex(RuntimeError, "từ xa"):
+                await manager._load(restart=True)
+            restart.assert_not_called()
 
     async def test_start_local_ollama_when_connection_is_refused(self):
         calls = []

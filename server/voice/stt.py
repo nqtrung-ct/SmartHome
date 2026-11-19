@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import atexit
 import base64
+import io
 import json
 import queue
 import subprocess
 import sys
 import threading
+import wave
 from pathlib import Path
+
+import httpx
 
 from server.config import Config
 
@@ -276,12 +280,84 @@ class SttQwen:
                     stream.close()
 
 
+class SttQwenFallback:
+    """Retry Qwen each request; use Sherpa only when Qwen fails."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.qwen = None
+        self.sherpa = None
+        self.set_keep_alive(str(cfg.get("llm.keep_alive", "")).strip() == "-1")
+
+    def set_keep_alive(self, enabled):
+        self.keep_alive = enabled
+        try:
+            if self.qwen is None:
+                self.qwen = SttQwen(self.cfg)
+            self.qwen.set_keep_alive(enabled)
+        except Exception:
+            pass
+
+    def transcribe(self, pcm16):
+        try:
+            if self.qwen is None:
+                self.qwen = SttQwen(self.cfg)
+                self.qwen.set_keep_alive(self.keep_alive)
+            return self.qwen.transcribe(pcm16)
+        except Exception:
+            if self.sherpa is None:
+                self.sherpa = SttSherpa(self.cfg)
+            return self.sherpa.transcribe(pcm16)
+
+    def close(self):
+        if self.qwen:
+            self.qwen.close()
+
+
+class SttQwenOllama:
+    """Qwen3-ASR on Ollama, with a local Sherpa fallback."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.url = str(cfg.get("stt.qwen_ollama_url", "") or "http://127.0.0.1:11434").strip().rstrip("/")
+        self.model = str(cfg.get("stt.qwen_ollama_model", "") or "frozenlab/qwen3-asr:1.7b").strip()
+        self.sherpa = None
+        self._lock = threading.Lock()
+
+    def transcribe(self, pcm16):
+        if not pcm16:
+            return ""
+        try:
+            if len(pcm16) % 2:
+                raise ValueError("Âm thanh PCM16 không hợp lệ")
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as audio:
+                audio.setnchannels(1)
+                audio.setsampwidth(2)
+                audio.setframerate(16000)
+                audio.writeframes(pcm16)
+            payload = {"model": self.model, "stream": False,
+                       "messages": [{"role": "user", "content": "", "images": [base64.b64encode(buf.getvalue()).decode("ascii")]}],
+                       "keep_alive": self.cfg.get("llm.keep_alive", "5m")}
+            response = httpx.post(self.url + "/api/chat", json=payload, timeout=180)
+            response.raise_for_status()
+            content = response.json()["message"]["content"]
+            if "<asr_text>" not in content:
+                raise ValueError("Phản hồi không phải Qwen3-ASR")
+            return content.split("<asr_text>", 1)[1].strip()
+        except Exception:
+            with self._lock:
+                if self.sherpa is None:
+                    self.sherpa = SttSherpa(self.cfg)
+            return self.sherpa.transcribe(pcm16)
+
+
 def make_stt(cfg: Config):
     engine = cfg.get("stt.engine", "none")
     if engine == "sherpa":
         return SttSherpa(cfg)
     if engine == "qwen3_torch":
-        stt = SttQwen(cfg)
-        stt.set_keep_alive(str(cfg.get("llm.keep_alive", "")).strip() == "-1")
-        return stt
+        return SttQwenFallback(cfg)
+    if engine == "qwen3_ollama":
+        return SttQwenOllama(cfg)
     return SttNone()

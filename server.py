@@ -95,10 +95,15 @@ def warm_model(cfg: Config) -> None:
 
 def main() -> None:
     cfg = Config()
-    ensure_ollama()
+    from urllib.parse import urlsplit
+    ollama_url = str(cfg.get("llm.ollama_url", "") or "http://127.0.0.1:11434")
+    local_ollama = urlsplit(ollama_url).hostname in ("127.0.0.1", "localhost", "::1")
+    use_ollama = cfg.get("llm.engine") == "ollama" or (cfg.get("llm.engine") == "openai" and cfg.get("llm.fallback", True))
+    if use_ollama and local_ollama:
+        ensure_ollama()
     # Keep-alive runs asynchronously in the server so a stalled model cannot
     # delay the whole application for the warm-up timeout.
-    if _port_open(OLLAMA_PORT) and str(cfg.get("llm.keep_alive", "")).strip() != "-1":
+    if use_ollama and local_ollama and cfg.get("llm.engine") == "ollama" and _port_open(OLLAMA_PORT) and str(cfg.get("llm.keep_alive", "")).strip() != "-1":
         warm_model(cfg)
     if ensure_sidecar(cfg):
         print("[+] TTS sidecar sẵn sàng (8125)")

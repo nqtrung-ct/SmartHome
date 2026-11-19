@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>dev.immich.volume-start</string>
+<key>ProgramArguments</key><array><string>/bin/sh</string><string>/Users/ti/Library/SmartHome/immich-launch.sh</string></array>
+<key>RunAtLoad</key><true/>
+<key>StandardOutPath</key><string>/Users/ti/Library/Logs/SmartHome-immich-launch.log</string>
+<key>StandardErrorPath</key><string>/Users/ti/Library/Logs/SmartHome-immich-launch.err.log</string>
+</dict></plist>
