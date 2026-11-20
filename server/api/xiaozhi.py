@@ -53,6 +53,19 @@ MIC_WARMUP_S = 0.45    # bỏ frame mic sau wake: tiếng bíp (~0.3s) + đuôi 
 WAKE_LISTEN_S = 10.0   # cửa sổ nghe dự phòng sau wake (nếu không có câu nào hoàn chỉnh)
 
 
+async def _command_with_wait(task: asyncio.Task, on_wait, timeout: float):
+    """Keep processing while the device plays a waiting message, once only."""
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(0.0, timeout))
+        if not done:
+            await on_wait()
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
 # ---------------------------------------------------------------------------
 # Opus helpers (PyAV; libopus decode luôn ra 48 kHz -> resample về 16 kHz s16)
 # ---------------------------------------------------------------------------
@@ -646,10 +659,13 @@ async def xiaozhi_ws(ws: WebSocket):
             },
         })
 
-    async def speak(reply: str) -> float:
+    async def speak(reply: str, *, start: bool = True, stop: bool = True) -> float | None:
         """Phát một câu qua loa thiết bị; trả về thời lượng (giây) đã phát."""
         spoken = await pipeline.tts_audio(reply)
-        await send_json({"type": "tts", "state": "start"})
+        if not spoken:
+            return None
+        if start:
+            await send_json({"type": "tts", "state": "start"})
         duration = 0.0
         if spoken:
             enc = OpusEncoder()
@@ -674,7 +690,8 @@ async def xiaozhi_ws(ws: WebSocket):
             remaining = dur - (time.monotonic() - t0) + 0.15
             if remaining > 0:
                 await asyncio.sleep(remaining)
-        await send_json({"type": "tts", "state": "stop"})
+        if stop:
+            await send_json({"type": "tts", "state": "stop"})
         return duration
 
     async def respond(pcm: bytes) -> None:
@@ -718,14 +735,29 @@ async def xiaozhi_ws(ws: WebSocket):
             # vứt câu lệnh thật chỉ vì hết suất nối tiếp là trải nghiệm tệ
             capped = auto_followups >= MAX_AUTO_FOLLOWUPS
             auto_followups += 1
+            waiting_spoken = False
+
+            async def announce_wait():
+                nonlocal waiting_spoken
+                # Keep the ESP in speaking state until the final answer. A stop
+                # here would turn its microphone back on while processing.
+                waiting_spoken = (await speak(
+                    str(app.state.cfg.get("voice.ack_text", "Đang kiểm tra")), stop=False
+                )) is not None
+
             try:
-                result = await handle_command(
+                await send_json({"type": "stt", "text": transcript})
+                task = asyncio.create_task(handle_command(
                     db, app.state.drivers, app.state.cfg, app.state.weather, command, room_id,
                     app=app, source_device_id=device_row_id,
+                ))
+                result = await _command_with_wait(
+                    task, announce_wait, float(app.state.cfg.get("voice.ack_after", 1.2))
                 )
-                await send_json({"type": "stt", "text": transcript})
-                duration = await speak(result["reply"])
-                ignore_until = time.monotonic() + duration + ECHO_GUARD_S
+                duration = await speak(result["reply"], start=not waiting_spoken)
+                if duration is None and waiting_spoken:
+                    await send_json({"type": "tts", "state": "stop"})
+                ignore_until = time.monotonic() + (duration or 0) + ECHO_GUARD_S
                 log_event(
                     db, "xiaozhi",
                     f"[{result.get('engine')}] '{transcript}' -> {result['reply']}",
@@ -734,7 +766,9 @@ async def xiaozhi_ws(ws: WebSocket):
                 await send_json({"type": "ui_state", "payload": build_ui_state(app, room_id)})
             except Exception as exc:  # không để thiết bị treo listening không phản hồi
                 log_event(db, "xiaozhi", f"Lỗi xử lý lệnh: {exc}", level="warn")
-                await speak("Xin lỗi, mình bị lỗi rồi.")
+                duration = await speak("Xin lỗi, mình bị lỗi rồi.", start=not waiting_spoken)
+                if duration is None and waiting_spoken:
+                    await send_json({"type": "tts", "state": "stop"})
             if capped:
                 log_event(db, "xiaozhi",
                           f"Đóng phiên sau {auto_followups} lượt không wake word")
